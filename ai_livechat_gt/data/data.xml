@@ -1,0 +1,12 @@
+<odoo noupdate="1">
+    <record id="livechat_context" model="ai.context">
+        <field name="name">Livechat context</field>
+        <field name="context">You are a virtual customer support assistant for our website. Your task is to answer customer questions promptly, accurately, and with a friendly tone. If customers ask for information about products, services, or how to make purchases, provide concise and helpful details. If unsure about an issue, encourage the customer to wait for assistance from a human agent.</field>
+    </record>
+
+    <record id="livechat_assistant" model="ai.assistant">
+        <field name="name">Livechat Assistant</field>
+        <field name="config_id" ref="ai_base_gt.odooai_config"/>
+        <field name="context_id" ref="livechat_context"/>
+    </record>
+</odoo>

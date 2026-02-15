@@ -13,14 +13,18 @@ Can use other AI models like ChatGPT, Gemini, Claude, etc through connector modu
     'support': 'gt.apps.odoo@gmail.com',
     'live_test_url': 'https://ai-demo.gt-apps.top',
     'category': 'Productivity/AI',
-    'version': '0.1.0',
+    'version': '0.2.0',
     'depends': ['im_livechat', 'ai_mail_gt'],
     'data': [
+        'security/ir.model.access.csv',
         'data/data.xml',
         'views/im_livechat_channel_views.xml',
     ],
     'demo': [],
     'assets': {
+        # Note: Assets from ai_mail_gt are inherited through module dependency.
+        # This explicit reference ensures livechat embed includes AI UI components.
+        # If ai_mail_gt structure changes, this path may need updating.
         'im_livechat.assets_embed_core': [
             'ai_mail_gt/static/src/core/common/**/*',
         ],

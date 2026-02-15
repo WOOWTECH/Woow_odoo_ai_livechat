@@ -39,21 +39,28 @@ class MailAI(models.AbstractModel):
 
     def _is_ai_in_private_channel(self, record):
         """
-        Check if AI is participating in a private livechat channel.
+        Check if AI is participating in a livechat channel.
 
         Extends the parent method to handle livechat-specific logic for
-        detecting AI participation in private conversations.
+        detecting AI participation in conversations. For livechat channels,
+        we check if an AI partner is in the channel members, regardless of
+        the "private" status (member count).
 
         :param record: A discuss.channel record to check
-        :return: List of AI partner IDs if AI is in the private channel, otherwise delegates to parent
+        :return: List of AI partner IDs if AI is in the channel, otherwise delegates to parent
         :rtype: list or result from parent method
         """
         if record._name != 'discuss.channel' or record.channel_type != 'livechat':
             return super()._is_ai_in_private_channel(record)
 
-        if not self._is_private_livechat(record):
-            return super()._is_ai_in_private_channel(record)
-
+        # For livechat channels, always check if AI is a member
+        # This handles both private (2 members) and group (3+ members) livechats
         ai_partner_ids = self._get_ai_partner_ids()
         channel_partner_ids = record.with_context(active_test=False).channel_partner_ids.ids
-        return list(set(ai_partner_ids) & set(channel_partner_ids))
+        ai_in_channel = list(set(ai_partner_ids) & set(channel_partner_ids))
+
+        if ai_in_channel:
+            return ai_in_channel
+
+        # Fallback to parent implementation if no AI found in livechat
+        return super()._is_ai_in_private_channel(record)

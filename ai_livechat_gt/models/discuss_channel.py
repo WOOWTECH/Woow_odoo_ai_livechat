@@ -1,7 +1,7 @@
 import logging
 
 from markupsafe import Markup
-from odoo import models, _
+from odoo import api, models, _
 from odoo.addons.ai_base_gt.models.tools import after_commit
 
 _logger = logging.getLogger(__name__)
@@ -9,6 +9,75 @@ _logger = logging.getLogger(__name__)
 
 class DiscussChannel(models.Model):
     _inherit = 'discuss.channel'
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """
+        Override create to automatically create ai.thread for livechat channels
+        that have an AI operator assigned.
+        """
+        channels = super().create(vals_list)
+
+        # Create ai.thread for livechat channels with AI operators
+        for channel in channels:
+            if channel.channel_type == 'livechat':
+                channel._create_ai_thread_if_needed()
+
+        return channels
+
+    def _create_ai_thread_if_needed(self):
+        """
+        Create an ai.thread for this livechat channel if:
+        1. The channel has a livechat_channel_id with an ai_assistant_id configured
+        2. No ai.thread already exists for this channel
+
+        :return: The created ai.thread record, or False if not created
+        """
+        self.ensure_one()
+
+        if self.channel_type != 'livechat':
+            return False
+
+        # Check if ai.thread already exists for this channel
+        existing_thread = self.env['ai.thread'].search([
+            ('discuss_channel_id', '=', self.id)
+        ], limit=1)
+
+        if existing_thread:
+            _logger.debug(
+                "AI thread already exists for livechat channel %s (thread_id=%s)",
+                self.id, existing_thread.id
+            )
+            return existing_thread
+
+        # Check if the livechat channel has an AI assistant configured
+        livechat_channel = self.livechat_channel_id
+        if not livechat_channel or not livechat_channel.ai_assistant_id:
+            _logger.debug(
+                "No AI assistant configured for livechat channel %s",
+                self.id
+            )
+            return False
+
+        ai_assistant = livechat_channel.ai_assistant_id
+
+        try:
+            thread = self.env['ai.thread'].create({
+                'name': self.name or f'Livechat {self.id}',
+                'assistant_id': ai_assistant.id,
+                'discuss_channel_id': self.id,
+            })
+            _logger.info(
+                "Created AI thread %s for livechat channel %s with assistant %s",
+                thread.id, self.id, ai_assistant.name
+            )
+            return thread
+        except Exception as e:
+            _logger.exception(
+                "Failed to create AI thread for livechat channel %s: %s",
+                self.id, str(e)
+            )
+            return False
 
     def _ai_forward_to_human_operator(self):
         """

@@ -1,6 +1,6 @@
 import logging
 
-from odoo import models
+from odoo import models, Command
 
 _logger = logging.getLogger(__name__)
 
@@ -19,56 +19,59 @@ class AIMessageLivechat(models.Model):
         """
         Override to send AI responses to LINE after posting.
 
-        After the parent method posts the AI response to the discuss channel,
-        this method checks if the channel is a LINE conversation and sends
-        the response to the LINE user.
+        This method overrides the parent to capture the created message
+        and send it to LINE immediately after posting.
 
         :param mail_thread: The thread (discuss.channel) to post to
         :param mail_message: The original user message being responded to
         """
-        # Call parent to post the message
-        super()._post_message_after_commit(mail_thread, mail_message)
+        # Replicate parent logic but capture the response message
+        if mail_thread._name != 'discuss.channel':
+            partner_ids = (mail_message.author_id | mail_message.partner_ids).ids
+        else:
+            partner_ids = None
 
-        # Send to LINE if applicable
+        # Post AI response to the thread
+        response_msg = mail_thread.with_user(self.thread_id.ai_user_id).with_context(
+            mail_create_nosubscribe=True
+        ).message_post(
+            body=self.content_html,
+            author_id=self.author_id.id,
+            message_type=mail_message.message_type,
+            subtype_id=mail_message.subtype_id.id,
+            partner_ids=partner_ids,
+        )
+        response_msg.ai_message_ids = [Command.link(self.id)]
+
+        # Send to LINE if applicable - use the actual response message
         if mail_thread._name == 'discuss.channel':
-            self._send_ai_response_to_line(mail_thread)
+            self._send_ai_response_to_line(mail_thread, response_msg)
 
-    def _send_ai_response_to_line(self, channel):
+    def _send_ai_response_to_line(self, channel, response_msg):
         """
         Send the AI response to LINE if the channel is a LINE conversation.
 
-        This method:
-        1. Checks if the channel has a LINE user associated
-        2. Finds the latest AI message in the channel
-        3. Sends it to LINE using the channel's _notify_line_user method
-
         :param channel: discuss.channel record
+        :param response_msg: The mail.message record that was just created
         """
         try:
             # Check if this is a LINE conversation
             if not hasattr(channel, 'line_user_id') or not channel.line_user_id:
                 return
 
-            # Get the latest message from AI in this channel
-            latest_msg = self.env['mail.message'].sudo().search([
-                ('res_id', '=', channel.id),
-                ('model', '=', 'discuss.channel'),
-                ('author_id', '=', self.author_id.id),
-            ], order='id desc', limit=1)
-
-            if not latest_msg:
+            if not response_msg:
                 _logger.warning(
-                    "LINE: Could not find AI message to send for channel %s",
+                    "LINE: No response message to send for channel %s",
                     channel.id
                 )
                 return
 
             # Send to LINE using the channel's method
             if hasattr(channel, '_notify_line_user'):
-                channel.sudo()._notify_line_user(latest_msg)
+                channel.sudo()._notify_line_user(response_msg)
                 _logger.info(
                     "LINE: Sent AI response (message %s) to LINE user %s",
-                    latest_msg.id, channel.line_user_id
+                    response_msg.id, channel.line_user_id
                 )
         except Exception as e:
             _logger.exception(

@@ -3,5 +3,6 @@ from . import mail_ai
 from . import mail_message
 from . import ai_assistant
 from . import ai_thread
+from . import ai_message
 from . import discuss_channel
 from . import discuss_channel_member

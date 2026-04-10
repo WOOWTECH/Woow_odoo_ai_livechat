@@ -279,24 +279,37 @@ class ImLivechatChannel(models.Model):
             'started_at': session.create_date.isoformat() if session.create_date else None,
         }
 
-        # Add visitor information if available
-        if session.livechat_visitor_id:
-            visitor = session.livechat_visitor_id
-            session_data.update({
-                'visitor_name': visitor.display_name,
-                'visitor_country': visitor.country_id.code if visitor.country_id else None,
-                'visitor_lang': visitor.lang_id.code if visitor.lang_id else None,
-            })
+        # Add visitor (guest) information if available
+        # In Odoo 18, livechat visitors are mail.guest records on channel members
+        try:
+            guest_member = session.channel_member_ids.filtered(lambda m: m.guest_id)
+            if guest_member:
+                guest = guest_member[0].guest_id
+                session_data.update({
+                    'visitor_name': guest.name,
+                    'visitor_country': guest.country_id.code if guest.country_id else None,
+                    'visitor_lang': guest.lang if guest.lang else None,
+                })
+        except Exception:
+            pass  # Non-critical: skip visitor info if unavailable
 
         # Build message data if message provided
         message_data = None
         if message:
+            # Determine author type: anonymous or partner without user = visitor
+            if not message.author_id:
+                author_type = 'visitor'
+            elif not message.author_id.user_ids:
+                author_type = 'visitor'
+            else:
+                author_type = 'operator'
+
             message_data = {
                 'id': message.id,
                 'body': message.body,
                 'author_id': message.author_id.id if message.author_id else None,
                 'author_name': message.author_id.name if message.author_id else None,
-                'author_type': 'visitor' if message.author_id and not message.author_id.user_ids else 'operator',
+                'author_type': author_type,
                 'created_at': message.create_date.isoformat() if message.create_date else None,
             }
 
@@ -310,7 +323,7 @@ class ImLivechatChannel(models.Model):
         metadata = {
             'odoo_base_url': base_url,
             'callback_url': f"{base_url}/im_livechat_n8n/webhook",
-            'api_key_header': 'X-Odoo-Livechat-API-Key',
+            'api_key_header': 'X-API-Key',
         }
 
         # Construct final payload

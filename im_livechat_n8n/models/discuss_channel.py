@@ -22,14 +22,6 @@ class DiscussChannel(models.Model):
 
         This method is called after each message is posted to the channel.
         We hook into it to trigger n8n webhooks for visitor messages.
-
-        Args:
-            message (mail.message): The message record that was posted
-            msg_vals (dict, optional): Message values dictionary
-            **kwargs: Additional parameters passed to parent
-
-        Returns:
-            Recipients data from parent method
         """
         # Always call super first to ensure normal operation
         rdata = super()._notify_thread(message, msg_vals=msg_vals, **kwargs)
@@ -45,8 +37,8 @@ class DiscussChannel(models.Model):
         except Exception as e:
             # Log error but don't block normal chat operation
             _logger.warning(
-                f"Failed to trigger n8n webhook for channel {self.id}: {e}",
-                exc_info=True
+                "Failed to trigger n8n webhook for channel %s: %s",
+                self.id, e, exc_info=True
             )
 
         return rdata
@@ -59,13 +51,7 @@ class DiscussChannel(models.Model):
         1. Channel type is livechat
         2. Channel has associated livechat_channel_id
         3. N8N integration is enabled for the channel
-        4. Message is from visitor (not operator or bot)
-
-        Args:
-            message (mail.message): The message to check
-
-        Returns:
-            bool: True if webhook should be triggered
+        4. Message is from visitor (not operator, bot, or n8n bot)
         """
         # Check if this is a livechat channel
         if self.channel_type != 'livechat':
@@ -87,21 +73,28 @@ class DiscussChannel(models.Model):
 
     def _is_visitor_message(self, message):
         """
-        Check if message is from visitor (not operator or bot).
+        Check if message is from visitor (not operator, bot, or n8n bot).
 
         A visitor message is one where:
         - Message has no author (anonymous visitor), OR
         - Author is a partner without any internal user accounts
-
-        Args:
-            message (mail.message): The message to check
-
-        Returns:
-            bool: True if message is from visitor
+          AND is not the n8n bot partner
         """
         # Anonymous visitor (no author)
         if not message.author_id:
             return True
+
+        # Exclude the n8n bot partner to prevent webhook loops
+        n8n_bot = self.env.ref(
+            'im_livechat_n8n.partner_n8n_bot', raise_if_not_found=False
+        )
+        if n8n_bot and message.author_id.id == n8n_bot.id:
+            return False
+
+        # Exclude OdooBot (base.partner_root) as well
+        odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
+        if odoobot and message.author_id.id == odoobot.id:
+            return False
 
         # Check if author has any internal user accounts
         # Visitors are partners without user_ids

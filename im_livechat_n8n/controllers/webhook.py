@@ -10,7 +10,11 @@ _logger = logging.getLogger(__name__)
 
 # Security constants
 MAX_MESSAGE_SIZE = 10240  # 10KB max message size
-UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+# Odoo 18 discuss.channel.uuid is a short alphanumeric string (e.g. "aYIEU268MM")
+UUID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{6,50}$')
+
+# Consistent API key header name
+API_KEY_HEADER = 'X-API-Key'
 
 
 class N8NWebhookController(http.Controller):
@@ -30,7 +34,7 @@ class N8NWebhookController(http.Controller):
         Expected payload:
         {
             "action": "send_message",
-            "session_uuid": "abc-123-def",
+            "session_uuid": "aYIEU268MM",
             "message": {
                 "body": "Your message here",
                 "author_name": "Support Bot"
@@ -45,7 +49,7 @@ class N8NWebhookController(http.Controller):
         - 500: Server error
         """
         # Get API key from request header
-        api_key = request.httprequest.headers.get('X-API-Key')
+        api_key = request.httprequest.headers.get(API_KEY_HEADER)
         if not api_key:
             _logger.warning("Webhook request missing API key")
 
@@ -72,7 +76,7 @@ class N8NWebhookController(http.Controller):
         try:
             data = request.get_json_data()
         except Exception as e:
-            _logger.error(f"Failed to parse webhook JSON: {e}")
+            _logger.error("Failed to parse webhook JSON: %s", e)
             return self._json_response({'error': 'Invalid JSON'}, 400)
 
         # Validate required fields
@@ -95,7 +99,7 @@ class N8NWebhookController(http.Controller):
         # Validate API key and find channel
         channel = self._validate_api_key(api_key)
         if not channel:
-            _logger.warning(f"Invalid API key attempted: {api_key[:8]}...")
+            _logger.warning("Invalid API key attempted: %s...", api_key[:8])
 
             # Log invalid API key attempt
             try:
@@ -114,15 +118,15 @@ class N8NWebhookController(http.Controller):
         # Find session by UUID
         session = self._find_session(data.get('session_uuid'))
         if not session:
-            _logger.warning(f"Session not found: {data.get('session_uuid')}")
+            _logger.warning("Session not found: %s", data.get('session_uuid'))
             return self._json_response({'error': 'Session not found'}, 404)
 
         # Create message in session
         try:
             message_data = data.get('message', {})
-            self._create_bot_message(session, message_data)
+            self._create_bot_message(session, channel, message_data)
 
-            _logger.info(f"Message posted to session {session.uuid} via n8n webhook")
+            _logger.info("Message posted to session %s via n8n webhook", session.uuid)
 
             # Log successful inbound webhook
             try:
@@ -135,7 +139,7 @@ class N8NWebhookController(http.Controller):
                     'http_status': 200,
                 })
             except Exception as log_error:
-                _logger.warning(f"Failed to log inbound webhook: {log_error}")
+                _logger.warning("Failed to log inbound webhook: %s", log_error)
 
             return self._json_response({
                 'status': 'ok',
@@ -144,7 +148,7 @@ class N8NWebhookController(http.Controller):
             }, 200)
 
         except Exception as e:
-            _logger.error(f"Failed to create message: {e}", exc_info=True)
+            _logger.error("Failed to create message: %s", e, exc_info=True)
 
             # Log failed inbound webhook
             try:
@@ -158,12 +162,12 @@ class N8NWebhookController(http.Controller):
                     'error_message': str(e),
                 })
             except Exception as log_error:
-                _logger.warning(f"Failed to log error webhook: {log_error}")
+                _logger.warning("Failed to log error webhook: %s", log_error)
 
             return self._json_response({'error': str(e)}, 500)
 
     def _validate_session_uuid(self, session_uuid):
-        """Validate session UUID format."""
+        """Validate session UUID format (Odoo 18 uses short alphanumeric strings)."""
         if not session_uuid:
             return False
         return bool(UUID_PATTERN.match(str(session_uuid)))
@@ -175,16 +179,7 @@ class N8NWebhookController(http.Controller):
         return len(message_body.encode('utf-8')) <= MAX_MESSAGE_SIZE
 
     def _json_response(self, data, status):
-        """
-        Helper to create JSON HTTP response.
-
-        Args:
-            data (dict): Response data to be JSON encoded
-            status (int): HTTP status code
-
-        Returns:
-            werkzeug.Response: HTTP response with JSON content
-        """
+        """Helper to create JSON HTTP response."""
         return request.make_response(
             json.dumps(data),
             headers=[('Content-Type', 'application/json')],
@@ -192,30 +187,14 @@ class N8NWebhookController(http.Controller):
         )
 
     def _validate_api_key(self, api_key):
-        """
-        Validate API key and return matching channel.
-
-        Args:
-            api_key (str): API key from request header
-
-        Returns:
-            im_livechat.channel: Channel record if valid, False otherwise
-        """
+        """Validate API key and return matching channel."""
         channel = request.env['im_livechat.channel'].sudo().search(
             [('n8n_api_key', '=', api_key)], limit=1
         )
         return channel if channel else False
 
     def _find_session(self, session_uuid):
-        """
-        Find discuss.channel (livechat session) by UUID.
-
-        Args:
-            session_uuid (str): Unique identifier for the session
-
-        Returns:
-            discuss.channel: Session record if found, False otherwise
-        """
+        """Find discuss.channel (livechat session) by UUID."""
         if not session_uuid:
             return False
 
@@ -224,24 +203,43 @@ class N8NWebhookController(http.Controller):
         )
         return session if session else False
 
-    def _create_bot_message(self, session, message_data):
+    def _get_n8n_bot_partner(self, channel):
         """
-        Create a message in the livechat session.
+        Get the n8n bot partner to use as message author.
 
-        Args:
-            session (discuss.channel): The livechat session
-            message_data (dict): Message details with 'body' and optional 'author_name'
+        Uses the module's data-defined partner, ensuring AI messages
+        are attributed to a proper identity (not OdooBot).
+        """
+        bot_partner = request.env.ref(
+            'im_livechat_n8n.partner_n8n_bot', raise_if_not_found=False
+        )
+        if bot_partner:
+            return bot_partner.sudo()
+        # Fallback: use OdooBot partner
+        return request.env.ref('base.partner_root').sudo()
+
+    def _create_bot_message(self, session, channel, message_data):
+        """
+        Create a message in the livechat session using the n8n bot partner.
+
+        The bot partner is a dedicated res.partner created by this module's
+        data XML, so messages show with the correct bot name/avatar and
+        are NOT mistaken for visitor messages (preventing webhook loops).
         """
         body = message_data.get('body', '')
-        author_name = message_data.get('author_name', 'Bot')
+        author_name = message_data.get('author_name')
 
-        # Post message to the session
-        # Using message_post which is the standard Odoo method for posting messages
-        session.message_post(
+        bot_partner = self._get_n8n_bot_partner(channel)
+
+        # If author_name was provided by n8n, temporarily update the bot partner name
+        if author_name and bot_partner.name != author_name:
+            bot_partner.write({'name': author_name})
+
+        session.with_context(mail_create_nosubscribe=True).message_post(
             body=body,
             message_type='comment',
             subtype_xmlid='mail.mt_comment',
-            author_id=False,  # No specific author (will show as OdooBot)
+            author_id=bot_partner.id,
         )
 
-        _logger.debug(f"Posted message to session {session.uuid}: {body[:50]}...")
+        _logger.debug("Posted message to session %s: %s...", session.uuid, body[:50])

@@ -119,7 +119,7 @@ class N8NWebhookLog(models.Model):
 
         if count > 0:
             old_logs.unlink()
-            _logger.info(f"Cleaned up {count} webhook logs older than 30 days")
+            _logger.info("Cleaned up %s webhook logs older than 30 days", count)
         else:
             _logger.debug("No webhook logs to clean up")
 

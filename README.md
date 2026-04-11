@@ -9,19 +9,23 @@
 [![License: LGPL-3](https://img.shields.io/badge/License-LGPL--3-blue?style=flat-square)](https://www.gnu.org/licenses/lgpl-3.0)
 [![n8n 2.x](https://img.shields.io/badge/n8n-2.x-EA4B71?style=flat-square&logo=n8n&logoColor=white)](https://n8n.io)
 [![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Tests: 96](https://img.shields.io/badge/Tests-96%20passing-2ea44f?style=flat-square)](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat)
 
 **Connect Odoo Live Chat with n8n workflow automation to deliver intelligent,
 AI-driven customer support -- without writing a single line of backend AI code.**
 
 [Overview](#overview) |
+[Why Use This Module](#why-use-this-module) |
 [Features](#features) |
 [Screenshots](#screenshots) |
 [Installation](#installation) |
+[Docker Deployment](#docker--podman-deployment) |
 [Configuration](#configuration) |
 [n8n Workflow Setup](#n8n-workflow-setup) |
 [Security](#security) |
 [Testing](#testing) |
 [API Reference](#api-reference) |
+[Changelog](#changelog) |
 [License](#license)
 
 ---
@@ -34,39 +38,95 @@ AI-driven customer support -- without writing a single line of backend AI code.*
 
 When a visitor sends a message through the livechat widget, the module fires an outbound webhook to n8n. An n8n workflow processes the message through any LLM provider (OpenRouter/Gemini, OpenAI, Claude, etc.) and sends the AI-generated reply back to Odoo, where it is posted in the livechat session under the identity "AI Assistant".
 
-### Architecture
+---
+
+## Why Use This Module
+
+| Without this module | With this module |
+|---|---|
+| Manual chat replies only | Automated AI replies via n8n |
+| No webhook integration | Bidirectional webhook pipeline |
+| No audit trail | Full webhook activity logging |
+| Single-language support | Multilingual AI responses |
+| No retry logic | 3-retry exponential backoff |
+| Requires custom code for AI | Zero backend AI code needed |
+| No loop prevention | Built-in webhook loop guards |
+| No message validation | UUID, size, and format validation |
+
+---
+
+## Architecture
+
+### ASCII Diagram
 
 ```
                         Odoo 18                                        n8n
- ┌──────────────────────────────────────────┐      ┌──────────────────────────────────────┐
- │                                          │      │                                      │
- │  Website Visitor                         │      │  1. Webhook Trigger                  │
- │       │                                  │      │       │                              │
- │       ▼                                  │      │       ▼                              │
- │  Livechat Widget                         │      │  2. Extract Message (Code)           │
- │       │                                  │      │       │                              │
- │       ▼                                  │      │       ▼                              │
- │  discuss.channel.message_post()          │      │  3. Call LLM API (HTTP Request)      │
- │       │                                  │      │       │  (OpenRouter / Gemini /       │
- │       ▼                                  │      │       │   OpenAI / Claude)            │
- │  _notify_thread() hook                   │      │       ▼                              │
- │       │                                  │      │  4. Build Reply Payload (Code)       │
- │       ▼                                  │      │       │                              │
- │  _trigger_n8n_webhook()  ──── POST ─────────────►       ▼                              │
- │  (daemon thread, 3 retries)              │      │  5. Send to Odoo (HTTP Request)      │
- │                                          │      │       │                              │
- │  /im_livechat_n8n/webhook/reply ◄── POST ───────────────┘                              │
- │       │                                  │      │                                      │
- │       ▼                                  │      └──────────────────────────────────────┘
- │  Validate API key + UUID                 │
- │       │                                  │
- │       ▼                                  │
- │  Post bot reply to session               │
- │       │                                  │
- │       ▼                                  │
- │  Visitor sees AI Assistant reply          │
- │                                          │
- └──────────────────────────────────────────┘
+ +------------------------------------------+      +--------------------------------------+
+ |                                          |      |                                      |
+ |  Website Visitor                         |      |  1. Webhook Trigger                  |
+ |       |                                  |      |       |                              |
+ |       v                                  |      |       v                              |
+ |  Livechat Widget                         |      |  2. Extract Message (Code)           |
+ |       |                                  |      |       |                              |
+ |       v                                  |      |       v                              |
+ |  discuss.channel.message_post()          |      |  3. Call LLM API (HTTP Request)      |
+ |       |                                  |      |       |  (OpenRouter / Gemini /       |
+ |       v                                  |      |       |   OpenAI / Claude)            |
+ |  _notify_thread() hook                   |      |       v                              |
+ |       |                                  |      |  4. Build Reply Payload (Code)       |
+ |       v                                  |      |       |                              |
+ |  _trigger_n8n_webhook()  ---- POST ---------------->    v                              |
+ |  (daemon thread, 3 retries)              |      |  5. Send to Odoo (HTTP Request)      |
+ |                                          |      |       |                              |
+ |  /im_livechat_n8n/webhook/reply <-- POST ----------------+                              |
+ |       |                                  |      |                                      |
+ |       v                                  |      +--------------------------------------+
+ |  Validate API key + UUID                 |
+ |       |                                  |
+ |       v                                  |
+ |  Post bot reply to session               |
+ |       |                                  |
+ |       v                                  |
+ |  Visitor sees AI Assistant reply          |
+ |                                          |
+ +------------------------------------------+
+```
+
+### Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant V as Website Visitor
+    participant O as Odoo 18
+    participant N as n8n
+    participant L as LLM (AI)
+
+    V->>O: Send chat message
+    O->>O: message_post() + _notify_thread()
+    O->>N: POST webhook (async, 3 retries)
+    N->>N: Extract message data
+    N->>L: Request AI completion
+    L-->>N: AI response
+    N->>O: POST /im_livechat_n8n/webhook
+    O->>O: Validate API key + UUID
+    O->>O: Post bot reply to session
+    O-->>V: Display AI Assistant reply
+```
+
+### Flow Diagram
+
+```mermaid
+flowchart LR
+    A[Visitor Message] --> B[Odoo Livechat]
+    B --> C{N8N Enabled?}
+    C -->|Yes| D[Outbound Webhook]
+    C -->|No| E[Normal Chat]
+    D --> F[n8n Workflow]
+    F --> G[LLM API]
+    G --> H[AI Reply]
+    H --> I[Inbound Webhook]
+    I --> J[Bot Message Posted]
+    J --> K[Visitor Sees Reply]
 ```
 
 ---
@@ -81,8 +141,9 @@ When a visitor sends a message through the livechat widget, the module fires an 
 - **API Key Security** -- Keys are generated with `secrets.token_urlsafe(32)` (cryptographically secure). One-click regeneration in the UI.
 - **Message Validation** -- UUID pattern validation, 10 KB message size limit, and UTF-8 encoding checks on all inbound payloads.
 - **Webhook Logging** -- Full bidirectional logging (outbound/inbound) with success, failed, and timeout statuses. Includes response time, HTTP status, and request/response payloads.
-- **Cleanup Cron** -- A scheduled action automatically purges old webhook log entries.
+- **Cleanup Cron** -- A scheduled action automatically purges old webhook log entries (30-day retention).
 - **Test Connection** -- One-click "Test Webhook Connection" button sends a test event to n8n and reports the result instantly.
+- **96 Automated Tests** -- Comprehensive test coverage across 3 suites: core, integration, and pre-production.
 
 ---
 
@@ -130,7 +191,7 @@ When a visitor sends a message through the livechat widget, the module fires an 
 
    ```bash
    cd /path/to/odoo/addons
-   git clone https://github.com/WOOWTECH/im_livechat_n8n.git
+   git clone https://github.com/WOOWTECH/Woow_odoo_n8n_livechat.git
    ```
 
 2. **Update the apps list** in Odoo:
@@ -141,25 +202,84 @@ When a visitor sends a message through the livechat widget, the module fires an 
    - Search for **"Live Chat N8N"**.
    - Click **Install**.
 
-### Docker Setup
+---
 
-A `docker-compose.yml` is provided for quick evaluation with Odoo 18 and PostgreSQL 16.
+## Docker / Podman Deployment
 
-| Service    | Internal Port | Mapped Port |
-|------------|:---:|:---:|
-| Odoo 18    | 8069 | **9094** |
-| PostgreSQL | 5432 | -- |
-| n8n        | 5678 | **15678** |
+A production-ready `docker-compose.yml` is provided in the `odoo-n8nlivechat/` directory for quick deployment with Odoo 18 and PostgreSQL 16.
+
+### Service Architecture
+
+| Service | Image | Internal Port | Mapped Port | Purpose |
+|---------|-------|:---:|:---:|---------|
+| **db** | `postgres:16` | 5432 | -- | PostgreSQL database with health checks |
+| **odoo** | `odoo:18.0` | 8069 | **9094** | Odoo 18 application server |
+
+> **Note:** n8n can be added as a separate service or run on a different host. The webhook communication uses standard HTTP, so n8n only needs network access to Odoo's port.
+
+### Quick Start
 
 ```bash
+cd odoo-n8nlivechat/
+
 # Start the stack
 docker compose up -d
 
 # Odoo will be available at http://localhost:9094
-# n8n  will be available at http://localhost:15678
 ```
 
-All services share a Docker network so Odoo and n8n can communicate over internal hostnames (e.g., `http://odoo:8069`).
+### With Podman (rootless)
+
+```bash
+cd odoo-n8nlivechat/
+
+# Start with Podman Compose
+podman-compose up -d
+
+# Odoo will be available at http://localhost:9094
+```
+
+### Directory Structure
+
+```
+odoo-n8nlivechat/
+├── docker-compose.yml          # Service definitions
+├── config/
+│   └── odoo.conf               # Odoo configuration file
+├── addons/
+│   └── im_livechat_n8n/        # Module (auto-mounted)
+└── data/
+    ├── postgres/               # PostgreSQL data (persistent)
+    └── odoo/                   # Odoo filestore (persistent)
+```
+
+### Key Configuration Details
+
+- **Network:** All services share the `odoo-n8nlivechat-network` bridge network, allowing internal hostname resolution (e.g., `http://odoo:8069` from n8n).
+- **Persistence:** Both PostgreSQL data and Odoo filestore are mounted as bind volumes for data durability across restarts.
+- **Health checks:** The PostgreSQL container includes a health check; Odoo waits for database readiness before starting.
+- **Addons auto-mount:** The `addons/` directory is mounted to `/mnt/extra-addons` inside the Odoo container, so any module placed there is immediately available.
+
+### Adding n8n to the Stack
+
+To run n8n alongside Odoo, add the following service to `docker-compose.yml`:
+
+```yaml
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: odoo-n8nlivechat-n8n
+    restart: unless-stopped
+    ports:
+      - "15678:5678"
+    environment:
+      - WEBHOOK_URL=http://localhost:15678/
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+    networks:
+      - odoo-n8nlivechat-net
+```
+
+After adding, n8n will be available at `http://localhost:15678` and can reach Odoo at `http://odoo:8069` over the shared Docker network.
 
 ---
 
@@ -286,31 +406,34 @@ im_livechat_n8n/
 ├── __manifest__.py
 ├── controllers/
 │   ├── __init__.py
-│   └── webhook.py                # Inbound webhook controller
-│                                 #   - API key validation
-│                                 #   - UUID format checking
-│                                 #   - 10 KB message size limit
-│                                 #   - Bot message posting
+│   └── webhook.py                     # Inbound webhook controller
+│                                      #   - API key validation
+│                                      #   - UUID format checking
+│                                      #   - 10 KB message size limit
+│                                      #   - Bot message posting
 ├── models/
 │   ├── __init__.py
-│   ├── discuss_channel.py        # Outbound trigger
-│   │                             #   - _notify_thread() hook
-│   │                             #   - _is_visitor_message() loop guard
-│   ├── im_livechat_channel.py    # Payload builder + async dispatch
-│   │                             #   - _trigger_n8n_webhook() daemon thread
-│   │                             #   - _build_webhook_payload()
-│   │                             #   - 3 retries + exponential backoff
-│   │                             #   - API key generation (secrets.token_urlsafe)
-│   └── n8n_webhook_log.py        # Webhook activity logging model
+│   ├── discuss_channel.py             # Outbound trigger
+│   │                                  #   - _notify_thread() hook
+│   │                                  #   - _is_visitor_message() loop guard
+│   ├── im_livechat_channel.py         # Payload builder + async dispatch
+│   │                                  #   - _trigger_n8n_webhook() daemon thread
+│   │                                  #   - _build_webhook_payload()
+│   │                                  #   - 3 retries + exponential backoff
+│   │                                  #   - API key generation (secrets.token_urlsafe)
+│   └── n8n_webhook_log.py             # Webhook activity logging model
 ├── views/
-│   ├── im_livechat_channel_views.xml   # N8N Integration tab on channel form
-│   └── n8n_webhook_log_views.xml       # Webhook log tree + form views
+│   ├── im_livechat_channel_views.xml  # N8N Integration tab on channel form
+│   └── n8n_webhook_log_views.xml      # Webhook log tree + form views
 ├── data/
-│   └── n8n_data.xml              # N8N Bot partner + cleanup cron job
+│   └── n8n_data.xml                   # N8N Bot partner + cleanup cron job
 ├── security/
-│   └── ir.model.access.csv       # Access control rules
+│   └── ir.model.access.csv            # Access control rules
 ├── tests/
-│   └── test_im_livechat_n8n.py   # Unit tests
+│   ├── __init__.py
+│   ├── test_im_livechat_n8n.py        # 20 core unit tests
+│   ├── test_line_n8n_integration.py   # 36 cross-module integration tests
+│   └── test_n8n_preproduction.py      # 40 pre-production tests
 └── doc/
     ├── user_guide_en.md
     └── user_guide_zh_TW.md
@@ -356,9 +479,44 @@ The `_is_visitor_message()` method ensures that only genuine visitor messages tr
 
 ## Testing
 
-### Comprehensive Test Suite
+### Test Suite Overview
 
-The module includes a unit test file at `tests/test_im_livechat_n8n.py`.
+The module includes **96 automated tests** across 3 test suites, providing comprehensive coverage from unit tests through pre-production validation.
+
+| Test Suite | File | Tests | Description |
+|---|---|:---:|---|
+| Core Integration | `test_im_livechat_n8n.py` | 20 | Channel config, webhook dispatch, payload building, log cleanup |
+| LINE Cross-Module | `test_line_n8n_integration.py` | 36 | LINE+n8n routing, loop prevention, cross-module message flow |
+| Pre-Production | `test_n8n_preproduction.py` | 40 | Retry logic, FK integrity, security hardening, config boundaries |
+
+### Running the Tests
+
+```bash
+# Run all tests for the module
+./odoo-bin -d your_db --test-enable --stop-after-init -i im_livechat_n8n
+
+# Run a specific test file
+./odoo-bin -d your_db --test-enable --stop-after-init --test-tags /im_livechat_n8n
+
+# Docker environment
+docker exec -it odoo-n8nlivechat-web \
+  odoo --test-enable --stop-after-init -d odoon8nlivechat -i im_livechat_n8n
+```
+
+### Pre-Production Test Suite (40 tests)
+
+The pre-production suite (`test_n8n_preproduction.py`) covers 8 categories of production-readiness validation:
+
+| # | Category | Tests | What It Validates |
+|:---:|---|:---:|---|
+| 1 | Retry & Backoff | 5 | Exponential backoff timing, partial recovery scenarios |
+| 2 | FK Integrity & Cascade | 5 | Channel/session deletion safety, orphan log prevention |
+| 3 | Webhook Log Lifecycle | 5 | 30-day cleanup, boundary date tests, bulk purge |
+| 4 | Bot Partner Name Restoration | 4 | Name mutation safety, identity preservation |
+| 5 | Config Boundary Values | 5 | Clamping retries (0 -> 3, 99 -> 10), URL validation |
+| 6 | Payload Edge Cases | 5 | NULL author, SQL injection, JSON special characters |
+| 7 | Multi-Channel Isolation | 5 | API key routing, per-channel config isolation |
+| 8 | Security Hardening | 6 | XSS prevention, header injection, brute-force detection |
 
 ### End-to-End Validation
 
@@ -486,6 +644,13 @@ Sent automatically when a visitor posts a message in a livechat session with N8N
 3. Ensure the session is still active (not closed by the visitor).
 4. Check inbound webhook logs in Odoo for error messages.
 
+### Docker-Specific Issues
+
+1. Verify all containers are running: `docker compose ps`
+2. Check container logs: `docker compose logs -f odoo`
+3. Ensure the database health check passes: `docker compose logs db`
+4. Confirm network connectivity: `docker exec odoo-n8nlivechat-web curl -s http://db:5432 || echo "DB unreachable"`
+
 ---
 
 ## Dependencies
@@ -494,6 +659,24 @@ Sent automatically when a visitor posts a message in a livechat session with N8N
 |--------|------|---------|
 | `im_livechat` | Odoo Core | Provides the livechat channel model and widget |
 | `mail` | Odoo Core | Provides `discuss.channel`, `mail.message`, and messaging infrastructure |
+
+---
+
+## Changelog
+
+### v18.0.1.0.0 (2026-04-11)
+
+- Initial release
+- Bidirectional webhook integration (Odoo <-> n8n)
+- Per-channel webhook configuration with API key authentication
+- Async webhook dispatch with 3-retry exponential backoff
+- Webhook loop prevention (excludes bot/operator messages)
+- Full webhook activity logging with 30-day auto-cleanup
+- Bot partner identity for AI-attributed messages
+- Input validation: UUID format, 10 KB message limit, JSON parsing
+- 96 automated tests (20 core + 36 integration + 40 pre-production)
+- Docker/Podman deployment configuration
+- Bilingual documentation (English + Traditional Chinese)
 
 ---
 
@@ -511,7 +694,7 @@ Developed and maintained by **[WOOWTECH](https://github.com/WOOWTECH)**.
 
 <div align="center">
 
-**[Bug Reports & Feature Requests](https://github.com/WOOWTECH/im_livechat_n8n/issues)**
+**[Bug Reports & Feature Requests](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat/issues)**
 
 ---
 

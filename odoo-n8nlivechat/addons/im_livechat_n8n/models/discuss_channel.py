@@ -76,10 +76,15 @@ class DiscussChannel(models.Model):
         Check if message is from visitor (not operator, bot, or n8n bot).
 
         A visitor message is one where:
-        - Message has no author (anonymous visitor), OR
+        - Message has author_guest_id set (guest visitor, e.g. LINE user), OR
+        - Message has no author_id (anonymous visitor), OR
         - Author is a partner without any internal user accounts
           AND is not the n8n bot partner
         """
+        # Guest-based visitor (e.g. LINE module posts with author_guest_id)
+        if message.author_guest_id:
+            return True
+
         # Anonymous visitor (no author)
         if not message.author_id:
             return True

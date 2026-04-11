@@ -43,6 +43,16 @@ class ImLivechatChannel(models.Model):
         copy=False,
         help='Auto-generated API key for authenticating incoming webhook callbacks from n8n'
     )
+    n8n_max_retries = fields.Integer(
+        string='Max Retries',
+        default=3,
+        help='Maximum number of retry attempts for failed webhook calls (1-10)',
+    )
+    n8n_timeout = fields.Integer(
+        string='Timeout (seconds)',
+        default=10,
+        help='Timeout in seconds for each webhook request (1-60)',
+    )
 
     @api.constrains('n8n_webhook_url')
     def _check_webhook_url(self):
@@ -55,7 +65,7 @@ class ImLivechatChannel(models.Model):
                     raise UserError(_('Webhook URL must start with http:// or https://'))
                 # Warn (don't block) for non-HTTPS
                 if url.startswith('http://') and 'localhost' not in url and '127.0.0.1' not in url:
-                    _logger.warning(f"Webhook URL is not HTTPS for channel {record.name}: {url}")
+                    _logger.warning("Webhook URL is not HTTPS for channel %s: %s", record.name, url)
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -109,25 +119,25 @@ class ImLivechatChannel(models.Model):
 
         # Skip if integration is not enabled or webhook URL is not configured
         if not self.n8n_enabled or not self.n8n_webhook_url:
-            _logger.debug(f"N8N webhook skipped for channel {self.name}: integration disabled or no URL configured")
+            _logger.debug("N8N webhook skipped for channel %s: integration disabled or no URL configured", self.name)
             return
 
         # Build payload in main thread to ensure data access
         try:
             payload = self._build_webhook_payload(event_type, session, message)
         except Exception as e:
-            _logger.error(f"Failed to build webhook payload for channel {self.name}: {e}", exc_info=True)
+            _logger.error("Failed to build webhook payload for channel %s: %s", self.name, e, exc_info=True)
             return
 
-        # Store IDs for use in thread context
+        # Store IDs and config for use in thread context
         channel_id = self.id
         session_id = session.id if session else None
         webhook_url = self.n8n_webhook_url
+        max_retries = max(1, min(self.n8n_max_retries or 3, 10))
+        timeout = max(1, min(self.n8n_timeout or 10, 60))
 
         # Send webhook in separate thread to avoid blocking
         def send_webhook():
-            max_retries = 3
-            timeout = 10
 
             for attempt in range(max_retries):
                 start_time = time.time()
@@ -141,7 +151,7 @@ class ImLivechatChannel(models.Model):
                     response_time = (time.time() - start_time) * 1000
 
                     # Log success
-                    _logger.info(f"N8N webhook sent successfully for channel ID {channel_id}, event: {event_type}")
+                    _logger.info("N8N webhook sent successfully for channel ID %s, event: %s", channel_id, event_type)
                     self._create_webhook_log(
                         channel_id,
                         'outbound',
@@ -156,7 +166,7 @@ class ImLivechatChannel(models.Model):
 
                 except requests.Timeout:
                     response_time = timeout * 1000
-                    _logger.warning(f"N8N webhook timeout for channel ID {channel_id}, event: {event_type} (attempt {attempt + 1}/{max_retries})")
+                    _logger.warning("N8N webhook timeout for channel ID %s, event: %s (attempt %s/%s)", channel_id, event_type, attempt + 1, max_retries)
 
                     if attempt == max_retries - 1:
                         # Final timeout - log failure
@@ -174,7 +184,7 @@ class ImLivechatChannel(models.Model):
 
                 except requests.RequestException as e:
                     response_time = (time.time() - start_time) * 1000 if start_time else None
-                    _logger.warning(f"N8N webhook failed for channel ID {channel_id}, event: {event_type}: {e} (attempt {attempt + 1}/{max_retries})")
+                    _logger.warning("N8N webhook failed for channel ID %s, event: %s: %s (attempt %s/%s)", channel_id, event_type, e, attempt + 1, max_retries)
 
                     if attempt == max_retries - 1:
                         # Final failure - log error
@@ -192,7 +202,7 @@ class ImLivechatChannel(models.Model):
 
                 except Exception as e:
                     # Unexpected error - log and stop retrying
-                    _logger.error(f"Unexpected error in N8N webhook for channel ID {channel_id}: {e}", exc_info=True)
+                    _logger.error("Unexpected error in N8N webhook for channel ID %s: %s", channel_id, e, exc_info=True)
                     self._create_webhook_log(
                         channel_id,
                         'outbound',
@@ -209,7 +219,7 @@ class ImLivechatChannel(models.Model):
                 # Exponential backoff: 1s, 2s, 4s
                 if attempt < max_retries - 1:
                     backoff_time = 2 ** attempt
-                    _logger.debug(f"Retrying webhook in {backoff_time}s...")
+                    _logger.debug("Retrying webhook in %ss...", backoff_time)
                     time.sleep(backoff_time)
 
         # Start thread
@@ -238,21 +248,31 @@ class ImLivechatChannel(models.Model):
         try:
             with self.pool.cursor() as cr:
                 env = api.Environment(cr, SUPERUSER_ID, {})
-                env['n8n.webhook.log'].create({
+                # Validate FK references still exist before inserting
+                # (the original transaction may have been rolled back)
+                if channel_id and not env['im_livechat.channel'].browse(channel_id).exists():
+                    _logger.warning("Skipping webhook log: channel %s no longer exists", channel_id)
+                    return
+                vals = {
                     'event_type': event_type,
                     'livechat_channel_id': channel_id,
-                    'session_id': session_id,
                     'status': status,
                     'response_time': response_time,
                     'request_payload': json.dumps(request_payload) if request_payload else None,
                     'response_payload': response_payload,
                     'http_status': http_status,
                     'error_message': error_message,
-                })
+                }
+                if session_id:
+                    if env['discuss.channel'].browse(session_id).exists():
+                        vals['session_id'] = session_id
+                    else:
+                        _logger.warning("Webhook log: session %s no longer exists, omitting", session_id)
+                env['n8n.webhook.log'].create(vals)
                 cr.commit()
         except Exception as log_error:
             # Never let logging failures affect webhook operation
-            _logger.error(f"Failed to create webhook log: {log_error}", exc_info=True)
+            _logger.error("Failed to create webhook log: %s", log_error, exc_info=True)
 
     def _build_webhook_payload(self, event_type, session, message=None):
         """
@@ -296,19 +316,29 @@ class ImLivechatChannel(models.Model):
         # Build message data if message provided
         message_data = None
         if message:
-            # Determine author type: anonymous or partner without user = visitor
-            if not message.author_id:
+            # Determine author type
+            if message.author_guest_id:
+                author_type = 'visitor'
+            elif not message.author_id:
                 author_type = 'visitor'
             elif not message.author_id.user_ids:
                 author_type = 'visitor'
             else:
                 author_type = 'operator'
 
+            # Resolve author name: prefer guest name, then partner name
+            if message.author_guest_id:
+                author_name = message.author_guest_id.name
+            elif message.author_id:
+                author_name = message.author_id.name
+            else:
+                author_name = None
+
             message_data = {
                 'id': message.id,
                 'body': message.body,
                 'author_id': message.author_id.id if message.author_id else None,
-                'author_name': message.author_id.name if message.author_id else None,
+                'author_name': author_name,
                 'author_type': author_type,
                 'created_at': message.create_date.isoformat() if message.create_date else None,
             }

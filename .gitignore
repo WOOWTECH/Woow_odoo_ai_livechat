@@ -1,0 +1,16 @@
+# Runtime data (containers, databases, filestore)
+odoo-n8nlivechat/data/
+odoo-linelivechat/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

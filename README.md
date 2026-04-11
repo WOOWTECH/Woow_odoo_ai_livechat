@@ -1,36 +1,43 @@
-<div align="center">
+<p align="center">
+  <h1 align="center">Live Chat N8N Integration</h1>
+</p>
 
-# Live Chat N8N Integration
+<p align="center">
+  <strong><code>im_livechat_n8n</code> -- AI-Powered Customer Support for Odoo 18</strong>
+</p>
 
-### `im_livechat_n8n` -- AI-Powered Customer Support for Odoo 18
+<p align="center">
+  <img src="https://img.shields.io/badge/Odoo-18.0-purple?logo=odoo" alt="Odoo 18"/>
+  <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" alt="Python 3.10+"/>
+  <img src="https://img.shields.io/badge/License-LGPL--3-green" alt="License"/>
+  <img src="https://img.shields.io/badge/n8n-2.x-EA4B71?logo=n8n" alt="n8n"/>
+  <img src="https://img.shields.io/badge/PostgreSQL-16-blue?logo=postgresql" alt="PostgreSQL"/>
+  <img src="https://img.shields.io/badge/Tests-96%20passing-brightgreen" alt="Tests"/>
+</p>
 
-[![Odoo 18.0](https://img.shields.io/badge/Odoo-18.0-714B67?style=flat-square&logo=odoo&logoColor=white)](https://www.odoo.com)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
-[![License: LGPL-3](https://img.shields.io/badge/License-LGPL--3-blue?style=flat-square)](https://www.gnu.org/licenses/lgpl-3.0)
-[![n8n 2.x](https://img.shields.io/badge/n8n-2.x-EA4B71?style=flat-square&logo=n8n&logoColor=white)](https://n8n.io)
-[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
-[![Tests: 96](https://img.shields.io/badge/Tests-96%20passing-2ea44f?style=flat-square)](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat)
+<p align="center">
+  Connect Odoo Live Chat with n8n workflow automation to deliver intelligent,<br/>
+  AI-driven customer support -- without writing a single line of backend AI code.
+</p>
 
-**Connect Odoo Live Chat with n8n workflow automation to deliver intelligent,
-AI-driven customer support -- without writing a single line of backend AI code.**
-
-[Overview](#overview) |
-[Why Use This Module](#why-use-this-module) |
-[Features](#features) |
-[Screenshots](#screenshots) |
-[Installation](#installation) |
-[Docker Deployment](#docker--podman-deployment) |
-[Configuration](#configuration) |
-[n8n Workflow Setup](#n8n-workflow-setup) |
-[Security](#security) |
-[Testing](#testing) |
-[API Reference](#api-reference) |
-[Changelog](#changelog) |
-[License](#license)
+<p align="center">
+  <a href="#overview">Overview</a> &bull;
+  <a href="#why-use-this-module">Why Use This Module</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#screenshots">Screenshots</a> &bull;
+  <a href="#installation">Installation</a> &bull;
+  <a href="#docker--podman-deployment">Docker Deployment</a> &bull;
+  <a href="#configuration">Configuration</a> &bull;
+  <a href="#n8n-workflow-setup">n8n Workflow Setup</a> &bull;
+  <a href="#security">Security</a> &bull;
+  <a href="#testing">Testing</a> &bull;
+  <a href="#api-reference">API Reference</a> &bull;
+  <a href="#changelog">Changelog</a> &bull;
+  <a href="#license">License</a> &bull;
+  <a href="README_zh-TW.md">中文文件</a>
+</p>
 
 ---
-
-</div>
 
 ## Overview
 
@@ -151,29 +158,29 @@ flowchart LR
 
 ### Livechat Channels Overview
 
-![Livechat Channel List](docs/screenshots/livechat_channel_list.png)
+<p align="center"><img src="docs/screenshots/livechat_channel_list.png" alt="Livechat Channel List" width="720"/></p>
 
 ### N8N Integration Configuration Tab
 
-![N8N Integration Tab](docs/screenshots/livechat_n8n_tab.png)
+<p align="center"><img src="docs/screenshots/livechat_n8n_tab.png" alt="N8N Integration Tab" width="720"/></p>
 
 ### Webhook Activity Log
 
-![Webhook Log List](docs/screenshots/webhook_log_list.png)
+<p align="center"><img src="docs/screenshots/webhook_log_list.png" alt="Webhook Log List" width="720"/></p>
 
 ### Admin Discuss View with AI Conversations
 
-![Admin Discuss View](docs/screenshots/admin_discuss_view.png)
+<p align="center"><img src="docs/screenshots/admin_discuss_view.png" alt="Admin Discuss View" width="720"/></p>
 
 ### Visitor-Side Livechat Widget
 
-![Visitor Livechat Page](docs/screenshots/visitor_livechat_page.png)
+<p align="center"><img src="docs/screenshots/visitor_livechat_page.png" alt="Visitor Livechat Page" width="720"/></p>
 
 ### Test Results
 
 | Basic Greeting (EN) | Chinese UTF-8 Test | Combined Stress Test |
 |:---:|:---:|:---:|
-| ![Round 01](docs/screenshots/test_round01_hello.png) | ![Round 02](docs/screenshots/test_round02_chinese.png) | ![Round 20](docs/screenshots/test_round20_stress.png) |
+| <img src="docs/screenshots/test_round01_hello.png" alt="Round 01" width="230"/> | <img src="docs/screenshots/test_round02_chinese.png" alt="Round 02" width="230"/> | <img src="docs/screenshots/test_round20_stress.png" alt="Round 20" width="230"/> |
 
 ---
 
@@ -690,14 +697,10 @@ This module is licensed under the [GNU Lesser General Public License v3.0 (LGPL-
 
 Developed and maintained by **[WOOWTECH](https://github.com/WOOWTECH)**.
 
----
-
-<div align="center">
-
-**[Bug Reports & Feature Requests](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat/issues)**
+<p align="center">
+  <a href="https://github.com/WOOWTECH/Woow_odoo_n8n_livechat/issues">Bug Reports & Feature Requests</a>
+</p>
 
 ---
 
-*Also available in:* [*&#x4E2D;&#x6587; (&#x7E41;&#x9AD4;)*](README_zh-TW.md)
-
-</div>
+<p align="center"><sub>Built with ❤️ by <a href="https://github.com/WOOWTECH">WOOWTECH</a> &bull; Powered by Odoo 18</sub></p>

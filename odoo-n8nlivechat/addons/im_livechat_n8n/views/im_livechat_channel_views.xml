@@ -22,6 +22,10 @@
                                     class="btn-secondary"
                                     confirm="This will invalidate the current API key. Continue?"/>
                         </group>
+                        <group string="Advanced Settings" invisible="not n8n_enabled">
+                            <field name="n8n_max_retries"/>
+                            <field name="n8n_timeout"/>
+                        </group>
                     </group>
                     <group invisible="not n8n_enabled">
                         <button name="action_test_webhook"

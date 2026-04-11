@@ -1,161 +1,185 @@
 <div align="center">
 
-# Odoo 即時聊天 N8N 整合模組
+# Live Chat N8N 整合模組
 
-### `im_livechat_n8n`
+### `im_livechat_n8n` -- Odoo 18 AI 驅動客戶支援
 
-將 Odoo 18 即時聊天與 n8n 工作流程自動化平台整合，實現 AI 驅動的客服聊天機器人
+[![Odoo 18.0](https://img.shields.io/badge/Odoo-18.0-714B67?style=flat-square&logo=odoo&logoColor=white)](https://www.odoo.com)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
+[![License: LGPL-3](https://img.shields.io/badge/License-LGPL--3-blue?style=flat-square)](https://www.gnu.org/licenses/lgpl-3.0)
+[![n8n 2.x](https://img.shields.io/badge/n8n-2.x-EA4B71?style=flat-square&logo=n8n&logoColor=white)](https://n8n.io)
+[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Tests: 96](https://img.shields.io/badge/Tests-96%20passing-2ea44f?style=flat-square)](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat)
 
-[![Odoo 18.0](https://img.shields.io/badge/Odoo-18.0-714B67?style=for-the-badge&logo=odoo&logoColor=white)](https://www.odoo.com)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
-[![License: LGPL-3](https://img.shields.io/badge/License-LGPL--3-blue?style=for-the-badge)](https://www.gnu.org/licenses/lgpl-3.0)
-[![n8n 2.x](https://img.shields.io/badge/n8n-2.x-EA4B71?style=for-the-badge&logo=n8n&logoColor=white)](https://n8n.io)
-[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+**連接 Odoo 即時聊天與 n8n 工作流自動化平台，提供智慧化的
+AI 驅動客戶支援 -- 無需撰寫任何後端 AI 程式碼。**
 
-[English](README.md) | **繁體中文**
+[概述](#概述) |
+[為什麼使用此模組](#為什麼使用此模組) |
+[功能特色](#功能特色) |
+[截圖展示](#截圖展示) |
+[安裝指南](#安裝指南) |
+[配置說明](#配置說明) |
+[n8n 工作流設定](#n8n-工作流設定) |
+[安全性](#安全性) |
+[測試](#測試) |
+[API 參考](#api-參考) |
+[授權條款](#授權條款)
 
 ---
 
-[概述](#概述) | [功能特色](#功能特色) | [功能截圖](#功能截圖) | [安裝說明](#安裝說明) | [設定指南](#設定指南) | [n8n 工作流程設定](#n8n-工作流程設定) | [安全機制](#安全機制) | [測試驗證](#測試驗證) | [API 參考](#api-參考) | [授權條款](#授權條款)
-
 </div>
+
+## 為什麼使用此模組
+
+| 沒有此模組 | 使用此模組 |
+|---|---|
+| 僅能手動回覆聊天 | 透過 n8n 自動 AI 回覆 |
+| 沒有 webhook 整合 | 雙向 webhook 通訊管道 |
+| 沒有稽核記錄 | 完整的 webhook 活動日誌 |
+| 僅支援單一語言 | 多語言 AI 回覆 |
+| 沒有重試機制 | 三次重試指數退避 |
+| 需要自訂 AI 程式碼 | 零後端 AI 程式碼 |
+| 沒有迴圈防護 | 內建 webhook 迴圈防護 |
+| 沒有訊息驗證 | UUID、大小和格式驗證 |
 
 ---
 
 ## 概述
 
-**Live Chat N8N Integration** (`im_livechat_n8n`) 是一個 Odoo 18 自訂模組，將 Odoo 即時聊天系統與 [n8n](https://n8n.io) 工作流程自動化平台無縫整合。當網站訪客透過即時聊天小工具發送訊息時，模組會透過 webhook 將訊息傳送至 n8n。n8n 透過 LLM（如 OpenRouter/Gemini、OpenAI、Claude）處理後，將 AI 回覆傳回 Odoo，以「AI 助手」身分發布在即時聊天會話中。
+**im_livechat_n8n** 是由 [WOOWTECH](https://github.com/WOOWTECH) 開發的 Odoo 18 模組，將 Odoo 即時聊天小工具與 [n8n](https://n8n.io) 工作流自動化平台連接。它實現了全自動的 AI 驅動客服聊天機器人，能即時回應網站訪客。
 
-本模組作為**無頭 RAG（Headless RAG）**系統運作 -- Odoo 負責前端 UI，n8n 負責智慧處理。
+當訪客透過即時聊天小工具發送訊息時，模組會向 n8n 發送 outbound webhook。n8n 工作流會透過任何 LLM 供應商（OpenRouter/Gemini、OpenAI、Claude 等）處理訊息，並將 AI 生成的回覆發送回 Odoo，以「AI Assistant」的身份發佈在即時聊天會話中。
 
-### 架構流程圖
-
-```
-網站訪客 → Odoo 即時聊天小工具 → discuss.channel.message_post()
-    → im_livechat_n8n 觸發出站 webhook（守護線程）
-    → n8n Webhook Trigger 接收訊息
-    → n8n Code Node 提取 session_uuid、message、channel_id
-    → n8n HTTP Request 呼叫 LLM API（OpenRouter/Gemini）
-    → n8n Code Node 建構 Odoo 回覆內容
-    → n8n HTTP Request POST 到 Odoo /im_livechat_n8n/webhook/reply
-    → Odoo controller 驗證 API 金鑰、找到會話、發布機器人回覆
-    → 訪客在小工具中看到 AI 助手回覆
-```
-
-### 模組目錄結構
+### 架構
 
 ```
-im_livechat_n8n/
-├── __init__.py
-├── __manifest__.py
-├── controllers/
-│   ├── __init__.py
-│   └── webhook.py                     # 入站 webhook 處理器 - 驗證 API 金鑰、UUID、訊息大小
-├── models/
-│   ├── __init__.py
-│   ├── discuss_channel.py             # 出站觸發器 + webhook 迴圈防護
-│   ├── im_livechat_channel.py         # 負載建構器 + 非同步分發含重試機制
-│   └── n8n_webhook_log.py             # Webhook 活動記錄模型
-├── views/
-│   ├── im_livechat_channel_views.xml  # 即時聊天頻道表單的 N8N 整合分頁
-│   └── n8n_webhook_log_views.xml      # Webhook 記錄樹狀/表單視圖
-├── data/
-│   └── n8n_data.xml                   # N8N Bot 合作夥伴 + 清理排程工作
-├── security/
-│   └── ir.model.access.csv
-└── tests/
-    └── test_im_livechat_n8n.py        # 單元測試
+                        Odoo 18                                        n8n
+ ┌──────────────────────────────────────────┐      ┌──────────────────────────────────────┐
+ │                                          │      │                                      │
+ │  Website Visitor                         │      │  1. Webhook Trigger                  │
+ │       │                                  │      │       │                              │
+ │       ▼                                  │      │       ▼                              │
+ │  Livechat Widget                         │      │  2. Extract Message (Code)           │
+ │       │                                  │      │       │                              │
+ │       ▼                                  │      │       ▼                              │
+ │  discuss.channel.message_post()          │      │  3. Call LLM API (HTTP Request)      │
+ │       │                                  │      │       │  (OpenRouter / Gemini /       │
+ │       ▼                                  │      │       │   OpenAI / Claude)            │
+ │  _notify_thread() hook                   │      │       ▼                              │
+ │       │                                  │      │  4. Build Reply Payload (Code)       │
+ │       ▼                                  │      │       │                              │
+ │  _trigger_n8n_webhook()  ──── POST ─────────────►       ▼                              │
+ │  (daemon thread, 3 retries)              │      │  5. Send to Odoo (HTTP Request)      │
+ │                                          │      │       │                              │
+ │  /im_livechat_n8n/webhook/reply ◄── POST ───────────────┘                              │
+ │       │                                  │      │                                      │
+ │       ▼                                  │      └──────────────────────────────────────┘
+ │  Validate API key + UUID                 │
+ │       │                                  │
+ │       ▼                                  │
+ │  Post bot reply to session               │
+ │       │                                  │
+ │       ▼                                  │
+ │  Visitor sees AI Assistant reply          │
+ │                                          │
+ └──────────────────────────────────────────┘
+```
+
+```mermaid
+sequenceDiagram
+    participant V as 網站訪客
+    participant O as Odoo 即時聊天
+    participant N as n8n 工作流
+    participant L as LLM API
+
+    V->>O: 發送訊息
+    O->>N: POST webhook（守護執行緒）
+    N->>L: 轉發至 LLM
+    L-->>N: AI 回覆
+    N->>O: POST /im_livechat_n8n/webhook/reply
+    O-->>V: 顯示 AI Assistant 回覆
 ```
 
 ---
 
 ## 功能特色
 
-### 核心技術特色
+- **雙向 Webhook** -- 透過 HTTP/JSON 實現 Outbound（Odoo 到 n8n）和 Inbound（n8n 到 Odoo）通訊。
+- **Webhook 迴圈防護** -- `_is_visitor_message()` 方法排除 N8N Bot、OdooBot 及任何具有 `user_ids` 的夥伴，防止無限迴圈。
+- **非同步調度** -- Outbound webhook 在守護執行緒中運行，具有 3 次重試和指數退避（1秒、2秒、4秒）。聊天操作永不被阻塞。
+- **執行緒安全** -- 所有 ORM 欄位值在主執行緒中擷取後才產生 webhook 執行緒，避免跨執行緒 cursor 存取。
+- **每通道獨立配置** -- 每個即時聊天通道擁有獨立的 webhook URL、API 金鑰和啟用/停用開關。
+- **API 金鑰安全** -- 使用 `secrets.token_urlsafe(32)` 生成密碼學安全金鑰。UI 提供一鍵重新生成。
+- **訊息驗證** -- 所有 inbound 請求均進行 UUID 格式驗證、10 KB 訊息大小限制和 UTF-8 編碼檢查。
+- **Webhook 日誌** -- 完整的雙向日誌記錄（outbound/inbound），包含成功、失敗和逾時狀態，以及回應時間、HTTP 狀態碼和請求/回應內容。
+- **自動清理排程** -- 排程動作自動清除過期的 webhook 日誌。
+- **連線測試** -- 一鍵「測試 Webhook 連線」按鈕發送測試事件到 n8n 並即時回報結果。
+- **96 項自動化測試** -- 全面的測試覆蓋，涵蓋 3 個測試套件：核心、整合和預生產。
 
-| 特色 | 說明 |
-|------|------|
-| **Webhook 迴圈防護** | `_is_visitor_message()` 方法排除 N8N Bot、OdooBot 及任何具有 `user_ids` 的合作夥伴，確保機器人回覆不會觸發二次 webhook |
-| **非同步分發** | 守護線程含 3 次重試 + 指數退避機制（1s、2s、4s），絕不阻塞聊天操作 |
-| **執行緒安全** | ORM 欄位值在產生線程前擷取，避免跨線程存取 ORM 記錄的問題 |
-| **API 金鑰安全** | 使用 `secrets.token_urlsafe(32)` 產生加密安全的 API 金鑰，支援金鑰輪換 |
-| **訊息驗證** | UUID 模式驗證（`^[A-Za-z0-9_-]{6,50}$`）、10KB 訊息大小限制、UTF-8 編碼檢查 |
-| **Webhook 記錄** | 完整的雙向記錄（出站/入站）含成功/失敗/逾時狀態及回應時間 |
-| **清理排程** | 排程動作自動清除超過 30 天的 webhook 記錄 |
+### 流程圖
 
-### 功能列表
-
-- **出站 Webhook**: 訪客發送訊息時自動通知 n8n
-- **入站 Webhook**: 接收 n8n 工作流程的自動回覆並張貼至聊天會話
-- **每頻道獨立設定**: 為每個即時聊天頻道獨立配置 webhook 參數
-- **Webhook 記錄管理**: 追蹤所有 webhook 活動，方便除錯與監控
-- **錯誤處理**: 健全的重試邏輯搭配指數退避（3 次重試）
-- **安全性**: API 金鑰認證、輸入驗證、存取控制
-- **測試 Webhook 連線**: 一鍵測試 webhook 連線功能
-
----
-
-## 功能截圖
-
-### 即時聊天頻道概覽
-
-即時聊天頻道列表頁面，顯示所有已設定的聊天頻道。
-
-![即時聊天頻道概覽](docs/screenshots/livechat_channel_list.png)
-
-### N8N 整合設定分頁
-
-在即時聊天頻道表單中的「N8N 整合」分頁，可設定 webhook URL、API 金鑰及啟用/停用整合。
-
-![N8N 整合設定分頁](docs/screenshots/livechat_n8n_tab.png)
-
-### Webhook 活動記錄
-
-完整的 webhook 活動記錄列表，顯示方向（出站/入站）、狀態、回應時間及 HTTP 狀態碼。
-
-![Webhook 活動記錄](docs/screenshots/webhook_log_list.png)
-
-### 管理員 Discuss 視圖
-
-管理員在 Discuss 視圖中查看 AI 助手與訪客的對話內容。
-
-![管理員 Discuss 視圖](docs/screenshots/admin_discuss_view.png)
-
-### 訪客端即時聊天
-
-訪客在網站上透過即時聊天小工具與 AI 助手互動的畫面。
-
-![訪客端即時聊天](docs/screenshots/visitor_livechat_page.png)
-
-### 測試結果截圖
-
-| 測試 | 截圖 |
-|------|------|
-| 基礎英文問候測試 | ![測試 Round 01](docs/screenshots/test_round01_hello.png) |
-| 中文 UTF-8 測試 | ![測試 Round 02](docs/screenshots/test_round02_chinese.png) |
-| 組合壓力測試（表情符號+CJK+HTML+URL） | ![測試 Round 20](docs/screenshots/test_round20_stress.png) |
+```mermaid
+flowchart LR
+    A[訪客訊息] --> B[Odoo 即時聊天]
+    B --> C{N8N 已啟用?}
+    C -->|是| D[Outbound Webhook]
+    C -->|否| E[一般聊天]
+    D --> F[n8n 工作流]
+    F --> G[LLM API]
+    G --> H[AI 回覆]
+    H --> I[Inbound Webhook]
+    I --> J[Bot 訊息發佈]
+    J --> K[訪客看到回覆]
+```
 
 ---
 
-## 安裝說明
+## 截圖展示
 
-### 前置需求
+### 即時聊天通道總覽
 
-| 項目 | 版本需求 |
-|------|----------|
-| Odoo | 18.0+ |
-| Python | 3.10+ |
-| PostgreSQL | 16+ |
-| n8n | 2.x（自架或雲端皆可） |
-| Odoo 相依模組 | `im_livechat`、`mail` |
+![即時聊天通道總覽](docs/screenshots/livechat_channel_list.png)
 
-### 方法一：模組安裝
+### N8N 整合配置頁面
+
+![N8N 整合配置頁面](docs/screenshots/livechat_n8n_tab.png)
+
+### Webhook 活動日誌
+
+![Webhook 活動日誌](docs/screenshots/webhook_log_list.png)
+
+### 管理員對話檢視（AI 對話）
+
+![管理員對話檢視](docs/screenshots/admin_discuss_view.png)
+
+### 訪客端即時聊天介面
+
+![訪客端即時聊天介面](docs/screenshots/visitor_livechat_page.png)
+
+### 測試結果
+
+| 基礎英文問候測試 | 中文 UTF-8 測試 | 組合壓力測試 |
+|:---:|:---:|:---:|
+| ![Round 01](docs/screenshots/test_round01_hello.png) | ![Round 02](docs/screenshots/test_round02_chinese.png) | ![Round 20](docs/screenshots/test_round20_stress.png) |
+
+---
+
+## 安裝指南
+
+### 模組安裝（標準 Odoo）
 
 1. **將模組複製到 Odoo addons 目錄**：
 
    ```bash
+   cp -r im_livechat_n8n /path/to/odoo/addons/
+   ```
+
+   或直接 clone 儲存庫：
+
+   ```bash
    cd /path/to/odoo/addons
-   git clone https://github.com/WOOWTECH/im_livechat_n8n.git
+   git clone https://github.com/WOOWTECH/Woow_odoo_n8n_livechat.git
    ```
 
 2. **更新應用程式列表**：
@@ -163,96 +187,131 @@ im_livechat_n8n/
    - 點選「更新應用程式列表」
 
 3. **安裝模組**：
-   - 搜尋「Live Chat N8N」
-   - 點選「安裝」
+   - 搜尋 **「Live Chat N8N」**
+   - 點選 **安裝**
 
-### 方法二：Docker 部署
+### Docker / Podman 部署
 
-本專案提供完整的 Docker Compose 設定，包含 Odoo 18 + PostgreSQL 16。
+`odoo-n8nlivechat/` 目錄中提供了生產就緒的 `docker-compose.yml`，可使用 Odoo 18 和 PostgreSQL 16 快速部署。
 
-1. **啟動服務**：
+#### 服務架構
 
-   ```bash
-   cd odoo-n8nlivechat
-   docker-compose up -d
-   ```
+| 服務 | 映像檔 | 內部連接埠 | 對外連接埠 | 用途 |
+|------|--------|:---:|:---:|------|
+| **db** | `postgres:16` | 5432 | -- | PostgreSQL 資料庫，含健康檢查 |
+| **odoo** | `odoo:18.0` | 8069 | **9094** | Odoo 18 應用程式伺服器 |
 
-2. **服務連接埠**：
+> **注意：** n8n 可作為獨立服務或在不同主機上運行。Webhook 通訊使用標準 HTTP，因此 n8n 只需能存取 Odoo 的連接埠。
 
-   | 服務 | 連接埠 | 說明 |
-   |------|--------|------|
-   | Odoo | `9094` | Odoo 18 網頁介面（對應容器內 8069） |
-   | n8n | `15678` | n8n 工作流程編輯器 |
-   | PostgreSQL | 內部 | PostgreSQL 16 資料庫（僅內部網路存取） |
+#### 快速啟動
 
-3. **網路架構**：
-   - Odoo 與 n8n 透過共用 Docker 網路 `odoo-n8nlivechat-network` 進行內部通訊
-   - 容器間可透過服務名稱互相存取
+```bash
+cd odoo-n8nlivechat/
 
-4. **初次設定**：
-   - 開啟瀏覽器存取 `http://localhost:9094`
-   - 完成 Odoo 初始化設定
-   - 安裝 `im_livechat_n8n` 模組
+# 啟動服務
+docker compose up -d
+
+# Odoo 可透過 http://localhost:9094 存取
+```
+
+#### 使用 Podman（rootless）
+
+```bash
+cd odoo-n8nlivechat/
+
+# 使用 Podman Compose 啟動
+podman-compose up -d
+
+# Odoo 可透過 http://localhost:9094 存取
+```
+
+#### 目錄結構
+
+```
+odoo-n8nlivechat/
+├── docker-compose.yml          # 服務定義
+├── config/
+│   └── odoo.conf               # Odoo 配置檔
+├── addons/
+│   └── im_livechat_n8n/        # 模組（自動掛載）
+└── data/
+    ├── postgres/               # PostgreSQL 資料（持久化）
+    └── odoo/                   # Odoo filestore（持久化）
+```
+
+#### 關鍵配置
+
+- **網路：** 所有服務共用 `odoo-n8nlivechat-network` bridge 網路，允許內部主機名稱解析（例如 n8n 可透過 `http://odoo:8069` 存取 Odoo）。
+- **持久化：** PostgreSQL 資料和 Odoo filestore 均以 bind volume 掛載，確保重啟後資料持久化。
+- **健康檢查：** PostgreSQL 容器包含健康檢查；Odoo 在資料庫就緒後才啟動。
+- **Addons 自動掛載：** `addons/` 目錄掛載至容器內的 `/mnt/extra-addons`，放入的模組立即可用。
+
+#### 加入 n8n 至部署環境
+
+若要與 Odoo 一起運行 n8n，請在 `docker-compose.yml` 中加入以下服務：
+
+```yaml
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: odoo-n8nlivechat-n8n
+    restart: unless-stopped
+    ports:
+      - "15678:5678"
+    environment:
+      - WEBHOOK_URL=http://localhost:15678/
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+    networks:
+      - odoo-n8nlivechat-net
+```
+
+加入後，n8n 可透過 `http://localhost:15678` 存取，並可透過共用的 Docker 網路以 `http://odoo:8069` 存取 Odoo。
 
 ---
 
-## 設定指南
+## 配置說明
 
-### 步驟 1：設定 Odoo 即時聊天頻道
+### Odoo 端
 
-1. 前往 **網站 > 即時聊天 > 頻道**
-2. 選擇現有頻道或建立新頻道
-3. 切換至「**N8N Integration**」分頁
-4. 勾選「**Enable N8N Integration**」
-5. 填入 n8n webhook URL（例如：`http://n8n:5678/webhook/livechat-handler`）
-6. 複製自動產生的 **API Key**（稍後設定 n8n 時使用）
+1. 前往 **網站 > 即時聊天 > 通道**。
+2. 選擇現有通道或建立新通道。
+3. 開啟 **N8N Integration** 分頁。
+4. 勾選 **Enable N8N Integration**。
+5. 輸入 **n8n Webhook URL**（n8n Webhook Trigger 節點的 URL）。
+6. **API Key** 會自動產生。複製該金鑰 -- 稍後設定 n8n 時需要使用。
 
-### 步驟 2：設定 n8n 工作流程
+> **提示：** 若金鑰已外洩，請點選 **Regenerate API Key** 重新產生。點選 **Test Webhook Connection** 可驗證連線狀態。
 
-請參閱下方「[n8n 工作流程設定](#n8n-工作流程設定)」章節。
+### n8n 端
 
-### 步驟 3：測試連線
+匯入或建立工作流後（參見下一章節），需配置：
 
-1. 回到 Odoo 即時聊天頻道的 N8N 分頁
-2. 點選「**Test Webhook Connection**」按鈕
-3. 確認 n8n 工作流程接收到測試訊息
-
-### Webhook URL 格式
-
-```
-https://your-n8n-instance.com/webhook/livechat-handler
-```
-
-> **注意**：Docker 環境下，Odoo 容器可透過 `http://n8n:5678/webhook/...` 存取 n8n 服務。
-
-### API 金鑰管理
-
-- API 金鑰在頻道建立時自動產生
-- 點選「**Regenerate API Key**」按鈕可重新產生金鑰
-- 在 n8n HTTP Request 節點的 headers 中設定 `X-API-Key` 為此金鑰值
+- **Webhook Trigger** 節點路徑，須與您在 Odoo 中輸入的 URL 一致。
+- **HTTP Request** 節點（LLM 呼叫）-- 設定 OpenRouter、OpenAI 或其他 LLM 供應商的 API 金鑰。
+- **HTTP Request** 節點（回覆 Odoo）-- 設定 Odoo 回呼 URL 和從 Odoo 複製的 `X-API-Key` header 值。
 
 ---
 
-## n8n 工作流程設定
+## n8n 工作流設定
 
-本模組使用 5 節點管線架構：
+建議工作流由 **5 個節點** 組成，以線性管線排列。
 
-### 節點 1：Webhook Trigger（接收 Odoo 訊息）
+### 節點 1 -- Webhook Trigger
 
-- **節點類型**：Webhook
-- **HTTP 方法**：POST
-- **路徑**：`/livechat-handler`
-- **說明**：接收 Odoo 發送的即時聊天訊息
+| 設定 | 值 |
+|------|-----|
+| HTTP 方法 | `POST` |
+| 路徑 | `/livechat-handler`（或您自訂的路徑） |
 
-### 節點 2：Extract Message（Code 節點）
+此節點在訪客發送訊息時接收來自 Odoo 的 outbound payload。
 
-提取訊息關鍵資訊：
+### 節點 2 -- Extract Message（Code 節點）
 
 ```javascript
+// Extract fields from the Odoo payload
 const sessionUuid = $json.session.uuid;
 const messageBody = $json.message.body;
-const channelId = $json.channel.id;
-const visitorName = $json.session.visitor_name || 'Visitor';
+const channelId   = $json.channel.id;
 const callbackUrl = $json.metadata.callback_url;
 
 return {
@@ -260,176 +319,233 @@ return {
     session_uuid: sessionUuid,
     message: messageBody,
     channel_id: channelId,
-    visitor_name: visitorName,
-    callback_url: callbackUrl
+    callback_url: callbackUrl,
   }
 };
 ```
 
-### 節點 3：Call LLM（HTTP Request 呼叫 OpenRouter API）
+### 節點 3 -- Call LLM（HTTP Request）
 
-- **HTTP 方法**：POST
-- **URL**：`https://openrouter.ai/api/v1/chat/completions`（或其他 LLM API）
-- **Headers**：
-  - `Authorization`: `Bearer YOUR_OPENROUTER_API_KEY`
-  - `Content-Type`: `application/json`
-- **Request Body**：
-  ```json
-  {
-    "model": "google/gemini-2.0-flash-001",
-    "messages": [
-      {
-        "role": "system",
-        "content": "You are a helpful customer support assistant."
-      },
-      {
-        "role": "user",
-        "content": "{{ $json.message }}"
-      }
-    ]
-  }
-  ```
+| 設定 | 值 |
+|------|-----|
+| 方法 | `POST` |
+| URL | `https://openrouter.ai/api/v1/chat/completions`（範例） |
+| 認證 | Header Auth，使用您的 LLM API 金鑰 |
+| Body (JSON) | 見下方 |
 
-> **提示**：可替換為 OpenAI、Claude、Gemini 或其他相容 API。
+```json
+{
+  "model": "google/gemini-2.0-flash-exp:free",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful customer support assistant."
+    },
+    {
+      "role": "user",
+      "content": "{{ $json.message }}"
+    }
+  ]
+}
+```
 
-### 節點 4：Build Reply（Code 節點）
+可替換為您偏好的 LLM 供應商之模型和端點（OpenAI、Anthropic Claude、本地 LLM 等）。
 
-建構回傳 Odoo 的回覆內容：
+### 節點 4 -- Build Reply（Code 節點）
 
 ```javascript
-const aiResponse = $json.choices[0].message.content;
-const sessionUuid = $('Extract Message').first().json.session_uuid;
-const callbackUrl = $('Extract Message').first().json.callback_url;
+// Extract the LLM response
+const aiReply = $json.choices[0].message.content;
 
 return {
   json: {
-    callback_url: callbackUrl,
-    payload: {
-      action: "send_message",
-      session_uuid: sessionUuid,
-      message: {
-        body: aiResponse,
-        author_name: "AI Assistant"
-      }
-    }
+    action: "send_message",
+    session_uuid: $('Extract Message').first().json.session_uuid,
+    message: {
+      body: aiReply,
+      author_name: "AI Assistant",
+    },
+    callback_url: $('Extract Message').first().json.callback_url,
   }
 };
 ```
 
-### 節點 5：Send to Odoo（HTTP Request 回傳 Odoo webhook）
+### 節點 5 -- Send to Odoo（HTTP Request）
 
-- **HTTP 方法**：POST
-- **URL**：`{{ $json.callback_url }}`（或 `http://odoo:8069/im_livechat_n8n/webhook`）
-- **Headers**：
-  - `Content-Type`: `application/json`
-  - `X-API-Key`: `YOUR_ODOO_API_KEY`（從 Odoo 頻道設定複製）
-- **Request Body**：`{{ $json.payload }}`
+| 設定 | 值 |
+|------|-----|
+| 方法 | `POST` |
+| URL | `{{ $json.callback_url }}` 或 `http://odoo:8069/im_livechat_n8n/webhook`（Docker） |
+| Headers | `Content-Type: application/json` |
+| Headers | `X-API-Key: <your-api-key-from-odoo>` |
+| Body | 傳送前一節點的完整 JSON |
 
-### 完整流程圖
+在 n8n 中啟用工作流後，Odoo 即時聊天中的訪客訊息將自動收到 AI 生成的回覆。
+
+---
+
+## 模組結構
 
 ```
-[Webhook Trigger] → [Extract Message] → [Call LLM] → [Build Reply] → [Send to Odoo]
+im_livechat_n8n/
+├── __init__.py
+├── __manifest__.py
+├── controllers/
+│   ├── __init__.py
+│   └── webhook.py                # Inbound webhook controller
+│                                 #   - API key validation
+│                                 #   - UUID format checking
+│                                 #   - 10 KB message size limit
+│                                 #   - Bot message posting
+├── models/
+│   ├── __init__.py
+│   ├── discuss_channel.py        # Outbound trigger
+│   │                             #   - _notify_thread() hook
+│   │                             #   - _is_visitor_message() loop guard
+│   ├── im_livechat_channel.py    # Payload builder + async dispatch
+│   │                             #   - _trigger_n8n_webhook() daemon thread
+│   │                             #   - _build_webhook_payload()
+│   │                             #   - 3 retries + exponential backoff
+│   │                             #   - API key generation (secrets.token_urlsafe)
+│   └── n8n_webhook_log.py        # Webhook activity logging model
+├── views/
+│   ├── im_livechat_channel_views.xml   # N8N Integration tab on channel form
+│   └── n8n_webhook_log_views.xml       # Webhook log tree + form views
+├── data/
+│   └── n8n_data.xml              # N8N Bot partner + cleanup cron job
+├── security/
+│   └── ir.model.access.csv       # Access control rules
+├── tests/
+│   ├── test_im_livechat_n8n.py   # Core integration tests (20 tests)
+│   ├── test_line_n8n_integration.py  # LINE cross-module tests (36 tests)
+│   └── test_n8n_preproduction.py # Pre-production tests (40 tests)
+└── doc/
+    ├── user_guide_en.md
+    └── user_guide_zh_TW.md
 ```
 
 ---
 
-## 安全機制
+## 安全性
 
 ### API 金鑰認證
 
-- 所有入站 webhook 請求必須在 `X-API-Key` header 中攜帶有效的 API 金鑰
-- API 金鑰使用 `secrets.token_urlsafe(32)` 產生，具備加密安全性
-- 每個即時聊天頻道擁有獨立的 API 金鑰
-- 支援金鑰輪換功能
+每個 inbound webhook 請求必須在 `X-API-Key` header 中攜帶有效的 API 金鑰。系統會將該金鑰與即時聊天通道配置進行比對。缺少金鑰或金鑰無效的請求將收到 `401 Unauthorized` 回應。
+
+### 金鑰生成與輪換
+
+API 金鑰使用 Python 的 `secrets.token_urlsafe(32)` 生成，產生 43 字元的密碼學隨機字串。可隨時透過 UI 按鈕重新生成金鑰。
 
 ### 輸入驗證
 
-| 驗證項目 | 規則 |
-|----------|------|
-| Session UUID | 必須符合 `^[A-Za-z0-9_-]{6,50}$` 模式 |
-| 訊息大小 | 不得超過 10KB（UTF-8 編碼） |
-| JSON 格式 | 嚴格的 JSON 解析及必填欄位檢查 |
-| Webhook URL | 必須以 `http://` 或 `https://` 開頭 |
+| 檢查項目 | 詳細說明 |
+|----------|----------|
+| UUID 格式 | 必須符合 `^[A-Za-z0-9_-]{6,50}$`（Odoo 18 短英數格式） |
+| 訊息大小 | 最大 10 KB（10,240 bytes，UTF-8 編碼） |
+| 必填欄位 | `session_uuid` 和 `message.body` 必須存在 |
+| JSON 解析 | 格式錯誤的 JSON 回傳 `400 Bad Request` |
 
 ### Webhook 迴圈防護
 
-`_is_visitor_message()` 方法確保只有訪客訊息觸發出站 webhook：
+`_is_visitor_message()` 方法確保只有真正的訪客訊息觸發 outbound webhook。以下作者會被排除：
 
-1. **排除 N8N Bot**：模組自定義的機器人合作夥伴（`im_livechat_n8n.partner_n8n_bot`）
-2. **排除 OdooBot**：系統內建的 OdooBot（`base.partner_root`）
-3. **排除內部使用者**：任何具有 `user_ids` 的合作夥伴（即 Odoo 內部帳號）
+- **N8N Bot** 夥伴（`im_livechat_n8n.partner_n8n_bot`）
+- **OdooBot**（`base.partner_root`）
+- 任何具有關聯 **使用者帳號** 的夥伴（`user_ids`）
 
 ### 安全最佳實踐
 
-1. **使用 HTTPS**：正式環境務必使用 HTTPS URL
-2. **定期輪換金鑰**：定期或在金鑰洩露時重新產生 API 金鑰
-3. **網路安全**：盡可能限制 webhook 端點僅接受已知 IP 位址的請求
-4. **訊息驗證**：模組自動驗證訊息大小（10KB 限制）
-5. **監控記錄**：定期檢視 webhook 記錄以偵測異常活動
+1. **使用 HTTPS** -- 正式環境中所有 webhook URL 務必使用 HTTPS。
+2. **定期輪換金鑰** -- 使用「Regenerate API Key」按鈕定期重新生成 API 金鑰。
+3. **限制網路存取** -- 盡可能限制 `/im_livechat_n8n/webhook` 端點僅接受已知 IP 範圍的請求。
+4. **監控 Webhook 日誌** -- 定期檢視 webhook 日誌，偵測失敗或未授權的請求。
 
 ---
 
-## 測試驗證
+## 測試
 
-### 測試概覽
+模組包含 **96 項自動化測試**，分佈於 3 個測試套件，提供從單元測試到預生產驗證的全面覆蓋。
 
-模組通過了 **20 輪全面性測試**，涵蓋三大類別，全數通過。
+| 測試套件 | 檔案 | 測試數 | 描述 |
+|---|---|:---:|---|
+| 核心整合 | `test_im_livechat_n8n.py` | 20 | 通道配置、webhook 調度、payload 建構、日誌清理 |
+| LINE 跨模組 | `test_line_n8n_integration.py` | 36 | LINE+n8n 路由、迴圈防護、跨模組訊息流 |
+| 預生產 | `test_n8n_preproduction.py` | 40 | 重試邏輯、FK 完整性、安全強化、配置邊界 |
 
-| 類別 | 測試輪數 | 涵蓋範圍 |
-|------|----------|----------|
-| **完整性測試** | 7 輪 | 基本通訊、多語言、特殊字元、長訊息 |
-| **穩定性測試** | 6 輪 | 快速連續發送、並行會話、會話恢復 |
-| **邊緣案例測試** | 7 輪 | HTML 注入、表情符號、CJK 字元、URL、組合壓力測試 |
+### 執行測試
 
-### 測試結果摘要
+```bash
+# 執行模組全部測試
+./odoo-bin -d your_db --test-enable --stop-after-init -i im_livechat_n8n
 
-| 指標 | 數值 |
-|------|------|
-| 測試輪數 | **20/20 通過** |
-| 出站 Webhook | 47 次 |
-| 入站 Webhook | 45 次 |
-| 失敗次數 | **0** |
+# 執行特定測試檔案
+./odoo-bin -d your_db --test-enable --stop-after-init --test-tags /im_livechat_n8n
 
-### 代表性測試輪次
+# Docker 環境
+docker exec -it odoo-n8nlivechat-web \
+  odoo --test-enable --stop-after-init -d odoon8nlivechat -i im_livechat_n8n
+```
 
-| 輪次 | 名稱 | 類別 | 測試內容 |
-|------|------|------|----------|
-| Round 01 | Hello | 完整性 | 基礎英文問候訊息 |
-| Round 02 | Chinese | 完整性 | 中文 UTF-8 編碼訊息 |
-| Round 04 | Admin | 完整性 | 管理員視角驗證 |
-| Round 10 | Rapid Fire | 穩定性 | 快速連續發送多條訊息 |
-| Round 15 | Emoji Flood | 邊緣案例 | 大量表情符號處理 |
-| Round 18 | HTML Injection | 邊緣案例 | HTML 標籤注入防護 |
-| Round 20 | Stress Combo | 邊緣案例 | 表情符號+CJK+HTML+URL 組合壓力測試 |
+### 預生產測試套件（40 項測試）
+
+預生產套件（`test_n8n_preproduction.py`）涵蓋 8 大類生產就緒驗證：
+
+| # | 類別 | 測試數 | 驗證內容 |
+|:---:|---|:---:|---|
+| 1 | 重試與退避 | 5 | 指數退避時序、部分恢復情境 |
+| 2 | FK 完整性與級聯 | 5 | 通道/會話刪除安全、孤立日誌防護 |
+| 3 | Webhook 日誌生命週期 | 5 | 30 天清理、邊界日期測試、批量清除 |
+| 4 | Bot 夥伴名稱還原 | 4 | 名稱變更安全、身份保護 |
+| 5 | 配置邊界值 | 5 | 重試次數夾限（0->3, 99->10）、URL 驗證 |
+| 6 | Payload 邊界案例 | 5 | NULL 作者、SQL 注入、JSON 特殊字元 |
+| 7 | 多通道隔離 | 5 | API 金鑰路由、每通道配置隔離 |
+| 8 | 安全強化 | 6 | XSS 防護、header 注入、暴力破解偵測 |
+
+### 端對端驗證
+
+另外進行了完整的 **20 輪** 手動測試，涵蓋三大類別：
+
+| 類別 | 輪次 | 描述 |
+|------|:---:|------|
+| **完整性** | 7 | 核心功能：英文/中文問候、webhook 日誌、管理員訊息排除、多會話隔離、快速連發、配置開關 |
+| **穩定性** | 6 | Webhook 逾時恢復、大型 payload 處理、特殊字元、會話重連、並行會話、長對話鏈 |
+| **邊界案例** | 7 | 空訊息、XSS/HTML 注入、表情符號 + CJK + 混合腳本、超長訊息、URL 密集內容、Unicode 邊界案例、組合壓力測試 |
+
+**結果：** 20/20 輪全數通過。47 次 outbound webhook 發送、45 次 inbound webhook 接收、0 次失敗。
 
 ---
 
 ## API 參考
 
-### 出站 Webhook（Odoo → n8n）
+### Outbound Webhook（Odoo --> n8n）
 
-當訪客發送訊息時，以下 JSON 負載將傳送至 n8n webhook：
+當啟用 N8N 整合的即時聊天會話中有訪客發送訊息時自動發送。
+
+**方法：** `POST`
+**URL：** 即時聊天通道上配置的 webhook URL。
+
+**Payload：**
 
 ```json
 {
   "event_type": "message_received",
-  "timestamp": "2024-01-15T10:30:00Z",
+  "timestamp": "2025-01-15T10:30:00Z",
   "session": {
     "id": 123,
     "uuid": "aYIEU268MM",
     "name": "Visitor #45",
-    "started_at": "2024-01-15T10:25:00Z",
+    "started_at": "2025-01-15T10:25:00Z",
     "visitor_name": "John Doe",
     "visitor_country": "US",
     "visitor_lang": "en_US"
   },
   "message": {
     "id": 456,
-    "body": "Hello, I need help",
+    "body": "Hello, I need help with my order",
     "author_id": 789,
     "author_name": "John Doe",
     "author_type": "visitor",
-    "created_at": "2024-01-15T10:30:00Z"
+    "created_at": "2025-01-15T10:30:00Z"
   },
   "channel": {
     "id": 1,
@@ -443,92 +559,49 @@ return {
 }
 ```
 
-### 入站 Webhook（n8n → Odoo）
+### Inbound Webhook（n8n --> Odoo）
 
-**端點**：`POST /im_livechat_n8n/webhook`
+**端點：** `POST /im_livechat_n8n/webhook`
 
-**Headers**：
+**Headers：**
 
-| Header | 值 | 必填 |
-|--------|------|------|
-| `Content-Type` | `application/json` | 是 |
-| `X-API-Key` | `your-api-key` | 是 |
+| Header | 必填 | 說明 |
+|--------|:---:|------|
+| `Content-Type` | 是 | `application/json` |
+| `X-API-Key` | 是 | 來自 Odoo 即時聊天通道配置的 API 金鑰 |
 
-**請求負載**：
+**請求內容：**
 
 ```json
 {
   "action": "send_message",
   "session_uuid": "aYIEU268MM",
   "message": {
-    "body": "感謝您的來訊！我是 AI 助手，請問有什麼可以幫忙的？",
+    "body": "感謝您的來訊！請問有什麼可以幫忙的？",
     "author_name": "AI Assistant"
   }
 }
 ```
 
-**回應狀態碼**：
+**回應狀態碼：**
 
 | 狀態碼 | 說明 |
-|--------|------|
+|:---:|------|
 | `200` | 訊息發送成功 |
-| `400` | 無效的請求負載（缺少欄位、UUID 格式錯誤、訊息過大） |
-| `401` | 無效或缺少 API 金鑰 |
+| `400` | 無效的 payload（缺少欄位、UUID 格式錯誤、訊息超過 10 KB） |
+| `401` | 缺少或無效的 API 金鑰 |
 | `404` | 找不到會話 |
-| `500` | 伺服器錯誤 |
+| `500` | 內部伺服器錯誤 |
 
-**驗證規則**：
+**成功回應：**
 
-- Session UUID 必須符合 `^[A-Za-z0-9_-]{6,50}$` 格式
-- 訊息主體為必填欄位，且不得超過 10KB
-- API 金鑰必須與已設定的頻道金鑰匹配
-
----
-
-## Webhook 記錄管理
-
-### 查看記錄
-
-- **從頻道進入**：網站 > 即時聊天 > 頻道 > [選擇頻道] > 「View Webhook Logs」按鈕
-- **直接存取**：網站 > 設定 > Webhook Logs
-
-### 記錄欄位
-
-| 欄位 | 說明 |
-|------|------|
-| 時間戳記 | Webhook 觸發時間 |
-| 方向 | 出站（Odoo → N8N）/ 入站（N8N → Odoo） |
-| 狀態 | 成功 / 失敗 / 逾時 |
-| 回應時間 | 回應時間（毫秒） |
-| HTTP 狀態碼 | HTTP 回應碼 |
-| 請求負載 | 請求 JSON 內容（供除錯使用） |
-| 回應負載 | 回應 JSON 內容（供除錯使用） |
-| 錯誤訊息 | 失敗時的錯誤訊息 |
-
-### 記錄保留政策
-
-排程動作會自動清除超過 **30 天** 的 webhook 記錄，防止記錄表無限增長。
-
----
-
-## 錯誤處理
-
-### 出站 Webhook（Odoo → n8n）
-
-| 項目 | 說明 |
-|------|------|
-| **重試邏輯** | 3 次自動重試，搭配指數退避機制（1s、2s、4s） |
-| **逾時設定** | 每次嘗試 10 秒 |
-| **非阻塞** | Webhook 在背景守護線程中發送，不影響聊天回應速度 |
-| **記錄** | 所有失敗均記錄錯誤訊息 |
-
-### 入站 Webhook（n8n → Odoo）
-
-| 項目 | 說明 |
-|------|------|
-| **驗證** | 嚴格的輸入驗證（UUID 格式、訊息大小、必填欄位） |
-| **安全性** | 所有請求均需 API 金鑰認證 |
-| **錯誤回應** | 明確的錯誤訊息搭配適當的 HTTP 狀態碼 |
+```json
+{
+  "status": "ok",
+  "session_uuid": "aYIEU268MM",
+  "message": "Message posted successfully"
+}
+```
 
 ---
 
@@ -536,67 +609,71 @@ return {
 
 ### Webhook 未觸發
 
-1. 確認已勾選「Enable N8N Integration」
-2. 確認 webhook URL 設定正確
-3. 使用「Test Webhook Connection」按鈕測試連線
-4. 檢查 webhook 記錄中的錯誤訊息
+1. 確認通道上已勾選 **Enable N8N Integration**。
+2. 確認 **webhook URL** 正確且可從 Odoo 伺服器存取。
+3. 點選 **Test Webhook Connection** 取得即時回饋。
+4. 檢查 **Webhook 日誌** 中的錯誤詳情。
 
-### n8n 未收到 Webhook
+### n8n 未收到訊息
 
-1. 確認 n8n webhook URL 可從 Odoo 伺服器存取
-2. 檢查防火牆/網路規則
-3. 檢視 Odoo 日誌：`odoo.addons.im_livechat_n8n`
-4. 先使用 n8n 公有雲端實例進行測試
+1. 確認 n8n 工作流已**啟用**（非測試/草稿模式）。
+2. 驗證 Odoo 與 n8n 之間的網路連線（防火牆、Docker 網路）。
+3. 檢視 Odoo 伺服器日誌中的 `odoo.addons.im_livechat_n8n` 條目。
 
-### Odoo 未收到回覆
+### 回覆未顯示在聊天中
 
-1. 確認 Odoo 與 n8n 之間的 API 金鑰一致
-2. 檢查回覆中的 session UUID 是否正確
-3. 確認已在請求中包含 `X-API-Key` header
-4. 檢視 Odoo 中的入站 webhook 記錄
-
-### 訊息未顯示在聊天中
-
-1. 確認會話仍處於活動狀態
-2. 檢查 session UUID 格式是否有效
-3. 檢視入站 webhook 記錄中的錯誤
-4. 確認訊息主體不為空
+1. 確認 `X-API-Key` header 值與 Odoo 中顯示的金鑰一致。
+2. 驗證回覆 payload 中的 `session_uuid` 與原始會話相符。
+3. 確認會話仍處於活動狀態（未被訪客關閉）。
+4. 檢視 Odoo 中的 inbound webhook 日誌是否有錯誤訊息。
 
 ---
 
-## 效能考量
+## 相依模組
 
-| 項目 | 規格 |
-|------|------|
-| Webhook 發送方式 | 非同步（非阻塞守護線程） |
-| 最大訊息大小 | 10KB |
-| Webhook 逾時 | 10 秒 |
-| 重試次數 | 3 次（指數退避） |
-| 記錄清理 | 自動（30 天保留期） |
+| 模組 | 類型 | 用途 |
+|------|------|------|
+| `im_livechat` | Odoo 核心 | 提供即時聊天通道模型和小工具 |
+| `mail` | Odoo 核心 | 提供 `discuss.channel`、`mail.message` 和訊息基礎架構 |
+
+---
+
+## 更新紀錄
+
+### v18.0.1.0.0 (2026-04-11)
+
+- 初始版本發佈
+- 雙向 webhook 整合（Odoo <-> n8n）
+- 每通道 webhook 配置與 API 金鑰認證
+- 非同步 webhook 調度，三次重試指數退避
+- Webhook 迴圈防護（排除機器人/操作員訊息）
+- 完整 webhook 活動日誌，30 天自動清理
+- Bot 夥伴身份用於 AI 歸屬訊息
+- 輸入驗證：UUID 格式、10KB 訊息限制、JSON 解析
+- 96 項自動化測試（20 核心 + 36 整合 + 40 預生產）
+- Docker/Podman 部署配置
+- 雙語文件（英文 + 繁體中文）
 
 ---
 
 ## 授權條款
 
-本模組採用 [LGPL-3.0](https://www.gnu.org/licenses/lgpl-3.0.html) 授權條款發布。
-
----
-
-## 技術支援
-
-如有問題或功能建議，請至：
-https://github.com/WOOWTECH/im_livechat_n8n/issues
+本模組採用 [GNU 較寬鬆通用公共授權條款 v3.0 (LGPL-3)](https://www.gnu.org/licenses/lgpl-3.0.html) 發佈。
 
 ---
 
 ## 致謝
 
-由 **[WOOWTECH](https://github.com/WOOWTECH)** 開發維護
+由 **[WOOWTECH](https://github.com/WOOWTECH)** 開發維護。
 
 ---
 
 <div align="center">
 
-**[English](README.md)** | 繁體中文
+**[錯誤回報與功能建議](https://github.com/WOOWTECH/Woow_odoo_n8n_livechat/issues)**
+
+---
+
+*Also available in:* [*English*](README.md)
 
 </div>

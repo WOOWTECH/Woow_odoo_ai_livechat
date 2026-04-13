@@ -1,0 +1,465 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+#	* im_livechat_n8n
+#
+# Translators:
+# WOOWTECH <info@woowtech.com>
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 18.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-04-13 00:00+0000\n"
+"PO-Revision-Date: 2026-04-13 00:00+0000\n"
+"Last-Translator: WOOWTECH <info@woowtech.com>\n"
+"Language-Team: Chinese (Traditional) <https://woowtech.com>\n"
+"Language: zh_TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#. module: im_livechat_n8n
+#: model:ir.model,name:im_livechat_n8n.model_discuss_channel
+msgid "Discussion Channel"
+msgstr "討論頻道"
+
+#. module: im_livechat_n8n
+#: model:ir.model,name:im_livechat_n8n.model_im_livechat_channel
+msgid "Live Chat Channel"
+msgstr "即時聊天頻道"
+
+#. module: im_livechat_n8n
+#: model:ir.model,name:im_livechat_n8n.model_n8n_webhook_log
+msgid "N8N Webhook Log"
+msgstr "N8N Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_im_livechat_channel__n8n_enabled
+msgid "Enable N8N Integration"
+msgstr "啟用 N8N 整合"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_im_livechat_channel__n8n_enabled
+msgid "Enable webhook notifications to n8n workflow automation platform"
+msgstr "啟用向 n8n 工作流程自動化平台發送 Webhook 通知"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_im_livechat_channel__n8n_webhook_url
+msgid "N8N Webhook URL"
+msgstr "N8N Webhook 網址"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_im_livechat_channel__n8n_webhook_url
+msgid "Full URL of the n8n webhook endpoint (e.g., https://n8n.example.com/webhook/abc123)"
+msgstr "n8n Webhook 端點的完整網址（例如 https://n8n.example.com/webhook/abc123）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_im_livechat_channel__n8n_api_key
+msgid "API Key"
+msgstr "API 金鑰"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_im_livechat_channel__n8n_api_key
+msgid "Auto-generated API key for authenticating incoming webhook callbacks from n8n"
+msgstr "自動產生的 API 金鑰，用於驗證來自 n8n 的 Webhook 回呼請求"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_im_livechat_channel__n8n_max_retries
+msgid "Max Retries"
+msgstr "最大重試次數"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_im_livechat_channel__n8n_max_retries
+msgid "Maximum number of retry attempts for failed webhook calls (1-10)"
+msgstr "Webhook 呼叫失敗時的最大重試次數（1-10）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_im_livechat_channel__n8n_timeout
+msgid "Timeout (seconds)"
+msgstr "逾時時間（秒）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_im_livechat_channel__n8n_timeout
+msgid "Timeout in seconds for each webhook request (1-60)"
+msgstr "每次 Webhook 請求的逾時秒數（1-60）"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook URL must start with http:// or https://"
+msgstr "Webhook 網址必須以 http:// 或 https:// 開頭"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "API Key Regenerated"
+msgstr "API 金鑰已重新產生"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "New API key has been generated successfully."
+msgstr "新的 API 金鑰已成功產生。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "This is a test webhook from Odoo Live Chat N8N integration."
+msgstr "這是來自 Odoo 即時聊天 N8N 整合的測試 Webhook。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook Test Successful"
+msgstr "Webhook 測試成功"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Test webhook sent successfully. Status code: %s"
+msgstr "測試 Webhook 已成功傳送。狀態碼：%s"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook Test Failed"
+msgstr "Webhook 測試失敗"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook returned status code: %s"
+msgstr "Webhook 回傳狀態碼：%s"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook request timed out. Please check the URL and try again."
+msgstr "Webhook 請求逾時。請檢查網址後重試。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Could not connect to webhook URL. Please check the URL and network connection."
+msgstr "無法連線至 Webhook 網址。請檢查網址及網路連線。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook test failed: %s"
+msgstr "Webhook 測試失敗：%s"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "N8N integration is not enabled for this channel."
+msgstr "此頻道尚未啟用 N8N 整合。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "N8N webhook URL is not configured for this channel."
+msgstr "此頻道尚未設定 N8N Webhook 網址。"
+
+#. module: im_livechat_n8n
+#: code:addons/im_livechat_n8n/models/im_livechat_channel.py:0
+#, python-format
+msgid "Webhook Logs - %s"
+msgstr "Webhook 日誌 - %s"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__timestamp
+msgid "Timestamp"
+msgstr "時間戳記"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__timestamp
+msgid "When the webhook was triggered"
+msgstr "Webhook 觸發的時間"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__event_type
+msgid "Direction"
+msgstr "方向"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__event_type
+msgid "Direction of the webhook call"
+msgstr "Webhook 呼叫的方向"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields.selection,name:im_livechat_n8n.field_n8n_webhook_log__event_type__outbound
+msgid "Outbound (Odoo → N8N)"
+msgstr "出站（Odoo → N8N）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields.selection,name:im_livechat_n8n.field_n8n_webhook_log__event_type__inbound
+msgid "Inbound (N8N → Odoo)"
+msgstr "入站（N8N → Odoo）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__livechat_channel_id
+msgid "Livechat Channel"
+msgstr "即時聊天頻道"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__livechat_channel_id
+msgid "The livechat channel associated with this webhook call"
+msgstr "與此 Webhook 呼叫關聯的即時聊天頻道"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__session_id
+msgid "Chat Session"
+msgstr "聊天工作階段"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__session_id
+msgid "The chat session associated with this webhook call"
+msgstr "與此 Webhook 呼叫關聯的聊天工作階段"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__status
+msgid "Status"
+msgstr "狀態"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__status
+msgid "Status of the webhook call"
+msgstr "Webhook 呼叫的狀態"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields.selection,name:im_livechat_n8n.field_n8n_webhook_log__status__success
+msgid "Success"
+msgstr "成功"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields.selection,name:im_livechat_n8n.field_n8n_webhook_log__status__failed
+msgid "Failed"
+msgstr "失敗"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields.selection,name:im_livechat_n8n.field_n8n_webhook_log__status__timeout
+msgid "Timeout"
+msgstr "逾時"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__response_time
+msgid "Response Time (ms)"
+msgstr "回應時間（毫秒）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__response_time
+msgid "Time taken to receive response in milliseconds"
+msgstr "接收回應所需的時間（毫秒）"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__http_status
+msgid "HTTP Status Code"
+msgstr "HTTP 狀態碼"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__http_status
+msgid "HTTP status code returned by the webhook endpoint"
+msgstr "Webhook 端點回傳的 HTTP 狀態碼"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__request_payload
+msgid "Request Payload"
+msgstr "請求酬載"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__request_payload
+msgid "JSON payload sent to the webhook endpoint"
+msgstr "傳送至 Webhook 端點的 JSON 酬載"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__response_payload
+msgid "Response Payload"
+msgstr "回應酬載"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__response_payload
+msgid "JSON response received from the webhook endpoint"
+msgstr "從 Webhook 端點接收的 JSON 回應"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,field_description:im_livechat_n8n.field_n8n_webhook_log__error_message
+msgid "Error Message"
+msgstr "錯誤訊息"
+
+#. module: im_livechat_n8n
+#: model:ir.model.fields,help:im_livechat_n8n.field_n8n_webhook_log__error_message
+msgid "Error message if the webhook call failed"
+msgstr "Webhook 呼叫失敗時的錯誤訊息"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "N8N Integration"
+msgstr "N8N 整合"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "Webhook Configuration"
+msgstr "Webhook 設定"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "Authentication"
+msgstr "身份驗證"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "Regenerate API Key"
+msgstr "重新產生 API 金鑰"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "This will invalidate the current API key. Continue?"
+msgstr "此操作將使目前的 API 金鑰失效。確定要繼續嗎？"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "Advanced Settings"
+msgstr "進階設定"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "Test Webhook Connection"
+msgstr "測試 Webhook 連線"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.im_livechat_channel_view_form_inherit_n8n
+msgid "View Webhook Logs"
+msgstr "檢視 Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_tree
+msgid "Webhook Logs"
+msgstr "Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Webhook Log"
+msgstr "Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Basic Information"
+msgstr "基本資訊"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Performance"
+msgstr "效能"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Request"
+msgstr "請求"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Response"
+msgstr "回應"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_form
+msgid "Error"
+msgstr "錯誤"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Search Webhook Logs"
+msgstr "搜尋 Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Outbound"
+msgstr "出站"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Inbound"
+msgstr "入站"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Today"
+msgstr "今天"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Last 7 Days"
+msgstr "最近 7 天"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Last 30 Days"
+msgstr "最近 30 天"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Group By"
+msgstr "分組依據"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Channel"
+msgstr "頻道"
+
+#. module: im_livechat_n8n
+#: model_terms:ir.ui.view,arch_db:im_livechat_n8n.n8n_webhook_log_view_search
+msgid "Date"
+msgstr "日期"
+
+#. module: im_livechat_n8n
+#: model:ir.actions.act_window,name:im_livechat_n8n.n8n_webhook_log_action
+msgid "Webhook Logs"
+msgstr "Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model:ir.actions.act_window,help:im_livechat_n8n.n8n_webhook_log_action
+msgid "No webhook logs found"
+msgstr "找不到 Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model:ir.actions.act_window,help:im_livechat_n8n.n8n_webhook_log_action
+msgid "Webhook logs are automatically created when webhooks are sent to or received from n8n."
+msgstr "Webhook 日誌會在向 n8n 傳送或接收 Webhook 時自動建立。"
+
+#. module: im_livechat_n8n
+#: model:ir.ui.menu,name:im_livechat_n8n.n8n_webhook_log_menu
+msgid "Webhook Logs"
+msgstr "Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model:res.partner,name:im_livechat_n8n.partner_n8n_bot
+msgid "N8N Bot"
+msgstr "N8N 機器人"
+
+#. module: im_livechat_n8n
+#: model:ir.cron,cron_name:im_livechat_n8n.ir_cron_cleanup_n8n_webhook_logs
+msgid "Cleanup N8N Webhook Logs"
+msgstr "清理 N8N Webhook 日誌"
+
+#. module: im_livechat_n8n
+#: model:ir.model.access,name:im_livechat_n8n.access_n8n_webhook_log_user
+msgid "n8n.webhook.log.user"
+msgstr "n8n.webhook.log.user"
+
+#. module: im_livechat_n8n
+#: model:ir.model.access,name:im_livechat_n8n.access_n8n_webhook_log_manager
+msgid "n8n.webhook.log.manager"
+msgstr "n8n.webhook.log.manager"
+
+#. module: im_livechat_n8n
+#: model:ir.module.module,shortdesc:im_livechat_n8n.module_im_livechat_n8n
+msgid "Live Chat N8N Integration"
+msgstr "即時聊天 N8N 整合"
+
+#. module: im_livechat_n8n
+#: model:ir.module.module,summary:im_livechat_n8n.module_im_livechat_n8n
+msgid "Integrate Odoo livechat with n8n workflow automation"
+msgstr "整合 Odoo 即時聊天與 n8n 工作流程自動化"

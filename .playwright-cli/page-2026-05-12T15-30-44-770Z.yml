@@ -1,0 +1,6 @@
+- generic [ref=e2]:
+  - heading "YourWebsite.com" [level=1] [ref=e3]
+  - generic [ref=e4]:
+    - text: Website Live Chat Powered by
+    - strong [ref=e5]: Odoo
+    - text: .

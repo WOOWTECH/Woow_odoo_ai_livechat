@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="im_livechat_channel_view_form_inherit_ai" model="ir.ui.view">
+        <field name="name">im_livechat.channel.form.inherit.ai</field>
+        <field name="model">im_livechat.channel</field>
+        <field name="inherit_id" ref="im_livechat.im_livechat_channel_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="AI Integration" name="ai_integration">
+                    <group>
+                        <group string="AI Configuration">
+                            <field name="ai_enabled"/>
+                            <field name="ai_api_base_url"
+                                   placeholder="https://api.openai.com/v1"
+                                   invisible="not ai_enabled"/>
+                            <field name="ai_api_key"
+                                   password="True"
+                                   invisible="not ai_enabled"/>
+                            <field name="ai_model"
+                                   placeholder="gpt-4o"
+                                   invisible="not ai_enabled"/>
+                        </group>
+                        <group string="Bot Settings" invisible="not ai_enabled">
+                            <field name="ai_bot_name"/>
+                            <field name="ai_bot_partner_id" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="System Prompt" invisible="not ai_enabled">
+                        <field name="ai_system_prompt"
+                               nolabel="1"
+                               placeholder="You are a helpful customer service assistant. Please answer in the user's language..."
+                               colspan="2"/>
+                    </group>
+
+                    <group invisible="not ai_enabled">
+                        <group string="Advanced Settings">
+                            <field name="ai_max_history"/>
+                            <field name="ai_temperature"/>
+                            <field name="ai_max_tokens"/>
+                            <field name="ai_max_retries"/>
+                            <field name="ai_retry_delay"/>
+                        </group>
+                        <group string="Error Handling">
+                            <field name="ai_error_message"
+                                   placeholder="Sorry, the AI assistant is temporarily unavailable..."/>
+                        </group>
+                    </group>
+
+                    <group invisible="not ai_enabled">
+                        <button name="action_test_ai_connection"
+                                string="Test AI Connection"
+                                type="object"
+                                class="btn-primary"/>
+                        <button name="action_view_api_logs"
+                                string="View API Logs"
+                                type="object"
+                                class="btn-link"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

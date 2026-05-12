@@ -1,0 +1,110 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menuitem "Live Chat" [ref=e7] [cursor=pointer]
+      - menu [ref=e8]:
+        - menuitem "Channels" [ref=e9] [cursor=pointer]
+        - button "Report" [ref=e10] [cursor=pointer]:
+          - generic [ref=e11]: Report
+        - button "Configuration" [ref=e12] [cursor=pointer]:
+          - generic [ref=e13]: Configuration
+      - menu [ref=e14]:
+        - button "Messages 3" [ref=e28] [cursor=pointer]:
+          - img "Messages" [ref=e17]: 
+          - generic [ref=e18]: "3"
+        - button "Activities" [ref=e19] [cursor=pointer]:
+          - img "Activities" [ref=e20]: 
+        - button "My Company" [disabled] [ref=e22]:
+          - text: 
+          - generic [ref=e23]: My Company
+        - button "User" [ref=e25] [cursor=pointer]:
+          - img "User" [ref=e26]
+          - text: 
+  - generic [ref=e231]:
+    - generic [ref=e233]:
+      - generic [ref=e235]:
+        - list [ref=e236]:
+          - listitem [ref=e237]:
+            - link "Website Live Chat Channels" [ref=e238] [cursor=pointer]:
+              - /url: /odoo/livechat
+          - listitem [ref=e239]:
+            - text: /
+            - link "YourWebsite.com" [ref=e240] [cursor=pointer]:
+              - /url: /odoo/livechat/1
+        - generic [ref=e241]:
+          - generic [ref=e243]: API Logs - YourWebsite.com
+          - button "" [ref=e247] [cursor=pointer]:
+            - generic [ref=e248]: 
+      - search [ref=e250]:
+        - search [ref=e251]:
+          - button "Search..." [ref=e252] [cursor=pointer]:
+            - img [ref=e253]: 
+          - generic [ref=e254]:
+            - listitem "search" [ref=e255]:
+              - button " " [ref=e257] [cursor=pointer]:
+                - generic [ref=e258]: 
+                - generic [ref=e260]: 
+              - generic [ref=e261]:
+                - generic "Last 7 Days" [ref=e262]
+                - button "Remove" [ref=e263] [cursor=pointer]: 
+            - searchbox "Search..." [active] [ref=e264]
+        - button "" [ref=e265] [cursor=pointer]
+    - table [ref=e268]:
+      - rowgroup [ref=e269]:
+        - row "Timestamp  Livechat Channel  Chat Session  Model  Status  Total Tokens  Response Time (s)  Retry Count " [ref=e270]:
+          - columnheader [ref=e271] [cursor=pointer]:
+            - checkbox [ref=e273]
+          - columnheader "Timestamp " [ref=e274] [cursor=pointer]:
+            - generic [ref=e275]:
+              - generic [ref=e276]: Timestamp
+              - generic [ref=e277]: 
+          - columnheader "Livechat Channel " [ref=e279] [cursor=pointer]:
+            - generic [ref=e280]:
+              - generic [ref=e281]: Livechat Channel
+              - generic [ref=e282]: 
+          - columnheader "Chat Session " [ref=e284] [cursor=pointer]:
+            - generic [ref=e285]:
+              - generic [ref=e286]: Chat Session
+              - generic [ref=e287]: 
+          - columnheader "Model " [ref=e289] [cursor=pointer]:
+            - generic [ref=e290]:
+              - generic [ref=e291]: Model
+              - generic [ref=e292]: 
+          - columnheader "Status " [ref=e294] [cursor=pointer]:
+            - generic [ref=e295]:
+              - generic [ref=e296]: Status
+              - generic [ref=e297]: 
+          - columnheader "Total Tokens " [ref=e299] [cursor=pointer]:
+            - generic [ref=e300]:
+              - generic [ref=e301]: Total Tokens
+              - generic [ref=e302]: 
+          - columnheader "Response Time (s) " [ref=e304] [cursor=pointer]:
+            - generic [ref=e305]:
+              - generic [ref=e306]: Response Time (s)
+              - generic [ref=e307]: 
+          - columnheader "Retry Count " [ref=e309] [cursor=pointer]:
+            - generic [ref=e310]:
+              - generic [ref=e311]: Retry Count
+              - generic [ref=e312]: 
+      - rowgroup [ref=e314]:
+        - row [ref=e315]:
+          - cell [ref=e316]
+        - row [ref=e317]:
+          - cell [ref=e318]
+        - row [ref=e319]:
+          - cell [ref=e320]
+        - row [ref=e321]:
+          - cell [ref=e322]
+      - rowgroup [ref=e323]:
+        - row [ref=e324]:
+          - cell [ref=e325]
+          - cell [ref=e326]
+          - cell [ref=e327]
+          - cell [ref=e328]
+          - cell [ref=e329]
+          - cell [ref=e330]
+          - cell [ref=e331]
+          - cell [ref=e332]
+          - cell [ref=e333]

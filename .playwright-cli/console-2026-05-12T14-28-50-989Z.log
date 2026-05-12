@@ -1,0 +1,2 @@
+[     162ms] [LOG] click .o-mail-DiscussSidebarCategory-channel .o-mail-DiscussSidebarCategory-add @ http://localhost:9094/web/assets/634d469/web.assets_web.min.js:10838
+[   21592ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:9094/odoo/livechat/1:0

@@ -1,0 +1,45 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "YourWebsite.com" [level=1] [ref=e3]
+    - generic [ref=e4]:
+      - text: Website Live Chat Powered by
+      - strong [ref=e5]: Odoo
+      - text: .
+  - generic [active]:
+    - generic:
+      - generic:
+        - generic [ref=e8]:
+          - generic [ref=e9] [cursor=pointer]:
+            - button "Thread Image Administrator " [ref=e11]:
+              - img "Thread Image" [ref=e13]
+              - generic "Administrator" [ref=e14]
+              - generic [ref=e15]: 
+            - generic [ref=e16]:
+              - button "" [ref=e17]:
+                - generic [ref=e18]: 
+              - button "" [ref=e19]:
+                - generic [ref=e20]: 
+              - button "" [ref=e21]:
+                - generic [ref=e22]: 
+              - button "" [ref=e23]:
+                - generic [ref=e24]: 
+          - generic [ref=e25]:
+            - group "Note" [ref=e28]:
+              - generic [ref=e29]:
+                - img [ref=e32]
+                - generic [ref=e33]:
+                  - generic "5/12/2026, 10:38:03 PM" [ref=e35]: Today at 10:38 PM
+                  - generic [ref=e39]:
+                    - generic [ref=e42]: Hello, how may I help you?
+                    - generic:
+                      - generic "Seen by everyone"
+            - generic [ref=e46]:
+              - textbox "Say something..." [ref=e48]
+              - generic [ref=e50]:
+                - button "Emojis" [ref=e51] [cursor=pointer]:
+                  - generic [ref=e52]: 
+                - button "Attach files" [ref=e54] [cursor=pointer]:
+                  - generic [ref=e55]: 
+                - button "Send" [disabled]:
+                  - generic: 
+        - button "" [ref=e58] [cursor=pointer]

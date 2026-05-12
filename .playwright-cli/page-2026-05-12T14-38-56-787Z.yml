@@ -1,0 +1,36 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "YourWebsite.com" [level=1] [ref=e3]
+    - generic [ref=e4]:
+      - text: Website Live Chat Powered by
+      - strong [ref=e5]: Odoo
+      - text: .
+  - generic [active]:
+    - generic:
+      - generic:
+        - generic [ref=e8]:
+          - generic [ref=e9] [cursor=pointer]:
+            - img "Thread Image" [ref=e11]
+            - generic "Administrator" [ref=e12]
+            - generic [ref=e13]:
+              - button "" [ref=e14]:
+                - generic [ref=e15]: 
+              - button "" [ref=e16]:
+                - generic [ref=e17]: 
+          - generic [ref=e18]:
+            - group "Note" [ref=e21]:
+              - generic [ref=e22]:
+                - img [ref=e25]
+                - generic [ref=e26]:
+                  - generic [ref=e27]:
+                    - strong [ref=e29]: Administrator
+                    - generic "5/12/2026, 10:38:54 PM" [ref=e30]: Today at 10:38 PM
+                  - generic [ref=e37]: Hello, how may I help you?
+            - generic [ref=e41]:
+              - textbox "Say something..." [ref=e43]
+              - generic [ref=e45]:
+                - button "Emojis" [ref=e46] [cursor=pointer]:
+                  - generic [ref=e47]: 
+                - button "Send" [disabled]:
+                  - generic: 
+        - button "" [ref=e50] [cursor=pointer]

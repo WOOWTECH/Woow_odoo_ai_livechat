@@ -1,0 +1,153 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menuitem "Live Chat" [ref=e7] [cursor=pointer]
+      - menu [ref=e8]:
+        - menuitem "Channels" [ref=e9] [cursor=pointer]
+        - button "Report" [ref=e10] [cursor=pointer]:
+          - generic [ref=e11]: Report
+        - button "Configuration" [ref=e12] [cursor=pointer]:
+          - generic [ref=e13]: Configuration
+      - menu [ref=e14]:
+        - button "Messages 3" [ref=e28] [cursor=pointer]:
+          - img "Messages" [ref=e17]: 
+          - generic [ref=e18]: "3"
+        - button "Activities" [ref=e19] [cursor=pointer]:
+          - img "Activities" [ref=e20]: 
+        - button "My Company" [disabled] [ref=e22]:
+          - text: 
+          - generic [ref=e23]: My Company
+        - button "User" [ref=e25] [cursor=pointer]:
+          - img "User" [ref=e26]
+          - text: 
+  - generic [ref=e30]:
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - button "New" [ref=e36] [cursor=pointer]
+        - generic [ref=e37]:
+          - list [ref=e38]:
+            - listitem [ref=e39]:
+              - link "Website Live Chat Channels" [ref=e40] [cursor=pointer]:
+                - /url: /odoo/livechat
+          - generic [ref=e41]:
+            - generic [ref=e43]: YourWebsite.com
+            - button "" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]: 
+      - search [ref=e51]:
+        - navigation "Pager" [ref=e52]:
+          - generic [ref=e53]:
+            - generic [ref=e54]: "1"
+            - text: / 1
+          - generic [ref=e55]:
+            - button "Previous" [disabled]:
+              - generic: 
+            - button "Next" [disabled]:
+              - generic: 
+    - generic [ref=e58]:
+      - button "Join Channel" [ref=e61] [cursor=pointer]
+      - generic [ref=e62]:
+        - generic [ref=e64]:
+          - button "Edit" [ref=e67] [cursor=pointer]:
+            - generic [ref=e68]: 
+          - img "Binary file" [ref=e69]
+        - generic [ref=e70]:
+          - generic [ref=e71]: Channel Name
+          - heading "YourWebsite.com" [level=1] [ref=e72]:
+            - textbox "Channel Name" [ref=e74]:
+              - /placeholder: e.g. YourWebsite.com
+              - text: YourWebsite.com
+        - generic [ref=e75]:
+          - list [ref=e77]:
+            - listitem [ref=e78] [cursor=pointer]:
+              - tab "Operators" [ref=e79]
+            - listitem [ref=e80] [cursor=pointer]:
+              - tab "Options" [ref=e81]
+            - listitem [ref=e82] [cursor=pointer]:
+              - tab "Channel Rules" [ref=e83]
+            - listitem [ref=e84] [cursor=pointer]:
+              - tab "Widget" [ref=e85]
+            - listitem [ref=e86] [cursor=pointer]:
+              - tab "AI Integration" [active] [ref=e87]
+          - generic [ref=e89]:
+            - generic [ref=e97]:
+              - generic [ref=e98]:
+                - generic [ref=e100]: AI Configuration
+                - generic [ref=e102]:
+                  - generic [ref=e104]:
+                    - text: Enable AI Integration
+                    - superscript [ref=e105]: "?"
+                  - checkbox "Enable AI Integration?" [checked] [ref=e109] [cursor=pointer]
+                - generic [ref=e110]:
+                  - generic [ref=e112]:
+                    - text: API Base URL
+                    - superscript [ref=e113]: "?"
+                  - textbox "API Base URL?" [ref=e116]:
+                    - /placeholder: https://api.openai.com/v1
+                    - text: https://api.minimaxi.chat/v1
+                - generic [ref=e117]:
+                  - generic [ref=e119]:
+                    - text: API Key
+                    - superscript [ref=e120]: "?"
+                  - textbox "API Key?" [ref=e123]: sk-api-w1wgEVsZiI-jYDlwOvrSZkHbAnXlr1uFJZ8hVATKVAQY79wRKzcwIkUPUEtnw37EHi-6tM5-U9DOJVKtVloPzqh-1J3fSvIM00qYyLX43pQT8m11fkwH2jM
+                - generic [ref=e124]:
+                  - generic [ref=e126]:
+                    - text: Model
+                    - superscript [ref=e127]: "?"
+                  - textbox "Model?" [ref=e130]:
+                    - /placeholder: gpt-4o
+                    - text: MiniMax-Text-01
+              - generic [ref=e131]:
+                - generic [ref=e133]: Bot Settings
+                - generic [ref=e134]:
+                  - generic [ref=e136]:
+                    - text: Bot Name
+                    - superscript [ref=e137]: "?"
+                  - textbox "Bot Name?" [ref=e140]: MiniMax AI 助手
+                - generic [ref=e143]:
+                  - text: Bot Partner
+                  - superscript [ref=e144]: "?"
+            - generic [ref=e147]:
+              - generic [ref=e149]: System Prompt
+              - textbox "You are a helpful customer service assistant. Please answer in the user's language..." [ref=e154]: 你是一個專業的客服助手，請用繁體中文回答所有問題。回答要簡潔有禮貌。
+            - generic [ref=e155]:
+              - generic [ref=e156]:
+                - generic [ref=e158]: Advanced Settings
+                - generic [ref=e159]:
+                  - generic [ref=e161]:
+                    - text: Max History Messages
+                    - superscript [ref=e162]: "?"
+                  - textbox "Max History Messages?" [ref=e165]: "50"
+                - generic [ref=e166]:
+                  - generic [ref=e168]:
+                    - text: Temperature
+                    - superscript [ref=e169]: "?"
+                  - textbox "Temperature?" [ref=e172]: "0.70"
+                - generic [ref=e173]:
+                  - generic [ref=e175]:
+                    - text: Max Tokens
+                    - superscript [ref=e176]: "?"
+                  - textbox "Max Tokens?" [ref=e179]: 1,024
+                - generic [ref=e180]:
+                  - generic [ref=e182]:
+                    - text: Max Retries
+                    - superscript [ref=e183]: "?"
+                  - textbox "Max Retries?" [ref=e186]: "3"
+                - generic [ref=e187]:
+                  - generic [ref=e189]:
+                    - text: Retry Delay (seconds)
+                    - superscript [ref=e190]: "?"
+                  - textbox "Retry Delay (seconds)?" [ref=e193]: "2"
+              - generic [ref=e194]:
+                - generic [ref=e196]: Error Handling
+                - generic [ref=e197]:
+                  - generic [ref=e199]:
+                    - text: Error Message
+                    - superscript [ref=e200]: "?"
+                  - textbox "Error Message?" [ref=e204]:
+                    - /placeholder: Sorry, the AI assistant is temporarily unavailable...
+                    - text: Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information.
+            - generic [ref=e206]:
+              - button "Test AI Connection" [ref=e208] [cursor=pointer]
+              - button "View API Logs" [ref=e210] [cursor=pointer]

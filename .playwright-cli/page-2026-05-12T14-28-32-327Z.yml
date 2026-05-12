@@ -1,0 +1,230 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menuitem "Live Chat" [ref=e21] [cursor=pointer]
+      - menu [ref=e22]:
+        - menuitem "Channels" [ref=e23] [cursor=pointer]
+        - button "Report" [ref=e24] [cursor=pointer]:
+          - generic [ref=e25]: Report
+        - button "Configuration" [ref=e26] [cursor=pointer]:
+          - generic [ref=e27]: Configuration
+      - menu [ref=e7]:
+        - button "Messages 3" [ref=e28] [cursor=pointer]:
+          - img "Messages" [ref=e10]: 
+          - generic [ref=e11]: "3"
+        - button "Activities" [ref=e12] [cursor=pointer]:
+          - img "Activities" [ref=e13]: 
+        - button "My Company" [disabled] [ref=e15]:
+          - text: 
+          - generic [ref=e16]: My Company
+        - button "User" [ref=e18] [cursor=pointer]:
+          - img "User" [ref=e19]
+          - text: 
+  - generic [ref=e67]:
+    - generic [ref=e69]:
+      - generic [ref=e70]:
+        - button "New" [ref=e73] [cursor=pointer]
+        - generic [ref=e74]:
+          - list [ref=e75]:
+            - listitem [ref=e76]:
+              - link "Website Live Chat Channels" [ref=e77] [cursor=pointer]:
+                - /url: /odoo/livechat
+          - generic [ref=e78]:
+            - generic [ref=e80]: Sessions
+            - button "" [ref=e84] [cursor=pointer]:
+              - generic [ref=e85]: 
+      - search [ref=e87]:
+        - search [ref=e88]:
+          - button "Search..." [ref=e89] [cursor=pointer]:
+            - img [ref=e90]: 
+          - searchbox "Search..." [active] [ref=e92]
+        - button "" [ref=e93] [cursor=pointer]
+      - navigation [ref=e95]:
+        - button "" [ref=e96] [cursor=pointer]:
+          - generic [ref=e97]: 
+        - button "" [ref=e98] [cursor=pointer]:
+          - generic [ref=e99]: 
+    - generic [ref=e101]:
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0001
+            - generic:
+              - text: "Duration:"
+              - generic: 77:52:48
+            - generic: "Date: 04/19/2026 04:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Singapore
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0002
+            - generic:
+              - text: "Duration:"
+              - generic: 45:00:36
+            - generic: "Date: 06/05/2026 13:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Belgium
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0003
+            - generic:
+              - text: "Duration:"
+              - generic: 07:36:36
+            - generic: "Date: 05/08/2026 00:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: France
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0004
+            - generic:
+              - text: "Duration:"
+              - generic: 97:48:36
+            - generic: "Date: 04/06/2026 18:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Belgium
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0005
+            - generic:
+              - text: "Duration:"
+              - generic: 39:27:36
+            - generic: "Date: 05/31/2026 03:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: France
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0006
+            - generic:
+              - text: "Duration:"
+              - generic: 87:25:48
+            - generic: "Date: 03/23/2026 19:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Belgium
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0007
+            - generic:
+              - text: "Duration:"
+              - generic: 83:09:00
+            - generic: "Date: 04/24/2026 09:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Portugal
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0008
+            - generic:
+              - text: "Duration:"
+              - generic: 90:33:36
+            - generic: "Date: 03/22/2026 04:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: France
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0009
+            - generic:
+              - text: "Duration:"
+              - generic: 47:18:00
+            - generic: "Date: 04/21/2026 17:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Belgium
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - article:
+        - generic:
+          - generic:
+            - generic: REF0010
+            - generic:
+              - text: "Duration:"
+              - generic: 74:42:36
+            - generic: "Date: 05/02/2026 16:28:30"
+          - generic:
+            - generic:
+              - img "Binary file"
+        - generic:
+          - generic: "Country:"
+          - generic: Belgium
+          - generic:
+            - generic:
+              - generic:
+                - img
+      - paragraph [ref=e103]: Create new document

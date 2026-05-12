@@ -1,0 +1,60 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "YourWebsite.com" [level=1] [ref=e3]
+    - generic [ref=e4]:
+      - text: Website Live Chat Powered by
+      - strong [ref=e5]: Odoo
+      - text: .
+  - generic [active]:
+    - generic:
+      - generic:
+        - generic [ref=e59]:
+          - generic [ref=e60] [cursor=pointer]:
+            - button "Thread Image Administrator " [ref=e62]:
+              - img "Thread Image" [ref=e64]
+              - generic "Administrator" [ref=e65]
+              - generic [ref=e66]: 
+            - generic [ref=e67]:
+              - button "" [ref=e68]:
+                - generic [ref=e69]: 
+              - button "" [ref=e70]:
+                - generic [ref=e71]: 
+              - button "" [ref=e72]:
+                - generic [ref=e73]: 
+              - button "" [ref=e74]:
+                - generic [ref=e75]: 
+          - generic [ref=e76]:
+            - generic [ref=e77]:
+              - group "Note" [ref=e79]:
+                - generic [ref=e80]:
+                  - img [ref=e83]
+                  - generic [ref=e84]:
+                    - generic "5/12/2026, 10:38:17 PM" [ref=e86]: Today at 10:38 PM
+                    - generic [ref=e90]:
+                      - generic [ref=e93]: Hello, how may I help you?
+                      - generic:
+                        - generic "Seen by everyone"
+              - generic [ref=e94]:
+                - generic [ref=e95]:
+                  - separator [ref=e96]
+                  - generic [ref=e97]: Today
+                  - separator [ref=e98]
+                - group "Message" [ref=e99]:
+                  - generic [ref=e100]:
+                    - img [ref=e103]
+                    - generic [ref=e104]:
+                      - generic "5/12/2026, 10:38:17 PM" [ref=e106]: Today at 10:38 PM
+                      - generic [ref=e110]:
+                        - paragraph [ref=e114]: 你好，請問你們的營業時間是幾點到幾點？
+                        - generic:
+                          - generic "Seen by everyone"
+            - generic [ref=e119]:
+              - textbox "Say something..." [ref=e121]
+              - generic [ref=e123]:
+                - button "Emojis" [ref=e124] [cursor=pointer]:
+                  - generic [ref=e125]: 
+                - button "Attach files" [ref=e127] [cursor=pointer]:
+                  - generic [ref=e128]: 
+                - button "Send" [disabled]:
+                  - generic: 
+        - button "" [ref=e58] [cursor=pointer]

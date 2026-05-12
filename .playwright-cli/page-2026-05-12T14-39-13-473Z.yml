@@ -1,0 +1,52 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - heading "YourWebsite.com" [level=1] [ref=e3]
+    - generic [ref=e4]:
+      - text: Website Live Chat Powered by
+      - strong [ref=e5]: Odoo
+      - text: .
+  - generic [active]:
+    - generic:
+      - generic:
+        - generic [ref=e51]:
+          - generic [ref=e52] [cursor=pointer]:
+            - img "Thread Image" [ref=e54]
+            - generic "Administrator" [ref=e55]
+            - generic [ref=e56]:
+              - button "" [ref=e57]:
+                - generic [ref=e58]: 
+              - button "" [ref=e59]:
+                - generic [ref=e60]: 
+          - generic [ref=e61]:
+            - generic [ref=e62]:
+              - group "Note" [ref=e64]:
+                - generic [ref=e65]:
+                  - img [ref=e68]
+                  - generic [ref=e69]:
+                    - generic [ref=e70]:
+                      - strong [ref=e72]: Administrator
+                      - generic "5/12/2026, 10:39:06 PM" [ref=e73]: Today at 10:39 PM
+                    - generic [ref=e80]: Hello, how may I help you?
+              - generic [ref=e81]:
+                - generic [ref=e82]:
+                  - separator [ref=e83]
+                  - generic [ref=e84]: Today
+                  - separator [ref=e85]
+                - group "Message" [ref=e86]:
+                  - generic [ref=e87]:
+                    - img [ref=e90]
+                    - generic [ref=e91]:
+                      - generic "5/12/2026, 10:39:06 PM" [ref=e93]: Today at 10:39 PM
+                      - generic [ref=e97]:
+                        - paragraph [ref=e101]: 你好，請問你們的營業時間是幾點到幾點？
+                        - generic "Seen by Administrator" [ref=e103] [cursor=pointer]:
+                          - generic [ref=e104]: 
+                          - generic [ref=e105]: 
+            - generic [ref=e110]:
+              - textbox "Say something..." [ref=e112]
+              - generic [ref=e114]:
+                - button "Emojis" [ref=e115] [cursor=pointer]:
+                  - generic [ref=e116]: 
+                - button "Send" [disabled]:
+                  - generic: 
+        - button "" [ref=e50] [cursor=pointer]

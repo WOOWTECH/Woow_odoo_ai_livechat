@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 
+import psycopg2
 import requests
 from markupsafe import Markup
 
@@ -227,14 +228,26 @@ class ImLivechatChannel(models.Model):
             self._do_process_ai_response(test_env, channel_id, discuss_channel_id)
             return
 
-        try:
-            with self.pool.cursor() as cr:
-                env = api.Environment(cr, SUPERUSER_ID, {})
-                self._do_process_ai_response(env, channel_id, discuss_channel_id)
-                # Commit all changes (bot messages, log entries)
-                cr.commit()
-        except Exception as e:
-            _logger.error("Unexpected error in AI response thread: %s", e, exc_info=True)
+        max_commit_retries = 3
+        for commit_attempt in range(max_commit_retries):
+            try:
+                with self.pool.cursor() as cr:
+                    env = api.Environment(cr, SUPERUSER_ID, {})
+                    self._do_process_ai_response(env, channel_id, discuss_channel_id)
+                    cr.commit()
+                return  # Success
+            except psycopg2.errors.SerializationFailure:
+                if commit_attempt < max_commit_retries - 1:
+                    _logger.warning(
+                        "Serialization failure in AI thread (attempt %d/%d), retrying...",
+                        commit_attempt + 1, max_commit_retries,
+                    )
+                    time.sleep(0.5 * (commit_attempt + 1))
+                else:
+                    _logger.error("Serialization failure in AI thread after %d attempts", max_commit_retries)
+            except Exception as e:
+                _logger.error("Unexpected error in AI response thread: %s", e, exc_info=True)
+                return
 
     def _do_process_ai_response(self, env, channel_id, discuss_channel_id):
         """
@@ -304,9 +317,12 @@ class ImLivechatChannel(models.Model):
             except Exception as e:
                 response_time = time.time() - start_time
                 last_error = str(e)
+                # For HTTP errors, include response body for debugging
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    last_error = f"{e} | Response: {e.response.text[:500]}"
                 _logger.warning(
                     "AI API call failed for channel %s (attempt %s/%s): %s",
-                    channel_id, attempt + 1, max_retries, e,
+                    channel_id, attempt + 1, max_retries, last_error,
                 )
 
                 # Log retry attempt
@@ -387,6 +403,11 @@ class ImLivechatChannel(models.Model):
             headers=headers,
             timeout=60,
         )
+        if response.status_code != 200:
+            _logger.warning(
+                "LLM API error response (HTTP %s): %s",
+                response.status_code, response.text[:1000],
+            )
         response.raise_for_status()
 
         data = response.json()

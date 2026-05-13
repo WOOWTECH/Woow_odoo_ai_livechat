@@ -1,3 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_n8n_webhook_log_user,n8n.webhook.log.user,model_n8n_webhook_log,im_livechat.im_livechat_group_user,1,0,0,0
-access_n8n_webhook_log_manager,n8n.webhook.log.manager,model_n8n_webhook_log,im_livechat.im_livechat_group_manager,1,1,1,1

@@ -1,7 +1,7 @@
 # 實作計畫：im_livechat_ai 模組
 
 **日期**: 2026-05-12
-**對應設計文件**: `2026-05-12-n8n-to-openai-api-migration-design.md`
+**對應設計文件**: (已整合至模組文件)
 
 ## Phase 1：模組骨架
 

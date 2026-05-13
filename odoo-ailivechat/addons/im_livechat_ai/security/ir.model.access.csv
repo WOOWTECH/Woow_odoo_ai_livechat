@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_llm_api_log_user,llm.api.log.user,model_llm_api_log,im_livechat.im_livechat_group_user,1,0,0,0
+access_llm_api_log_manager,llm.api.log.manager,model_llm_api_log,im_livechat.im_livechat_group_manager,1,1,1,1

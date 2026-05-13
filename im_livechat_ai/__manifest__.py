@@ -32,7 +32,7 @@ After installation, configure AI settings in:
 Settings > Live Chat > Channels > AI Integration tab
     """,
     'author': 'WOOWTECH',
-    'website': 'https://github.com/WOOWTECH/Woow_odoo_n8n_livechat',
+    'website': 'https://github.com/WOOWTECH/Woow_odoo_ai_livechat',
     'license': 'LGPL-3',
     'depends': [
         'im_livechat',

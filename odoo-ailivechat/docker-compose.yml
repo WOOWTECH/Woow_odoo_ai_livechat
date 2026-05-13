@@ -1,47 +1,47 @@
 version: '3.8'
-name: odoo-n8nlivechat
+name: odoo-ailivechat
 
 services:
   db:
     image: postgres:16
-    container_name: odoo-n8nlivechat-db
+    container_name: odoo-ailivechat-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: odoon8nlivechat
-      POSTGRES_USER: odoon8nlivechat
-      POSTGRES_PASSWORD: odoon8nlivechat
+      POSTGRES_DB: odooailivechat
+      POSTGRES_USER: odooailivechat
+      POSTGRES_PASSWORD: odooailivechat
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
-      - odoo-n8nlivechat-net
+      - odoo-ailivechat-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U odoon8nlivechat -d odoon8nlivechat"]
+      test: ["CMD-SHELL", "pg_isready -U odooailivechat -d odooailivechat"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   odoo:
     image: odoo:18.0
-    container_name: odoo-n8nlivechat-web
+    container_name: odoo-ailivechat-web
     restart: unless-stopped
     ports:
       - "9094:8069"
     environment:
       HOST: db
       PORT: 5432
-      USER: odoon8nlivechat
-      PASSWORD: odoon8nlivechat
+      USER: odooailivechat
+      PASSWORD: odooailivechat
     volumes:
       - ./addons:/mnt/extra-addons
       - ./config/odoo.conf:/etc/odoo/odoo.conf
       - ./data/odoo:/var/lib/odoo
     networks:
-      - odoo-n8nlivechat-net
+      - odoo-ailivechat-net
     depends_on:
       db:
         condition: service_healthy
 
 networks:
-  odoo-n8nlivechat-net:
-    name: odoo-n8nlivechat-network
+  odoo-ailivechat-net:
+    name: odoo-ailivechat-network
     driver: bridge

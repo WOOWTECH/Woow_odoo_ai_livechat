@@ -198,7 +198,7 @@ flowchart LR
 
    ```bash
    cd /path/to/odoo/addons
-   git clone https://github.com/WOOWTECH/Woow_odoo_n8n_livechat.git
+   git clone https://github.com/WOOWTECH/Woow_odoo_ai_livechat.git
    ```
 
 2. **Update the apps list** in Odoo:
@@ -213,7 +213,7 @@ flowchart LR
 
 ## Docker / Podman Deployment
 
-A production-ready `docker-compose.yml` is provided in the `odoo-n8nlivechat/` directory for quick deployment with Odoo 18 and PostgreSQL 16.
+A production-ready `docker-compose.yml` is provided in the `odoo-ailivechat/` directory for quick deployment with Odoo 18 and PostgreSQL 16.
 
 ### Service Architecture
 
@@ -227,7 +227,7 @@ A production-ready `docker-compose.yml` is provided in the `odoo-n8nlivechat/` d
 ### Quick Start
 
 ```bash
-cd odoo-n8nlivechat/
+cd odoo-ailivechat/
 
 # Start the stack
 docker compose up -d
@@ -238,7 +238,7 @@ docker compose up -d
 ### With Podman (rootless)
 
 ```bash
-cd odoo-n8nlivechat/
+cd odoo-ailivechat/
 
 # Start with Podman Compose
 podman-compose up -d
@@ -249,7 +249,7 @@ podman-compose up -d
 ### Directory Structure
 
 ```
-odoo-n8nlivechat/
+odoo-ailivechat/
 ├── docker-compose.yml          # Service definitions
 ├── config/
 │   └── odoo.conf               # Odoo configuration file
@@ -262,7 +262,7 @@ odoo-n8nlivechat/
 
 ### Key Configuration Details
 
-- **Network:** All services share the `odoo-n8nlivechat-network` bridge network, allowing internal hostname resolution (e.g., `http://odoo:8069` from n8n).
+- **Network:** All services share the `odoo-ailivechat-network` bridge network, allowing internal hostname resolution (e.g., `http://odoo:8069` from n8n).
 - **Persistence:** Both PostgreSQL data and Odoo filestore are mounted as bind volumes for data durability across restarts.
 - **Health checks:** The PostgreSQL container includes a health check; Odoo waits for database readiness before starting.
 - **Addons auto-mount:** The `addons/` directory is mounted to `/mnt/extra-addons` inside the Odoo container, so any module placed there is immediately available.
@@ -274,7 +274,7 @@ To run n8n alongside Odoo, add the following service to `docker-compose.yml`:
 ```yaml
   n8n:
     image: n8nio/n8n:latest
-    container_name: odoo-n8nlivechat-n8n
+    container_name: odoo-ailivechat-n8n
     restart: unless-stopped
     ports:
       - "15678:5678"
@@ -283,7 +283,7 @@ To run n8n alongside Odoo, add the following service to `docker-compose.yml`:
     volumes:
       - ./data/n8n:/home/node/.n8n
     networks:
-      - odoo-n8nlivechat-net
+      - odoo-ailivechat-net
 ```
 
 After adding, n8n will be available at `http://localhost:15678` and can reach Odoo at `http://odoo:8069` over the shared Docker network.
@@ -506,8 +506,8 @@ The module includes **96 automated tests** across 3 test suites, providing compr
 ./odoo-bin -d your_db --test-enable --stop-after-init --test-tags /im_livechat_n8n
 
 # Docker environment
-docker exec -it odoo-n8nlivechat-web \
-  odoo --test-enable --stop-after-init -d odoon8nlivechat -i im_livechat_n8n
+docker exec -it odoo-ailivechat-web \
+  odoo --test-enable --stop-after-init -d odooailivechat -i im_livechat_n8n
 ```
 
 ### Pre-Production Test Suite (40 tests)
@@ -656,7 +656,7 @@ Sent automatically when a visitor posts a message in a livechat session with N8N
 1. Verify all containers are running: `docker compose ps`
 2. Check container logs: `docker compose logs -f odoo`
 3. Ensure the database health check passes: `docker compose logs db`
-4. Confirm network connectivity: `docker exec odoo-n8nlivechat-web curl -s http://db:5432 || echo "DB unreachable"`
+4. Confirm network connectivity: `docker exec odoo-ailivechat-web curl -s http://db:5432 || echo "DB unreachable"`
 
 ---
 
@@ -698,7 +698,7 @@ This module is licensed under the [GNU Lesser General Public License v3.0 (LGPL-
 Developed and maintained by **[WOOWTECH](https://github.com/WOOWTECH)**.
 
 <p align="center">
-  <a href="https://github.com/WOOWTECH/Woow_odoo_n8n_livechat/issues">Bug Reports & Feature Requests</a>
+  <a href="https://github.com/WOOWTECH/Woow_odoo_ai_livechat/issues">Bug Reports & Feature Requests</a>
 </p>
 
 ---

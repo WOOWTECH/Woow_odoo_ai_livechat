@@ -13,9 +13,9 @@
 |------|------|
 | 前端 UI | Playwright CLI (`npx playwright-cli`) |
 | 瀏覽器對話 | 獨立 session (`-s visitor`, `-s visitor2`) |
-| 後端驗證 | `podman exec odoo-n8nlivechat-db psql` |
+| 後端驗證 | `podman exec odoo-ailivechat-db psql` |
 | API 層 | Odoo JSON-RPC (`/web/dataset/call_kw`) |
-| 日誌 | `podman logs odoo-n8nlivechat-web` |
+| 日誌 | `podman logs odoo-ailivechat-web` |
 
 ---
 

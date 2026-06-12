@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import threading
 import time
 
@@ -174,6 +175,31 @@ class ImLivechatChannel(models.Model):
         self.write({'ai_bot_partner_id': partner.id})
         return partner
 
+    # --- Response Processing ---
+
+    @staticmethod
+    def _strip_think_tags(text):
+        """
+        Remove <think>...</think> reasoning blocks from LLM responses.
+
+        Some models (e.g. MiniMax M2.7, M3, DeepSeek R1) include internal
+        reasoning wrapped in <think> tags. These should not be shown to
+        visitors in the chat.
+
+        Args:
+            text (str): Raw LLM response text
+
+        Returns:
+            str: Cleaned text with think blocks removed
+        """
+        if not text:
+            return text
+        # Remove <think>...</think> blocks (including multiline)
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        # Remove orphaned opening <think> tags (response may be cut off)
+        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL)
+        return cleaned.strip()
+
     # --- LLM API Call Logic ---
 
     def _trigger_ai_response(self, discuss_channel, message):
@@ -228,21 +254,26 @@ class ImLivechatChannel(models.Model):
             self._do_process_ai_response(test_env, channel_id, discuss_channel_id)
             return
 
-        max_commit_retries = 3
+        max_commit_retries = 5
         for commit_attempt in range(max_commit_retries):
             try:
                 with self.pool.cursor() as cr:
+                    # Use READ COMMITTED to avoid serialization conflicts with
+                    # the main thread's message_post updating last_interest_dt
+                    cr.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
                     env = api.Environment(cr, SUPERUSER_ID, {})
                     self._do_process_ai_response(env, channel_id, discuss_channel_id)
                     cr.commit()
                 return  # Success
             except psycopg2.errors.SerializationFailure:
                 if commit_attempt < max_commit_retries - 1:
+                    backoff = 1.0 * (2 ** commit_attempt)  # 1s, 2s, 4s, 8s
                     _logger.warning(
-                        "Serialization failure in AI thread (attempt %d/%d), retrying...",
-                        commit_attempt + 1, max_commit_retries,
+                        "Serialization failure in AI thread (attempt %d/%d), "
+                        "retrying in %.1fs...",
+                        commit_attempt + 1, max_commit_retries, backoff,
                     )
-                    time.sleep(0.5 * (commit_attempt + 1))
+                    time.sleep(backoff)
                 else:
                     _logger.error("Serialization failure in AI thread after %d attempts", max_commit_retries)
             except Exception as e:
@@ -271,8 +302,25 @@ class ImLivechatChannel(models.Model):
             _logger.warning("AI response: session %s no longer exists", discuss_channel_id)
             return
 
-        # Build conversation messages
+        # Build conversation messages (with retry if visitor msg not yet committed)
         messages = discuss_channel._build_llm_messages(channel)
+        user_messages = [m for m in messages if m.get('role') == 'user']
+        if not user_messages:
+            # Visitor message may not be committed yet — wait and retry
+            for wait_attempt in range(5):
+                time.sleep(0.5 * (wait_attempt + 1))
+                env.cr.rollback()  # Reset transaction to see new commits
+                discuss_channel = env['discuss.channel'].browse(discuss_channel_id)
+                messages = discuss_channel._build_llm_messages(channel)
+                user_messages = [m for m in messages if m.get('role') == 'user']
+                if user_messages:
+                    break
+            if not user_messages:
+                _logger.warning(
+                    "AI response: no user messages found in channel %s after retries",
+                    discuss_channel_id,
+                )
+                return
 
         # Read config values
         max_retries = max(1, min(channel.ai_max_retries or 3, 10))
@@ -286,8 +334,9 @@ class ImLivechatChannel(models.Model):
                 response_data = channel._call_llm_api(messages)
                 response_time = time.time() - start_time
 
-                # Extract response content
-                ai_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                # Extract response content and strip reasoning tags
+                raw_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                ai_reply = self._strip_think_tags(raw_reply)
                 if not ai_reply:
                     raise ValueError("Empty response from LLM API")
 
@@ -517,7 +566,8 @@ class ImLivechatChannel(models.Model):
 
         try:
             response_data = self._call_llm_api(test_messages)
-            reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            raw_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            reply = self._strip_think_tags(raw_reply)
             usage = response_data.get('usage', {})
 
             return {

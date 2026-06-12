@@ -1,0 +1,16 @@
+- banner [ref=e2]:
+  - navigation [ref=e3]:
+    - button "" [ref=e5] [cursor=pointer]:
+      - generic [ref=e6]: 
+    - menu [ref=e7]:
+      - button "Messages 1" [ref=e9] [cursor=pointer]:
+        - img "Messages" [ref=e10]: 
+        - generic [ref=e11]: "1"
+      - button "Activities" [ref=e12] [cursor=pointer]:
+        - img "Activities" [ref=e13]: 
+      - button "My Company" [disabled] [ref=e15]:
+        - text: 
+        - generic [ref=e16]: My Company
+      - button "User" [ref=e18] [cursor=pointer]:
+        - img "User" [ref=e19]
+        - text: 

@@ -1,0 +1,58 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menuitem "Discuss" [ref=e7] [cursor=pointer]
+      - menu [ref=e8]:
+        - button "Configuration" [ref=e9] [cursor=pointer]:
+          - generic [ref=e10]: Configuration
+      - menu [ref=e11]:
+        - button "Messages 1" [ref=e13] [cursor=pointer]:
+          - img "Messages" [ref=e14]: 
+          - generic [ref=e15]: "1"
+        - button "Activities" [ref=e16] [cursor=pointer]:
+          - img "Activities" [ref=e17]: 
+        - button "My Company" [disabled] [ref=e19]:
+          - text: 
+          - generic [ref=e20]: My Company
+        - button "User" [ref=e22] [cursor=pointer]:
+          - img "User" [ref=e23]
+          - text: 
+  - generic [ref=e25]:
+    - generic [ref=e31]: Discuss
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - generic [ref=e35]:
+          - button "" [ref=e36] [cursor=pointer]:
+            - generic [ref=e37]: 
+          - button " Start a meeting" [ref=e38] [cursor=pointer]:
+            - generic [ref=e39]: 
+            - generic [ref=e40]: Start a meeting
+        - generic [ref=e41]:
+          - button " Inbox" [ref=e42] [cursor=pointer]:
+            - generic "Inbox" [ref=e44]: 
+            - generic [ref=e45]: Inbox
+          - button " Starred" [ref=e46] [cursor=pointer]:
+            - generic "Favorites" [ref=e48]: 
+            - generic [ref=e49]: Starred
+          - button " History" [ref=e50] [cursor=pointer]:
+            - generic "History" [ref=e52]: 
+            - generic [ref=e53]: History
+        - generic [ref=e54]:
+          - button "Channels" [ref=e55] [cursor=pointer]:
+            - text: 
+            - generic [ref=e56]: Channels
+          - generic [ref=e58]:
+            - button "View or join channels" [ref=e59] [cursor=pointer]:
+              - img [ref=e60]: 
+            - button "Add or join a channel" [ref=e61] [cursor=pointer]:
+              - img [ref=e62]: 
+        - generic [ref=e63]:
+          - button "Direct messages" [ref=e64] [cursor=pointer]:
+            - text: 
+            - generic [ref=e65]: Direct messages
+          - button "Start a conversation" [ref=e68] [cursor=pointer]:
+            - img [ref=e69]: 
+      - generic [ref=e72]:
+        - generic: 

@@ -1,0 +1,275 @@
+- generic [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menuitem "Live Chat" [ref=e7] [cursor=pointer]
+      - menu [ref=e8]:
+        - menuitem "Channels" [ref=e9] [cursor=pointer]
+        - button "Report" [ref=e10] [cursor=pointer]:
+          - generic [ref=e11]: Report
+        - button "Configuration" [ref=e12] [cursor=pointer]:
+          - generic [ref=e13]: Configuration
+      - menu [ref=e14]:
+        - button "Messages 12" [ref=e28] [cursor=pointer]:
+          - img "Messages" [ref=e17]: 
+          - generic [ref=e18]: "12"
+        - button "Activities" [ref=e19] [cursor=pointer]:
+          - img "Activities" [ref=e20]: 
+        - button "My Company" [disabled] [ref=e22]:
+          - text: 
+          - generic [ref=e23]: My Company
+        - button "User" [ref=e25] [cursor=pointer]:
+          - img "User" [ref=e26]
+          - text: 
+  - generic [ref=e30]:
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - button "New" [ref=e36] [cursor=pointer]
+        - generic [ref=e37]:
+          - list [ref=e38]:
+            - listitem [ref=e39]:
+              - link "Website Live Chat Channels" [ref=e40] [cursor=pointer]:
+                - /url: /odoo/livechat
+          - generic [ref=e41]:
+            - generic [ref=e43]: YourWebsite.com
+            - button "" [ref=e47] [cursor=pointer]:
+              - generic [ref=e48]: 
+      - button " 15 Sessions" [ref=e52] [cursor=pointer]:
+        - generic [ref=e53]: 
+        - generic [ref=e54]:
+          - generic [ref=e55]: "15"
+          - generic [ref=e56]: Sessions
+      - search [ref=e58]:
+        - navigation "Pager" [ref=e59]:
+          - generic [ref=e60]:
+            - generic [ref=e61]: "1"
+            - text: / 1
+          - generic [ref=e62]:
+            - button "Previous" [disabled]:
+              - generic: 
+            - button "Next" [disabled]:
+              - generic: 
+    - generic [ref=e65]:
+      - button "Leave Channel" [ref=e68] [cursor=pointer]
+      - generic [ref=e69]:
+        - generic [ref=e71]:
+          - button "Edit" [ref=e74] [cursor=pointer]:
+            - generic [ref=e75]: 
+          - img "Binary file" [ref=e76]
+        - generic [ref=e77]:
+          - generic [ref=e78]: Channel Name
+          - heading "YourWebsite.com" [level=1] [ref=e79]:
+            - textbox "Channel Name" [ref=e81]:
+              - /placeholder: e.g. YourWebsite.com
+              - text: YourWebsite.com
+        - generic [ref=e82]:
+          - list [ref=e84]:
+            - listitem [ref=e85] [cursor=pointer]:
+              - tab "Operators" [ref=e86]
+            - listitem [ref=e87] [cursor=pointer]:
+              - tab "Options" [ref=e88]
+            - listitem [ref=e89] [cursor=pointer]:
+              - tab "Channel Rules" [ref=e90]
+            - listitem [ref=e91] [cursor=pointer]:
+              - tab "Widget" [ref=e92]
+            - listitem [ref=e93] [cursor=pointer]:
+              - tab "AI Integration" [active] [ref=e94]
+          - generic [ref=e96]:
+            - generic [ref=e273]:
+              - generic [ref=e274]:
+                - generic [ref=e276]: AI Configuration
+                - generic [ref=e278]:
+                  - generic [ref=e280]:
+                    - text: Enable AI Integration
+                    - superscript [ref=e281]: "?"
+                  - checkbox "Enable AI Integration?" [checked] [ref=e285] [cursor=pointer]
+                - generic [ref=e286]:
+                  - generic [ref=e288]:
+                    - text: API Base URL
+                    - superscript [ref=e289]: "?"
+                  - textbox "API Base URL?" [ref=e292]:
+                    - /placeholder: https://api.openai.com/v1
+                    - text: https://api.minimaxi.chat/v1
+                - generic [ref=e293]:
+                  - generic [ref=e295]:
+                    - text: API Key
+                    - superscript [ref=e296]: "?"
+                  - textbox "API Key?" [ref=e299]: sk-api-w1wgEVsZiI-jYDlwOvrSZkHbAnXlr1uFJZ8hVATKVAQY79wRKzcwIkUPUEtnw37EHi-6tM5-U9DOJVKtVloPzqh-1J3fSvIM00qYyLX43pQT8m11fkwH2jM
+                - generic [ref=e300]:
+                  - generic [ref=e302]:
+                    - text: Model
+                    - superscript [ref=e303]: "?"
+                  - textbox "Model?" [ref=e306]:
+                    - /placeholder: gpt-4o
+                    - text: MiniMax-Text-01
+              - generic [ref=e307]:
+                - generic [ref=e309]: Bot Settings
+                - generic [ref=e310]:
+                  - generic [ref=e312]:
+                    - text: Bot Name
+                    - superscript [ref=e313]: "?"
+                  - textbox "Bot Name?" [ref=e316]: MiniMax AI 助手
+                - generic [ref=e317]:
+                  - generic [ref=e319]:
+                    - text: Bot Partner
+                    - superscript [ref=e320]: "?"
+                  - link "MiniMax AI 助手" [ref=e323] [cursor=pointer]:
+                    - /url: /odoo/res.partner/12
+                    - generic [ref=e324]: MiniMax AI 助手
+            - generic [ref=e325]:
+              - generic [ref=e327]: System Prompt
+              - textbox "You are a helpful customer service assistant. Please answer in the user's language..." [ref=e332]: 你是一個專業的客服助手，請用繁體中文回答所有問題。回答要簡潔有禮貌。
+            - generic [ref=e333]:
+              - generic [ref=e334]:
+                - generic [ref=e336]: Advanced Settings
+                - generic [ref=e337]:
+                  - generic [ref=e339]:
+                    - text: Max History Messages
+                    - superscript [ref=e340]: "?"
+                  - textbox "Max History Messages?" [ref=e343]: "50"
+                - generic [ref=e344]:
+                  - generic [ref=e346]:
+                    - text: Temperature
+                    - superscript [ref=e347]: "?"
+                  - textbox "Temperature?" [ref=e350]: "0.70"
+                - generic [ref=e351]:
+                  - generic [ref=e353]:
+                    - text: Max Tokens
+                    - superscript [ref=e354]: "?"
+                  - textbox "Max Tokens?" [ref=e357]: 1,024
+                - generic [ref=e358]:
+                  - generic [ref=e360]:
+                    - text: Max Retries
+                    - superscript [ref=e361]: "?"
+                  - textbox "Max Retries?" [ref=e364]: "3"
+                - generic [ref=e365]:
+                  - generic [ref=e367]:
+                    - text: Retry Delay (seconds)
+                    - superscript [ref=e368]: "?"
+                  - textbox "Retry Delay (seconds)?" [ref=e371]: "2"
+              - generic [ref=e372]:
+                - generic [ref=e374]: Error Handling
+                - generic [ref=e375]:
+                  - generic [ref=e377]:
+                    - text: Error Message
+                    - superscript [ref=e378]: "?"
+                  - textbox "Error Message?" [ref=e382]:
+                    - /placeholder: Sorry, the AI assistant is temporarily unavailable...
+                    - text: Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information.
+            - generic [ref=e384]:
+              - button "Test AI Connection" [ref=e386] [cursor=pointer]
+              - button "View API Logs" [ref=e388] [cursor=pointer]
+  - generic:
+    - generic:
+      - generic [ref=e114]:
+        - generic [ref=e115] [cursor=pointer]:
+          - button "Thread Image Visitor " [ref=e117]:
+            - img "Thread Image" [ref=e119]
+            - generic "Visitor" [ref=e120]
+            - generic [ref=e121]: 
+          - generic [ref=e122]:
+            - button "" [ref=e123]:
+              - generic [ref=e124]: 
+            - button "" [ref=e125]:
+              - generic [ref=e126]: 
+            - button "" [ref=e127]:
+              - generic [ref=e128]: 
+            - button "" [ref=e129]:
+              - generic [ref=e130]: 
+        - generic [ref=e131]:
+          - generic [ref=e133]:
+            - generic [ref=e134]:
+              - separator [ref=e135]
+              - generic [ref=e136]: May 13, 2026
+              - separator [ref=e137]
+            - group "Message" [ref=e138]:
+              - generic [ref=e139]:
+                - img [ref=e142]
+                - generic [ref=e143]:
+                  - generic [ref=e144]:
+                    - strong [ref=e146]: Visitor
+                    - generic "5/13/2026, 2:39:35 PM" [ref=e147]: May 13, 2:39 PM
+                  - paragraph [ref=e155]: ？？？
+            - group "Message" [ref=e156]:
+              - generic [ref=e157]:
+                - img [ref=e160]
+                - generic [ref=e161]:
+                  - generic [ref=e162]:
+                    - strong [ref=e164]: MiniMax AI 助手
+                    - generic "5/13/2026, 2:39:45 PM" [ref=e165]: May 13, 2:39 PM
+                  - paragraph [ref=e173]: 您好，請問有什麼我可以幫助您的嗎？如果有任何問題或需要協助的地方，請隨時告訴我。
+            - group "Message" [ref=e174]:
+              - generic [ref=e175]:
+                - img [ref=e178]
+                - generic [ref=e179]:
+                  - generic [ref=e180]:
+                    - strong [ref=e182]: Visitor
+                    - generic "5/13/2026, 2:39:59 PM" [ref=e183]: May 13, 2:39 PM
+                  - paragraph [ref=e191]: 我想一下
+            - group "Message" [ref=e192]:
+              - generic [ref=e193]:
+                - img [ref=e196]
+                - generic [ref=e197]:
+                  - generic [ref=e198]:
+                    - strong [ref=e200]: MiniMax AI 助手
+                    - generic "5/13/2026, 2:40:04 PM" [ref=e201]: May 13, 2:40 PM
+                  - paragraph [ref=e209]: 好的，沒問題。當您有任何問題或需要協助時，隨時告訴我。祝您有美好的一天！
+          - generic [ref=e214]:
+            - textbox "Message Visitor…" [ref=e216]
+            - generic [ref=e218]:
+              - button "Emojis" [ref=e219] [cursor=pointer]:
+                - generic [ref=e220]: 
+              - button "Attach files" [ref=e222] [cursor=pointer]:
+                - generic [ref=e223]: 
+              - 'button "00 : 00 " [ref=e224] [cursor=pointer]':
+                - generic:
+                  - generic: "00 : 00"
+                - generic [ref=e226]: 
+              - button "Send" [disabled]:
+                - generic: 
+      - generic [ref=e228]:
+        - button "" [ref=e229] [cursor=pointer]
+        - generic [ref=e230]:
+          - generic [ref=e232]: 
+          - text: 
+          - button "Thread image" [ref=e233] [cursor=pointer]:
+            - img "Thread image" [ref=e234]
+        - generic [ref=e235]:
+          - generic [ref=e237]: 
+          - text: 
+          - button "Thread image" [ref=e238] [cursor=pointer]:
+            - img "Thread image" [ref=e239]
+        - generic [ref=e240]:
+          - generic [ref=e242]: 
+          - generic [ref=e243]: "2"
+          - text: 
+          - button "Thread image" [ref=e244] [cursor=pointer]:
+            - img "Thread image" [ref=e245]
+        - generic [ref=e246]:
+          - generic [ref=e248]: 
+          - generic [ref=e249]: "2"
+          - text: 
+          - button "Thread image" [ref=e250] [cursor=pointer]:
+            - img "Thread image" [ref=e251]
+        - generic [ref=e252]:
+          - generic [ref=e254]: 
+          - generic [ref=e255]: "2"
+          - text: 
+          - button "Thread image" [ref=e256] [cursor=pointer]:
+            - img "Thread image" [ref=e257]
+        - generic [ref=e258]:
+          - generic [ref=e260]: 
+          - generic [ref=e261]: "3"
+          - text: 
+          - button "Thread image" [ref=e262] [cursor=pointer]:
+            - img "Thread image" [ref=e263]
+        - generic [ref=e264]:
+          - generic [ref=e266]: 
+          - text: 
+          - button "Thread image" [ref=e267] [cursor=pointer]:
+            - img "Thread image" [ref=e268]
+        - generic [ref=e269]:
+          - generic [ref=e270]: "4"
+          - button "+4" [ref=e271] [cursor=pointer]:
+            - generic [ref=e272]: "+4"

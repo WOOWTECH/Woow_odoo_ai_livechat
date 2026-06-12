@@ -1,0 +1,5 @@
+[     288ms] [LOG] click .o-mail-DiscussSidebarCategory-channel .o-mail-DiscussSidebarCategory-add @ http://localhost:9094/web/assets/634d469/web.assets_web.min.js:10838
+[     423ms] [WARNING] The following element was removed from the breadcrumb and from the url.
+ {action: live-chat, actionStack: Array(1)} 
+This could be because the action wasn't found or because the user doesn't have the right to access to the record, the original error is :
+ The action “live-chat” does not exist. @ http://localhost:9094/web/assets/634d469/web.assets_web.min.js:10007

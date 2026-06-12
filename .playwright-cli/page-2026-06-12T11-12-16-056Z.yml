@@ -1,0 +1,130 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - navigation [ref=e3]:
+      - button "" [ref=e5] [cursor=pointer]:
+        - generic [ref=e6]: 
+      - menu [ref=e7]:
+        - button "Messages 12" [ref=e21] [cursor=pointer]:
+          - img "Messages" [ref=e10]: 
+          - generic [ref=e11]: "12"
+        - button "Activities" [ref=e12] [cursor=pointer]:
+          - img "Activities" [ref=e13]: 
+        - button "My Company" [disabled] [ref=e15]:
+          - text: 
+          - generic [ref=e16]: My Company
+        - button "User" [ref=e18] [cursor=pointer]:
+          - img "User" [ref=e19]
+          - text: 
+  - generic:
+    - generic:
+      - generic [ref=e32]:
+        - generic [ref=e33] [cursor=pointer]:
+          - button "Thread Image Visitor " [ref=e35]:
+            - img "Thread Image" [ref=e37]
+            - generic "Visitor" [ref=e38]
+            - generic [ref=e39]: 
+          - generic [ref=e40]:
+            - button "" [ref=e41]:
+              - generic [ref=e42]: 
+            - button "" [ref=e43]:
+              - generic [ref=e44]: 
+            - button "" [ref=e45]:
+              - generic [ref=e46]: 
+            - button "" [ref=e47]:
+              - generic [ref=e48]: 
+        - generic [ref=e49]:
+          - generic [ref=e51]:
+            - generic [ref=e52]:
+              - separator [ref=e53]
+              - generic [ref=e54]: May 13, 2026
+              - separator [ref=e55]
+            - group "Message" [ref=e56]:
+              - generic [ref=e57]:
+                - img [ref=e60]
+                - generic [ref=e61]:
+                  - generic [ref=e62]:
+                    - strong [ref=e64]: Visitor
+                    - generic "5/13/2026, 2:39:35 PM" [ref=e65]: May 13, 2:39 PM
+                  - paragraph [ref=e73]: ？？？
+            - group "Message" [ref=e74]:
+              - generic [ref=e75]:
+                - img [ref=e78]
+                - generic [ref=e79]:
+                  - generic [ref=e80]:
+                    - strong [ref=e82]: MiniMax AI 助手
+                    - generic "5/13/2026, 2:39:45 PM" [ref=e83]: May 13, 2:39 PM
+                  - paragraph [ref=e91]: 您好，請問有什麼我可以幫助您的嗎？如果有任何問題或需要協助的地方，請隨時告訴我。
+            - group "Message" [ref=e92]:
+              - generic [ref=e93]:
+                - img [ref=e96]
+                - generic [ref=e97]:
+                  - generic [ref=e98]:
+                    - strong [ref=e100]: Visitor
+                    - generic "5/13/2026, 2:39:59 PM" [ref=e101]: May 13, 2:39 PM
+                  - paragraph [ref=e109]: 我想一下
+            - group "Message" [ref=e110]:
+              - generic [ref=e111]:
+                - img [ref=e114]
+                - generic [ref=e115]:
+                  - generic [ref=e116]:
+                    - strong [ref=e118]: MiniMax AI 助手
+                    - generic "5/13/2026, 2:40:04 PM" [ref=e119]: May 13, 2:40 PM
+                  - paragraph [ref=e127]: 好的，沒問題。當您有任何問題或需要協助時，隨時告訴我。祝您有美好的一天！
+          - generic [ref=e132]:
+            - textbox "Message Visitor…" [ref=e134]
+            - generic [ref=e136]:
+              - button "Emojis" [ref=e137] [cursor=pointer]:
+                - generic [ref=e138]: 
+              - button "Attach files" [ref=e140] [cursor=pointer]:
+                - generic [ref=e141]: 
+              - 'button "00 : 00 " [ref=e142] [cursor=pointer]':
+                - generic:
+                  - generic: "00 : 00"
+                - generic [ref=e144]: 
+              - button "Send" [disabled]:
+                - generic: 
+      - generic [ref=e146]:
+        - button "" [ref=e147] [cursor=pointer]
+        - generic [ref=e148]:
+          - generic [ref=e150]: 
+          - text: 
+          - button "Thread image" [ref=e151] [cursor=pointer]:
+            - img "Thread image" [ref=e152]
+        - generic [ref=e153]:
+          - generic [ref=e155]: 
+          - text: 
+          - button "Thread image" [ref=e156] [cursor=pointer]:
+            - img "Thread image" [ref=e157]
+        - generic [ref=e158]:
+          - generic [ref=e160]: 
+          - generic [ref=e161]: "2"
+          - text: 
+          - button "Thread image" [ref=e162] [cursor=pointer]:
+            - img "Thread image" [ref=e163]
+        - generic [ref=e164]:
+          - generic [ref=e166]: 
+          - generic [ref=e167]: "2"
+          - text: 
+          - button "Thread image" [ref=e168] [cursor=pointer]:
+            - img "Thread image" [ref=e169]
+        - generic [ref=e170]:
+          - generic [ref=e172]: 
+          - generic [ref=e173]: "2"
+          - text: 
+          - button "Thread image" [ref=e174] [cursor=pointer]:
+            - img "Thread image" [ref=e175]
+        - generic [ref=e176]:
+          - generic [ref=e178]: 
+          - generic [ref=e179]: "3"
+          - text: 
+          - button "Thread image" [ref=e180] [cursor=pointer]:
+            - img "Thread image" [ref=e181]
+        - generic [ref=e182]:
+          - generic [ref=e184]: 
+          - text: 
+          - button "Thread image" [ref=e185] [cursor=pointer]:
+            - img "Thread image" [ref=e186]
+        - generic [ref=e187]:
+          - generic [ref=e188]: "4"
+          - button "+4" [ref=e189] [cursor=pointer]:
+            - generic [ref=e190]: "+4"

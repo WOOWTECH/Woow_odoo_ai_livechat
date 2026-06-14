@@ -450,7 +450,7 @@ class ImLivechatChannel(models.Model):
             url,
             json=payload,
             headers=headers,
-            timeout=60,
+            timeout=180,
         )
         if response.status_code != 200:
             _logger.warning(

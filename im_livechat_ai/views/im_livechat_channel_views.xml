@@ -10,6 +10,7 @@
                     <group>
                         <group string="AI Configuration">
                             <field name="ai_enabled"/>
+                            <field name="ai_well_mode" invisible="not ai_enabled"/>
                             <field name="ai_api_base_url"
                                    placeholder="https://api.openai.com/v1"
                                    invisible="not ai_enabled"/>

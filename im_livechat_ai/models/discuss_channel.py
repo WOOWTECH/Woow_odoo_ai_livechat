@@ -163,11 +163,12 @@ class DiscussChannel(models.Model):
         # Build messages array
         llm_messages = []
 
-        # Add system prompt if configured
-        if livechat_channel.ai_system_prompt:
+        # Add system prompt if configured (with optional WELL knowledge)
+        effective_prompt = livechat_channel._get_effective_system_prompt()
+        if effective_prompt:
             llm_messages.append({
                 'role': 'system',
-                'content': livechat_channel.ai_system_prompt,
+                'content': effective_prompt,
             })
 
         for msg in recent_messages:

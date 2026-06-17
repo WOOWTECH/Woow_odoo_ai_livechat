@@ -412,3 +412,13 @@ msgstr "LLM API 日誌使用者"
 #: model:ir.model.access,name:im_livechat_ai.access_llm_api_log_manager
 msgid "llm.api.log.manager"
 msgstr "LLM API 日誌管理者"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_well_mode
+msgid "WELL Building Assistant Mode"
+msgstr "WELL 建築助手模式"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_well_mode
+msgid "When enabled, prepends WELL Building Standard knowledge to the system prompt to help occupants with indoor air quality, thermal comfort, lighting, noise, water quality, and wellness program questions."
+msgstr "啟用後，將 WELL 建築標準知識加入系統提示詞前端，協助住戶解答室內空氣品質、熱舒適度、照明、噪音、水質及健康計畫相關問題。"

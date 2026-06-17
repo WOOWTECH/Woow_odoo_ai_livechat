@@ -26,15 +26,6 @@ class ImLivechatChannel(models.Model):
     """
     _inherit = 'im_livechat.channel'
 
-    # --- WELL Building Standard Mode ---
-    ai_well_mode = fields.Boolean(
-        string='WELL Building Assistant Mode',
-        default=False,
-        help='When enabled, prepends WELL Building Standard knowledge to the system prompt '
-             'to help occupants with indoor air quality, thermal comfort, lighting, noise, '
-             'water quality, and wellness program questions.',
-    )
-
     # --- AI Integration Fields ---
     ai_enabled = fields.Boolean(
         string='Enable AI Integration',
@@ -100,23 +91,6 @@ class ImLivechatChannel(models.Model):
         default='AI Assistant',
         help='Display name for the AI bot in chat',
     )
-
-    WELL_SYSTEM_PROMPT = (
-        "You are a WELL Building Standard assistant. Help occupants with questions "
-        "about indoor air quality, thermal comfort, lighting, noise levels, water quality, "
-        "and wellness programs. Guide them to report issues through the maintenance portal "
-        "or book wellness spaces."
-    )
-
-    def _get_effective_system_prompt(self):
-        """Return the system prompt, optionally prepended with WELL knowledge."""
-        self.ensure_one()
-        base_prompt = self.ai_system_prompt or ''
-        if self.ai_well_mode:
-            if base_prompt:
-                return f"{self.WELL_SYSTEM_PROMPT}\n\n{base_prompt}"
-            return self.WELL_SYSTEM_PROMPT
-        return base_prompt
 
     # --- Constraints ---
 

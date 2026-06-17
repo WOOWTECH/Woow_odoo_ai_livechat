@@ -11,7 +11,7 @@ import requests
 from markupsafe import Markup
 
 from odoo import api, fields, models, _, SUPERUSER_ID
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ class ImLivechatChannel(models.Model):
     ai_api_key = fields.Char(
         string='API Key',
         help='API key for authenticating with the LLM service',
+        groups='base.group_system',
+        copy=False,
     )
     ai_model = fields.Char(
         string='Model',
@@ -106,8 +108,8 @@ class ImLivechatChannel(models.Model):
         """Validate max history range."""
         for record in self:
             if record.ai_enabled:
-                if record.ai_max_history < 1 or record.ai_max_history > 200:
-                    raise UserError(_('Max History Messages must be between 1 and 200.'))
+                if record.ai_max_history < 0 or record.ai_max_history > 200:
+                    raise ValidationError(_('Max History Messages must be between 0 and 200.'))
 
     @api.constrains('ai_temperature')
     def _check_ai_temperature(self):
@@ -115,7 +117,15 @@ class ImLivechatChannel(models.Model):
         for record in self:
             if record.ai_enabled:
                 if record.ai_temperature < 0.0 or record.ai_temperature > 2.0:
-                    raise UserError(_('Temperature must be between 0.0 and 2.0.'))
+                    raise ValidationError(_('Temperature must be between 0.0 and 2.0.'))
+
+    @api.constrains('ai_max_tokens')
+    def _check_ai_max_tokens(self):
+        """Validate max tokens is a positive integer."""
+        for record in self:
+            if record.ai_enabled:
+                if record.ai_max_tokens < 1:
+                    raise ValidationError(_('Max Tokens must be at least 1.'))
 
     @api.constrains('ai_max_retries')
     def _check_ai_max_retries(self):
@@ -123,7 +133,7 @@ class ImLivechatChannel(models.Model):
         for record in self:
             if record.ai_enabled:
                 if record.ai_max_retries < 1 or record.ai_max_retries > 10:
-                    raise UserError(_('Max Retries must be between 1 and 10.'))
+                    raise ValidationError(_('Max Retries must be between 1 and 10.'))
 
     @api.constrains('ai_retry_delay')
     def _check_ai_retry_delay(self):
@@ -131,7 +141,7 @@ class ImLivechatChannel(models.Model):
         for record in self:
             if record.ai_enabled:
                 if record.ai_retry_delay < 1 or record.ai_retry_delay > 30:
-                    raise UserError(_('Retry Delay must be between 1 and 30 seconds.'))
+                    raise ValidationError(_('Retry Delay must be between 1 and 30 seconds.'))
 
     @api.constrains('ai_enabled', 'ai_api_base_url', 'ai_api_key', 'ai_model')
     def _check_ai_required_fields(self):

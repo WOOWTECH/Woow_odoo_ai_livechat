@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Live Chat AI Integration',
-    'version': '18.0.1.0.0',
+    'version': '18.0.1.0.1',
     'category': 'Website/Live Chat',
     'summary': 'Integrate Odoo livechat with OpenAI-compatible LLM APIs',
     'description': """
@@ -34,6 +34,7 @@ Settings > Live Chat > Channels > AI Integration tab
     'author': 'WOOWTECH',
     'website': 'https://github.com/WOOWTECH/Woow_odoo_ai_livechat',
     'license': 'LGPL-3',
+    'external_dependencies': {'python': ['requests']},
     'depends': [
         'im_livechat',
         'mail',

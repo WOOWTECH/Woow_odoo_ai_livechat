@@ -1,0 +1,17 @@
+; Copy to config/odoo.conf (git-ignored) before `docker compose up`.
+;
+; Database host/user/password are NOT set here: the official odoo image passes
+; them from the HOST / USER / PASSWORD variables in docker-compose.yml, which
+; come from .env.
+
+[options]
+addons_path = /mnt/extra-addons
+data_dir = /var/lib/odoo
+db_name = odooailivechat
+dbfilter = ^odooailivechat$
+list_db = False
+
+; Master password of the database manager. Empty means the database manager
+; refuses every master-password operation. If you need it, set a long random
+; value here (e.g. `openssl rand -base64 24`) and keep it out of git.
+admin_passwd =

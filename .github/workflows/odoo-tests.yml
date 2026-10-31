@@ -1,0 +1,117 @@
+name: Odoo tests
+
+# Installs im_livechat_ai on a fresh Odoo 18 database and runs its test suite
+# (--test-tags /im_livechat_ai). The job fails when Odoo exits non-zero, when
+# no im_livechat_ai test started (a tag that selects nothing would otherwise
+# "pass"), or when the log shows any failure, error or critical line.
+# Unit tests mock every HTTP call: no LiteLLM key or network access is needed.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: odoo-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  odoo-tests:
+    name: im_livechat_ai on Odoo 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: odoo:18.0
+      # root: the runner mounts the workspace as root and the job copies the
+      # module into the image's addons directory.
+      options: --user root
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_DB: postgres
+          # Throwaway CI database reachable only inside the job network:
+          # trust authentication, so no password is stored in the repo.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U odoo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DB_NAME: im_livechat_ai_ci
+      ADDONS_DIR: /mnt/extra-addons
+      LOG_FILE: /tmp/odoo-tests.log
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install module into the addons path
+        run: |
+          set -eu
+          rm -rf "$ADDONS_DIR/im_livechat_ai"
+          mkdir -p "$ADDONS_DIR"
+          cp -r im_livechat_ai "$ADDONS_DIR/"
+          find "$ADDONS_DIR/im_livechat_ai" -name '__pycache__' -prune -exec rm -rf {} +
+          odoo --version
+
+      - name: Install and run tests
+        run: |
+          set -u
+          odoo \
+            --config /etc/odoo/odoo.conf \
+            --addons-path "$ADDONS_DIR,/usr/lib/python3/dist-packages/odoo/addons" \
+            --db_host postgres --db_port 5432 --db_user odoo \
+            -d "$DB_NAME" \
+            -i website_sale,website_livechat,portal,im_livechat_ai \
+            --without-demo=all \
+            --test-enable --test-tags /im_livechat_ai \
+            --stop-after-init --workers=0 --max-cron-threads=0 \
+            --log-level=info 2>&1 | tee "$LOG_FILE"
+          echo "ODOO_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Check test results
+        shell: bash
+        run: |
+          set -u
+          started=$(grep -E 'odoo\.addons\.im_livechat_ai\.tests\.[a-z_]+: Starting ' "$LOG_FILE" | wc -l)
+          problems=$(grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' "$LOG_FILE" | wc -l)
+          fails=$(grep -E '(^| )(FAIL|ERROR): ' "$LOG_FILE" | wc -l)
+          summary=$(grep -E 'odoo\.tests\.result: .*failed, .*error\(s\) of [0-9]+ tests' "$LOG_FILE" | tail -1)
+          echo "Odoo exit code: $ODOO_EXIT"
+          echo "im_livechat_ai tests started: $started"
+          echo "ERROR/CRITICAL log lines: $problems; FAIL:/ERROR: lines: $fails"
+          echo "Odoo summary: ${summary:-<none>}"
+          {
+            echo "### im_livechat_ai tests"
+            echo "- tests started: $started"
+            echo "- ERROR/CRITICAL log lines: $problems"
+            echo "- Odoo summary: ${summary:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          if [ "$ODOO_EXIT" != "0" ]; then echo "::error::Odoo exited with $ODOO_EXIT"; status=1; fi
+          if [ "$started" -eq 0 ]; then echo "::error::No im_livechat_ai test started (no 'Starting' lines)"; status=1; fi
+          if [ "$problems" -ne 0 ] || [ "$fails" -ne 0 ]; then
+            echo "::error::The log contains failures or errors:"
+            grep -nE '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) |(^| )(FAIL|ERROR): ' "$LOG_FILE" | head -50
+            status=1
+          fi
+          if [ -n "$summary" ] && ! echo "$summary" | grep -qE ': 0 failed, 0 error\(s\)'; then
+            echo "::error::$summary"; status=1
+          fi
+          exit $status
+
+      - name: Upload Odoo log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: odoo-tests-log
+          path: /tmp/odoo-tests.log
+          if-no-files-found: ignore
+          retention-days: 14

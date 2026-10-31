@@ -10,19 +10,20 @@
   <img src="https://img.shields.io/badge/Odoo-18.0-purple?logo=odoo" alt="Odoo 18"/>
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/License-LGPL--3-green" alt="License"/>
-  <img src="https://img.shields.io/badge/OpenAI-Compatible-412991?logo=openai" alt="OpenAI Compatible"/>
+  <img src="https://img.shields.io/badge/LiteLLM-OpenAI%20相容-412991" alt="LiteLLM"/>
   <img src="https://img.shields.io/badge/PostgreSQL-16-blue?logo=postgresql" alt="PostgreSQL"/>
-  <img src="https://img.shields.io/badge/Tests-55%20passing-brightgreen" alt="Tests"/>
+  <a href="https://github.com/WOOWTECH/Woow_odoo_ai_livechat/actions/workflows/odoo-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/WOOWTECH/Woow_odoo_ai_livechat/odoo-tests.yml?label=Odoo%20tests" alt="Odoo tests"/></a>
 </p>
 
 <p align="center">
-  將 Odoo 即時聊天與 OpenAI 相容 LLM API 整合，<br/>
-  實現全自動 AI 智能客服回覆 -- 直接呼叫 API，無需任何外部工具。
+  透過公司的 LiteLLM 閘道，讓 AI 自動回覆 Odoo 即時聊天的訪客，<br/>
+  回覆工作不會遺失、客服可隨時接手，商品價格只引用官網資料。
 </p>
 
 <p align="center">
   <a href="README.md">English</a> &bull;
   <a href="#概述">概述</a> &bull;
+  <a href="#從-18010x-升級">升級須知</a> &bull;
   <a href="#為什麼使用此模組">為什麼使用</a> &bull;
   <a href="#架構">架構</a> &bull;
   <a href="#功能特色">功能特色</a> &bull;
@@ -34,6 +35,7 @@
   <a href="#測試">測試</a> &bull;
   <a href="#疑難排解">疑難排解</a> &bull;
   <a href="#相依模組">相依模組</a> &bull;
+  <a href="#參與開發">參與開發</a> &bull;
   <a href="#更新日誌">更新日誌</a> &bull;
   <a href="#授權">授權</a>
 </p>
@@ -42,9 +44,37 @@
 
 ## 概述
 
-**im_livechat_ai** 是由 [WOOWTECH](https://github.com/WOOWTECH) 開發的 Odoo 18 模組，將 Odoo 即時聊天小工具與 OpenAI 相容的 LLM API 直接整合。它能在網站訪客發送訊息時，自動呼叫大型語言模型 API 生成智能回覆，實現全自動化的 AI 客服。
+**im_livechat_ai** 是由 [WOOWTECH](https://github.com/WOOWTECH) 開發的 Odoo 18 模組，讓 AI 自動回覆即時聊天的訪客。網站訪客或已登入的入口網站客戶在啟用 AI 的頻道發訊息時，模組會在**同一筆交易**中建立一個「AI 回覆工作」；交易寫入完成後，再把對話送到公司的 **LiteLLM** 閘道（OpenAI 相容的 `/v1/chat/completions`），取得回覆後以頻道的機器人身分回覆訪客。
 
-當訪客透過即時聊天小工具發送訊息時，模組會在背景執行緒中直接呼叫配置好的 LLM API（`/v1/chat/completions`），取得 AI 回覆後以「AI 助理」的身份在聊天對話中回覆訪客。整個過程完全在 Odoo 內部完成，無需任何外部協調工具。
+連線設定（LiteLLM 位址與 API 金鑰）是全站共用的系統設定，只有系統管理員看得到、改得到。每個頻道只選擇模型（選項來自 LiteLLM 的模型清單）、系統提示詞與行為參數。客服隨時可以接手：客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話。安裝電子商務模組後，AI 會用唯讀工具查詢已上架商品、官網價格與連結，不會自行編造。
+
+預設閘道為 `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1`，預設模型為 `chatgpt-pool/gpt-6-sol`（支援工具呼叫）。其他 OpenAI 相容的閘道用法相同。
+
+---
+
+## 從 18.0.1.0.x 升級
+
+> **升級後 AI 一律關閉，要等系統管理員設定好 LiteLLM 才會再回覆。**
+
+升級到 18.0.1.1.0（`-u im_livechat_ai`，或平台發版時的升級檢查看到版本號改變而自動執行）會自動做以下處理：
+
+| 項目 | 結果 |
+|------|------|
+| 頻道上的 **API 網址**與 **API 金鑰** | 新程式載入前先清空（pre-migration），之後移除欄位。舊金鑰不會留在資料庫。 |
+| **啟用 AI 整合** | **所有**頻道都關閉。伺服器日誌會列出原本開著 AI 的頻道。 |
+| **重試延遲** | 移除（固定先等 3 秒、再等 10 秒）。**最大重試次數**上限改為 2。 |
+| 預設英文**錯誤訊息**（或空白） | 改成繁體中文預設文字；自訂過的文字保留不動。 |
+| AI 機器人聯絡人 | 封存並加上「AI 機器人」標籤，和 Odoo 聊天機器人一樣。 |
+| 既有 **API 日誌** | 清除對話內容與上游回應內容。 |
+
+升級後，系統管理員要：
+
+1. 開啟 **設定 → Live Chat AI**（或 **即時聊天 → 設定 → AI 設定**）。
+2. 填入 **LiteLLM 位址**與專用的 **LiteLLM API 金鑰**（`odoo-livechat`），儲存。
+3. 按 **讀取可用模型**，再按 **測試連線**。
+4. 到 **即時聊天 → 設定 → 頻道 → AI 整合** 逐一重新啟用 AI 並選擇模型。
+
+舊的頻道金鑰請到原供應商後台撤銷：升級只會從 Odoo 移除，備份、git 歷史或日誌裡可能還有副本。
 
 ---
 
@@ -52,14 +82,13 @@
 
 | 沒有此模組 | 使用此模組 |
 |---|---|
-| 僅能手動回覆聊天 | 自動 AI 智能回覆 |
-| 需要自行編寫 AI 整合程式碼 | 開箱即用，零後端 AI 程式碼 |
-| 無 API 呼叫記錄 | 完整 API 呼叫記錄與 token 追蹤 |
-| 單一語言支援 | 多語言 AI 回覆（取決於 LLM 能力） |
-| 無重試邏輯 | 可設定重試次數與延遲 |
-| 無迴圈防護 | 內建 AI 迴圈防護機制 |
-| 無多輪對話 | 自動建構對話歷史上下文 |
-| 需整合外部工具 | 直接 HTTP 呼叫，架構簡潔 |
+| 僅能手動回覆聊天 | AI 全天候自動回覆，客服可隨時接手 |
+| 客服要自己查價格與規格 | AI 只引用商品工具查到的官網資料，並附連結 |
+| 訊息可能沒人回 | 回覆工作有紀錄，重啟也會補回；連發多則只回一次 |
+| 無法轉真人 | 客服發言或訪客說「真人」「客服」就暫停 AI 並通知客服 |
+| 金鑰散在各頻道 | 一把只有管理員能設定的 LiteLLM 金鑰，可在閘道設預算與速率上限 |
+| 對話內容到處存 | API 日誌預設不存對話內容，且只有管理員看得到 |
+| 需整合外部工具 | 在 Odoo 內完成，只呼叫 LiteLLM 閘道 |
 
 ---
 
@@ -69,45 +98,39 @@
 
 ```
                               Odoo 18
- +---------------------------------------------------------------------+
- |                                                                     |
- |  Website Visitor（網站訪客）                                          |
- |       |                                                             |
- |       v                                                             |
- |  Livechat Widget（即時聊天小工具）                                      |
- |       |                                                             |
- |       v                                                             |
- |  discuss.channel.message_post()                                     |
- |       |                                                             |
- |       v                                                             |
- |  _notify_thread() hook                                              |
- |       |                                                             |
- |       v                                                             |
- |  _should_trigger_ai_response()                                     |
- |       |  Is livechat? AI enabled? Visitor message?                  |
- |       |                                                             |
- |       v                                                             |
- |  _trigger_ai_response()                                            |
- |       |  Spawn daemon thread（建立背景執行緒）                          |
- |       |                                                             |
- |       v                                  +------------------------+ |
- |  _build_llm_messages()                   |   OpenAI-Compatible    | |
- |       |  Fetch recent history            |      LLM API           | |
- |       |  Strip HTML, decode entities     |                        | |
- |       |  Assign roles (user/assistant)   |  /v1/chat/completions  | |
- |       v                                  |                        | |
- |  _call_llm_api() ---- POST ------------>|  OpenAI / MiniMax /    | |
- |       |  (with retry logic)              |  DeepSeek / Ollama /   | |
- |       |                                  |  Claude proxy / etc.   | |
- |       |<----------- JSON response -------|                        | |
- |       v                                  +------------------------+ |
- |  _create_bot_message()                                              |
- |       |  XSS protection (Markup.escape)                             |
- |       |  Newline -> <br/> conversion                                |
- |       v                                                             |
- |  Visitor sees AI reply（訪客看到 AI 回覆）                             |
- |                                                                     |
- +---------------------------------------------------------------------+
+ +-----------------------------------------------------------------------+
+ |                                                                       |
+ |  Website Visitor（網站訪客／入口網站客戶）                                |
+ |       |                                                               |
+ |       v                                                               |
+ |  discuss.channel.message_post()                                       |
+ |       |                                                               |
+ |       v                                                               |
+ |  _notify_thread() hook                                                |
+ |       |  客服發言 -> 暫停 AI（預設 30 分鐘）                                |
+ |       |  訪客要求真人 -> 轉接工作（通知訪客一次 + 通知客服）                    |
+ |       |  其他訪客訊息 -> 在同一筆交易建立 im_livechat.ai.job（待處理）          |
+ |       v                                                               |
+ |  COMMIT -> postcommit 背景執行緒（或每 2 分鐘的補救排程）                    |
+ |       |  等 1.5 秒合併連發訊息，同一段對話加鎖                                 |
+ |       |  有更新的工作 -> 略過，交給最新那個                                    |
+ |       v                                    +------------------------+ |
+ |  _build_llm_messages()                     |   LiteLLM 閘道          | |
+ |       |  最近 N 則歷史、客服訊息加標記          |   /v1/chat/completions  | |
+ |       v                                    |                        | |
+ |  _generate_ai_reply() ---- POST ---------->|  chatgpt-pool/         | |
+ |       |  逾時 45 秒、最多重試 2 次             |  gpt-6-sol ...         | |
+ |       |<-------- tool_calls / 回覆 ---------|                        | |
+ |       |                                    +------------------------+ |
+ |       |  工具呼叫（每則回覆最多 3 輪）                                       |
+ |       +---> im_livechat.ai.tools：search_products / get_product_details |
+ |       |     （ORM 唯讀，只查已上架商品）                                     |
+ |       v                                                               |
+ |  _create_bot_message()（XSS 防護）                                       |
+ |       v                                                               |
+ |  訪客看到 AI 回覆                                                         |
+ |                                                                       |
+ +-----------------------------------------------------------------------+
 ```
 
 ### 時序圖
@@ -115,73 +138,120 @@
 ```mermaid
 sequenceDiagram
     participant V as 網站訪客
-    participant O as Odoo 18
-    participant L as LLM API
+    participant O as Odoo 即時聊天
+    participant J as AI 回覆工作
+    participant T as 商品工具（ORM）
+    participant L as LiteLLM
 
     V->>O: 發送聊天訊息
-    O->>O: message_post() + _notify_thread()
-    O->>O: _should_trigger_ai_response() 檢查
-    O->>O: 建立背景 daemon 執行緒
-    O->>O: _build_llm_messages() 建構上下文
-    O->>L: POST /v1/chat/completions
-    L-->>O: AI 回覆（JSON）
-    O->>O: _create_bot_message()（XSS 防護）
-    O-->>V: 顯示 AI 助理回覆
+    O->>O: _notify_thread()
+    alt 客服發言
+        O->>O: 暫停這段對話的 AI（30 分鐘）
+    else 訪客要求真人（關鍵字）
+        O->>J: 轉接工作（同一筆交易）
+        J-->>V: 轉接訊息（一次）
+        J->>O: 通知客服（OdooBot ＋ 提示）
+    else 一般訪客訊息、AI 開啟、未暫停
+        O->>J: 回覆工作，待處理（同一筆交易）
+        Note over O,J: COMMIT 後由 postcommit 啟動背景執行緒
+        J->>J: 等 1.5 秒、取得對話鎖
+        J->>J: 有更新的工作？ -> 略過
+        loop 最多 3 輪工具呼叫
+            J->>L: POST /chat/completions（附工具）
+            L-->>J: tool_calls
+            J->>T: search_products / get_product_details
+            T-->>J: 品名、官網價格、連結
+        end
+        J->>L: POST /chat/completions
+        L-->>J: 回覆
+        J->>J: 仍是最新工作且未暫停？
+        J-->>V: 以機器人身分回覆
+    end
 ```
 
 ### 流程圖
 
 ```mermaid
 flowchart LR
-    A[訪客訊息] --> B[Odoo 即時聊天]
-    B --> C{AI 已啟用？}
-    C -->|是| D{是訪客訊息？}
-    C -->|否| E[一般聊天流程]
-    D -->|是| F[背景執行緒]
-    D -->|否| E
-    F --> G[建構對話歷史]
-    G --> H[呼叫 LLM API]
-    H --> I{成功？}
-    I -->|是| J[發送 AI 回覆]
-    I -->|否| K{重試次數用盡？}
-    K -->|否| H
-    K -->|是| L[發送錯誤訊息]
-    J --> M[訪客看到回覆]
-    L --> M
+    A[新訊息] --> B{AI 已啟用的<br/>即時聊天？}
+    B -->|否| E[一般聊天流程]
+    B -->|是| C{作者}
+    C -->|AI 機器人 / OdooBot| E
+    C -->|內部使用者| P[暫停 AI]
+    C -->|訪客 / 入口網站客戶| D{AI 暫停中？}
+    D -->|是| E
+    D -->|否| K{轉真人關鍵字？}
+    K -->|是| H[暫停＋轉接訊息＋通知客服]
+    K -->|否| F[建立回覆工作]
+    F --> G[交易完成後處理<br/>等 1.5 秒、對話加鎖]
+    G --> I{有新訊息或已暫停？}
+    I -->|是| S[略過]
+    I -->|否| L[呼叫 LiteLLM<br/>含工具呼叫]
+    L --> M{成功？}
+    M -->|是| R[發送 AI 回覆]
+    M -->|否，可重試| W[等 3 秒／10 秒] --> L
+    M -->|否| X[發送錯誤訊息＋通知客服]
+    G -.執行緒遺失／重啟.-> Y[每 2 分鐘補救排程] --> G
 ```
 
 ---
 
 ## 功能特色
 
-- **直接 LLM API 呼叫** -- 直接透過 HTTP POST 呼叫任何 OpenAI 相容的 `/v1/chat/completions` 端點，支援 OpenAI、MiniMax、DeepSeek、Ollama、Claude 相容代理等。
-- **多輪對話上下文** -- 自動擷取最近的聊天歷史（可設定 1-200 則），建構完整的對話上下文傳送給 LLM。
-- **非同步背景執行** -- AI API 呼叫在 daemon 執行緒中執行，不阻塞聊天操作，確保使用者體驗流暢。
-- **執行緒安全** -- 所有 ORM 欄位值在主執行緒中擷取後再傳遞給背景執行緒，避免跨執行緒 cursor 存取問題。
-- **每個頻道獨立設定** -- 每個即時聊天頻道擁有獨立的 API URL、API 金鑰、模型選擇、系統提示詞等設定。
-- **每個頻道獨立機器人** -- 每個頻道可設定專屬的機器人合作夥伴和自訂顯示名稱。
-- **可設定重試邏輯** -- API 呼叫失敗時自動重試（可設定 1-10 次），並在所有重試失敗後向訪客發送自訂錯誤訊息。
-- **XSS 防護** -- 使用 `Markup.escape` 對 LLM 回覆進行 HTML 跳脫，防止跨站指令碼攻擊。
-- **HTML 清理與實體解碼** -- 建構 LLM 上下文時，自動去除 HTML 標籤並解碼 HTML 實體，確保傳送乾淨的純文字。
-- **API 呼叫記錄** -- 完整記錄每次 API 呼叫的狀態、請求/回應內容、token 用量、回應時間及錯誤資訊。
-- **Token 用量追蹤** -- 記錄每次呼叫的 prompt tokens、completion tokens 和 total tokens。
-- **30 天自動清理** -- 排程動作每日自動清除超過 30 天的 API 記錄，防止資料庫無限增長。
-- **迴圈預防** -- 排除 AI 機器人合作夥伴、OdooBot 及擁有使用者帳號的合作夥伴，防止 AI 回覆觸發無限迴圈。
-- **測試 AI 連線** -- 一鍵「測試 AI 連線」按鈕，即時驗證 API 設定是否正確。
-- **查看 API 記錄** -- 一鍵「查看 API 記錄」按鈕，快速檢視該頻道的所有 API 呼叫記錄。
-- **輸入驗證** -- API URL 格式驗證、參數範圍驗證、必填欄位檢查等完整的輸入驗證機制。
-- **序列化失敗處理** -- 背景執行緒中的資料庫寫入支援序列化失敗重試（最多 3 次），確保並行安全。
-- **55 項自動化測試** -- 涵蓋核心功能、頻道整合及端對端整合的全面測試覆蓋。
+### 核心功能
+
+- **公司 LiteLLM 閘道** -- 全站共用一組 OpenAI 相容位址與 API 金鑰（設定 → Live Chat AI），只有系統管理員能管理。
+- **頻道模型下拉選單** -- 選項來自「讀取可用模型」（`GET {位址}/models`）快取的清單；頻道目前存的值一定保留可選。
+- **多輪對話上下文** -- 最近 1-200 則訊息，以 system / user / assistant 角色送出。真人客服的訊息以 `assistant` 角色送出並標記 `[真人客服 姓名]`，系統提示也會告訴 AI 不要推翻同事的說法。
+- **訪客與入口網站客戶** -- 網站訪客、已登入的入口網站客戶與公開使用者都會得到回覆；內部使用者、這段對話指派的客服與機器人不會觸發 AI。
+
+### 可靠的回覆流程（工作佇列）
+
+- **有紀錄的回覆工作**（`im_livechat.ai.job`）-- 和訪客訊息在同一筆交易建立，訊息寫入成功才有工作；交易完成後才開始處理。
+- **連發只回一次** -- 等 1.5 秒合併連發訊息；每段對話一把 PostgreSQL advisory lock（跨 prefork worker 與排程程序都有效）；有更新工作的舊工作會被略過，由最新的工作帶完整上下文回覆。
+- **呼叫有上限** -- 每次呼叫逾時 45 秒，最多重試 2 次（先等 3 秒、再等 10 秒），每個工作最多處理 3 次。
+- **補救排程** -- 每 2 分鐘把因重啟或當機而停在「待處理／處理中」的工作重新執行；機器人已經回覆過的不會重複回覆。超過 30 分鐘仍未完成的工作會放棄。
+- **失敗處理** -- 全部重試失敗時，訪客收到頻道的錯誤訊息（預設繁中），客服會收到通知（OdooBot 訊息與不會自動消失的提示）。
+- **看得到的佇列** -- **即時聊天 → 設定 → AI 回覆工作** 可看每個工作的狀態、處理次數、LLM 呼叫次數與簡短錯誤。
+
+### 轉真人客服（暫停）
+
+- **客服發言就暫停** -- 內部使用者在對話中發言後，AI 在這段對話暫停 **30 分鐘**（每個頻道可調 1-1440），客服每次發言都會延長。
+- **訪客要求真人** -- 訊息含 `真人`、`客服`、`人工`、`human`、`agent` 等關鍵字（可自訂；英文字只比對完整單字）時，AI 回一次轉接訊息（「已幫您通知客服，請稍候。」），暫停並通知客服。
+
+### 商品查詢工具（需電子商務模組）
+
+- **search_products** -- 最多 8 筆已上架、可銷售的商品：品名（有安裝繁中時用繁中）、官網價格區間、簡短說明、分類、完整網址。
+- **get_product_details** -- 單一商品：說明、屬性、各規格的官網價格與網址、選配屬性與加價。
+- **ORM 唯讀，不經過 MCP** -- 只查頻道所屬網站已上架的商品；價格是未登入訪客看到的官網價格（網站價目表與含稅設定）。
+- **每則回覆最多 3 輪工具呼叫**（每輪最多 5 次，超過 90 秒不再開新的一輪），之後 AI 必須用已查到的資料回答。
+- **固定價格規則** -- 系統提示一定會加上：價格、規格、庫存只能使用工具查到的官網資料；沒有工具（或關閉「允許查詢商品」）時，AI 會請訪客留下聯絡方式，不會報價。
+- **頻道開關** -- **允許查詢商品**（預設開啟）。
+
+### 隱私與維運
+
+- **API 日誌只有即時聊天管理員看得到** -- 只記時間、模型、token、耗時、狀態、要求的工具名稱與簡短錯誤。
+- **預設不存對話內容** -- **記錄對話內容**（預設關閉）只在除錯時暫時打開；關閉時會清除已保存的內容。
+- **保留天數** -- 超過 **14 天**（可調）的日誌與已結束的回覆工作每天自動刪除。
+- **簡短錯誤** -- 測試按鈕與日誌只顯示狀態碼和一句說明；完整錯誤只寫伺服器日誌。
+
+### 安全
+
+- **XSS 防護** -- AI 回覆一律跳脫；只有 markdown 連結與 `http(s)` 網址會變成連結，`**文字**` 變粗體。
+- **迴圈防護** -- AI 機器人、OdooBot 與對話指派的客服不會觸發 AI。
+- **繁體中文** -- 給訪客與客服看的文字都是繁中，介面附完整 `zh_TW` 翻譯。
 
 ---
 
 ## 截圖
 
+> 截圖是 18.0.1.0.0 版拍的。現在頻道表單上改成模型下拉選單、沒有 API 網址與金鑰欄位，連線設定移到「設定 → Live Chat AI」。
+
 ### 即時聊天頻道總覽
 
 <p align="center"><img src="docs/screenshots/livechat_channel_list.png" alt="即時聊天頻道列表" width="720"/></p>
 
-### AI 整合設定分頁
+### AI 整合設定分頁（18.0.1.0.0 版面）
 
 <p align="center"><img src="docs/screenshots/livechat_channel_config.png" alt="AI 整合設定" width="720"/></p>
 
@@ -205,17 +275,14 @@ flowchart LR
 
 ### 標準 Odoo 安裝
 
-1. **複製模組**到您的 Odoo addons 目錄：
+1. **Clone 此儲存庫**，並把它加進 addons 路徑。模組正本是儲存庫根目錄的 `im_livechat_ai/`（只有這一份）：
 
    ```bash
-   cp -r im_livechat_ai /path/to/odoo/addons/
+   git clone https://github.com/WOOWTECH/Woow_odoo_ai_livechat.git /path/to/Woow_odoo_ai_livechat
    ```
 
-   或直接 clone 此儲存庫：
-
-   ```bash
-   cd /path/to/odoo/addons
-   git clone https://github.com/WOOWTECH/Woow_odoo_ai_livechat.git
+   ```ini
+   addons_path = /path/to/odoo/addons,/path/to/Woow_odoo_ai_livechat
    ```
 
 2. **更新應用程式列表**：
@@ -225,36 +292,36 @@ flowchart LR
 3. **安裝模組**：
    - 搜尋 **"Live Chat AI"** 或 **"即時聊天 AI"**。
    - 點擊 **安裝**。
+   - 需要商品查詢工具時，另外安裝 **電子商務**（`website_sale`）。
+
+4. **設定 LiteLLM**（見[設定](#設定)）；設定好之前 AI 不會回覆。
 
 ### Docker / Podman 部署
 
-專案提供了位於 `odoo-ailivechat/` 目錄下的 `docker-compose.yml`，可快速部署 Odoo 18 + PostgreSQL 16 環境。
+`odoo-ailivechat/` 目錄提供本機開發用的 `docker-compose.yml`（Odoo 18 + PostgreSQL 16）。它直接掛載儲存庫根目錄的模組正本（`../im_livechat_ai`）。repo 裡不放任何密碼，請從範本複製後自行填寫。
 
 #### 服務架構
 
 | 服務 | 映像檔 | 內部埠 | 對外埠 | 用途 |
 |------|--------|:---:|:---:|------|
 | **db** | `postgres:16` | 5432 | -- | PostgreSQL 資料庫（含健康檢查） |
-| **odoo** | `odoo:18.0` | 8069 | **9094** | Odoo 18 應用程式伺服器 |
+| **odoo** | `odoo:18.0` | 8069 | **9094**（`ODOO_PORT`） | Odoo 18 應用程式伺服器 |
 
 #### 快速啟動
 
 ```bash
 cd odoo-ailivechat/
 
-# 使用 Docker Compose 啟動
-docker compose up -d
+# 1. 建立本機設定（兩個檔案都已列入 .gitignore，不會被提交）
+cp .env.example .env                           # 填入 POSTGRES_PASSWORD（例如 openssl rand -base64 24）
+cp config/odoo.conf.example config/odoo.conf   # admin_passwd 留空 = 資料庫管理介面鎖住
 
-# Odoo 將在 http://localhost:9094 上可用
-```
+# 2. 啟動
+docker compose up -d                           # 或 podman-compose up -d
 
-#### 使用 Podman（rootless 模式）
-
-```bash
-cd odoo-ailivechat/
-
-# 使用 Podman Compose 啟動
-podman-compose up -d
+# 3. 建立資料庫並安裝模組（list_db = False，資料庫管理介面已停用）
+docker compose run --rm odoo -d odooailivechat -i im_livechat_ai --without-demo=all --stop-after-init
+docker compose restart odoo
 
 # Odoo 將在 http://localhost:9094 上可用
 ```
@@ -262,15 +329,18 @@ podman-compose up -d
 #### 部署目錄結構
 
 ```
-odoo-ailivechat/
-├── docker-compose.yml          # 服務定義
-├── config/
-│   └── odoo.conf               # Odoo 設定檔
-├── addons/
-│   └── im_livechat_ai/         # 模組（自動掛載）
-└── data/
-    ├── postgres/               # PostgreSQL 資料（持久化）
-    └── odoo/                   # Odoo 檔案儲存（持久化）
+Woow_odoo_ai_livechat/
+├── im_livechat_ai/                 # 模組正本（掛載到容器的 /mnt/extra-addons/im_livechat_ai）
+└── odoo-ailivechat/
+    ├── docker-compose.yml          # 服務定義
+    ├── .env.example                # 範本：資料庫名稱、帳號、密碼、對外埠
+    ├── .env                        # 自己建立，不提交
+    ├── config/
+    │   ├── odoo.conf.example       # 範本
+    │   └── odoo.conf               # 自己建立，不提交
+    └── data/
+        ├── postgres/               # PostgreSQL 資料（持久化）
+        └── odoo/                   # Odoo 檔案儲存（持久化）
 ```
 
 #### 關鍵設定說明
@@ -278,33 +348,33 @@ odoo-ailivechat/
 - **網路：** 所有服務共享 `odoo-ailivechat-network` 橋接網路，支援內部主機名稱解析。
 - **資料持久化：** PostgreSQL 資料和 Odoo 檔案儲存皆以 bind volume 掛載，確保重啟後資料不遺失。
 - **健康檢查：** PostgreSQL 容器包含健康檢查；Odoo 會等待資料庫就緒後才啟動。
-- **自動掛載 Addons：** `addons/` 目錄掛載至容器內的 `/mnt/extra-addons`，放入的模組即刻可用。
+- **密碼：** 資料庫密碼只放在 `.env`；`odoo.conf` 不放資料庫帳密（由官方映像從環境變數帶入）。LiteLLM 位址與金鑰不放在這裡，由系統管理員在 Odoo 設定頁填寫。
 
 ---
 
 ## 設定
 
-### 系統層級 LiteLLM 連線（只有系統管理員）
+### 步驟 1：系統層級 LiteLLM 連線（只有系統管理員）
 
-18.0.1.1.0 起，LLM 連線改成全站共用的設定，在 **設定 → Live Chat AI**（也可從 **即時聊天 → 設定 → AI 設定** 進入）。只有系統管理員（`base.group_system`）看得到、改得到，值存在 `ir.config_parameter`。
+開啟 **設定 → Live Chat AI**（也可從 **即時聊天 → 設定 → AI 設定** 進入）。只有系統管理員（`base.group_system`）看得到、改得到，值存在 `ir.config_parameter`。
 
 | 設定 | 說明 | 預設值 |
 |------|------|--------|
-| **LiteLLM 位址**（`im_livechat_ai.base_url`） | 公司 LiteLLM 閘道的 OpenAI 相容位址 | `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` |
-| **LiteLLM API 金鑰**（`im_livechat_ai.api_key`） | 專用的 `odoo-livechat` 金鑰；儲存後不再顯示 | -- |
-| **讀取可用模型** | 呼叫 `GET {位址}/models`，更新頻道「模型」下拉選單 | -- |
-| **測試連線** | 送出一個小請求，只顯示狀態碼和一句說明，完整錯誤只寫伺服器日誌 | -- |
+| **LiteLLM 位址**（`im_livechat_ai.base_url`） | 公司 LiteLLM 閘道的 OpenAI 相容位址，以 `/v1` 結尾 | `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` |
+| **LiteLLM API 金鑰**（`im_livechat_ai.api_key`） | 專用的 `odoo-livechat` 金鑰；儲存後不再顯示，留空表示沿用目前的金鑰 | -- |
+| **讀取可用模型** | 呼叫 `GET {位址}/models`，更新頻道「模型」下拉選單（存在 `im_livechat_ai.model_cache`） | -- |
+| **測試連線** | 用預設模型送出一個小請求，只顯示狀態碼和一句說明，完整錯誤只寫伺服器日誌 | -- |
 | **記錄對話內容**（`im_livechat_ai.log_payload`） | 在 API 日誌保存對話內容；關閉時會清除已保存的內容 | 關閉 |
-| **日誌保留天數**（`im_livechat_ai.log_retention_days`） | 每日清理排程刪除超過天數的日誌 | `14` |
+| **日誌保留天數**（`im_livechat_ai.log_retention_days`） | 每日清理排程刪除超過天數的日誌與已結束的回覆工作 | `14` |
 
-### 步驟說明
+建議的 LiteLLM 金鑰（`odoo-livechat`）：只允許指定的模型、每月預算上限（例如 20 美元）、速率上限（例如每分鐘 20 次）。就算金鑰外洩，損失也有上限，用量也會出現在閘道的花費紀錄。
 
-1. 前往 **網站 > 即時聊天 > 頻道**（Website > Live Chat > Channels）。
-2. 選擇現有頻道或建立新頻道。
-3. 開啟 **AI 整合** 分頁。
-4. 勾選 **啟用 AI 整合**（Enable AI Integration）。
-5. 填寫必要欄位（詳見下方欄位說明）。
-6. 點擊 **測試 AI 連線** 驗證設定是否正確。
+### 步驟 2：在頻道啟用 AI（即時聊天管理員）
+
+1. 前往 **即時聊天 → 設定 → 頻道**。
+2. 選擇現有頻道或建立新頻道，開啟 **AI 整合** 分頁。
+3. 勾選 **啟用 AI 整合**、選擇 **模型**。系統必須已設定 LiteLLM 金鑰才能啟用；啟用的當下會建立機器人聯絡人。
+4. 點擊 **測試 AI 連線** 驗證設定是否正確。
 
 ### 設定欄位一覽
 
@@ -312,33 +382,28 @@ odoo-ailivechat/
 |------|------|--------|------|
 | `ai_enabled` | Boolean | `False` | 啟用/停用 AI 整合 |
 | `ai_model` | Selection | `chatgpt-pool/gpt-6-sol` | 從 LiteLLM 模型清單選擇（目前的值一定保留可選） |
-| `ai_system_prompt` | Text | -- | 系統提示詞，定義 AI 助理的角色與行為 |
+| `ai_product_lookup` | Boolean | `True` | 允許查詢商品（需電子商務模組） |
+| `ai_system_prompt` | Text | -- | 系統提示詞，定義 AI 助理的角色與行為；商品價格規則（與客服訊息說明）一定會附加在後面 |
 | `ai_max_history` | Integer | `50` | 最大歷史訊息數，用於建構對話上下文（1-200） |
 | `ai_temperature` | Float | `0.7` | 溫度參數，控制回覆的隨機性（0.0-2.0） |
 | `ai_max_tokens` | Integer | `1024` | AI 回覆的最大 token 數 |
-| `ai_max_retries` | Integer | `3` | API 呼叫失敗時的最大重試次數（1-10） |
-| `ai_retry_delay` | Integer | `2` | 重試之間的延遲秒數（1-30） |
-| `ai_error_message` | Text | *（內建預設訊息）* | 所有重試失敗後發送給訪客的錯誤訊息 |
-| `ai_bot_partner_id` | Many2one | -- | 機器人合作夥伴（`res.partner`），作為 AI 訊息的作者 |
+| `ai_max_retries` | Integer | `2` | 呼叫失敗或逾時後的重試次數（0-2；每次逾時 45 秒，先等 3 秒、再等 10 秒） |
+| `ai_error_message` | Text | 抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。 | 全部重試失敗後發送給訪客的訊息（同時通知客服） |
+| `ai_handoff_pause_minutes` | Integer | `30` | 客服發言或訪客要求真人後，AI 暫停回覆的分鐘數（1-1440） |
+| `ai_handoff_keywords` | Char | `真人,客服,人工,真人客服,human,agent,operator` | 轉真人關鍵字，以逗號分隔；英文字只比對完整單字、不分大小寫 |
+| `ai_handoff_message` | Text | 已幫您通知客服，請稍候。 | 訪客要求真人時回覆一次的訊息 |
+| `ai_bot_partner_id` | Many2one | 自動建立 | 機器人聯絡人（已封存、標籤「AI 機器人」），作為 AI 訊息的作者 |
 | `ai_bot_name` | Char | `AI Assistant` | 機器人在聊天中的顯示名稱 |
 
-### 支援的 LLM 供應商
+暫停時間存在對話上（`discuss.channel.ai_paused_until`，「AI 暫停到」）。
 
-本模組支援任何 OpenAI 相容的 `/v1/chat/completions` API，包括但不限於：
+### UI 操作按鈕與選單
 
-| 供應商 | API Base URL 範例 | 模型範例 |
-|--------|-------------------|----------|
-| **OpenAI** | `https://api.openai.com/v1` | `gpt-4o`, `gpt-4o-mini` |
-| **DeepSeek** | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| **MiniMax** | `https://api.minimax.chat/v1` | `MiniMax-Text-01` |
-| **Ollama**（本地） | `http://localhost:11434/v1` | `llama3`, `mistral` |
-| **Claude 相容代理** | *（視代理服務而定）* | `claude-3-opus`, `claude-3-sonnet` |
-| **其他 OpenAI 相容 API** | *（視服務而定）* | *（視服務而定）* |
-
-### UI 操作按鈕
-
-- **測試 AI 連線** -- 發送測試請求至 LLM API，即時回報連線結果、模型資訊及 token 用量。
-- **查看 API 記錄** -- 開啟篩選至當前頻道的 API 呼叫記錄視圖，預設顯示最近 7 天。
+- **測試 AI 連線**（即時聊天管理員）-- 用頻道的模型送出測試請求，只顯示狀態碼和一句說明。
+- **查看 API 記錄**（即時聊天管理員）-- 開啟篩選至當前頻道的 API 呼叫記錄，預設顯示最近 7 天；只有打開「記錄對話內容」時才有對話內容。
+- **AI 回覆工作**（即時聊天 → 設定）-- 回覆佇列，可篩選待處理／處理中、失敗、略過與轉真人。
+- **AI API 日誌**（即時聊天 → 設定）-- 全部頻道的 API 呼叫記錄。
+- **AI 設定**（即時聊天 → 設定，只有系統管理員）-- 開啟 LiteLLM 設定頁。
 
 ---
 
@@ -347,69 +412,66 @@ odoo-ailivechat/
 ```
 im_livechat_ai/
 ├── __init__.py
-├── __manifest__.py
+├── __manifest__.py               # 版本 18.0.1.1.0
 ├── models/
-│   ├── __init__.py
-│   ├── im_livechat_channel.py    # AI 設定欄位 + LLM API 呼叫邏輯
-│   │                             #   - 13 個 AI 設定欄位
-│   │                             #   - 輸入驗證約束
-│   │                             #   - _trigger_ai_response() 非同步觸發
-│   │                             #   - _process_ai_response() 背景處理
-│   │                             #   - _call_llm_api() HTTP POST 呼叫
-│   │                             #   - _create_bot_message() XSS 安全發送
-│   │                             #   - _create_api_log() 記錄建立
-│   │                             #   - _get_or_create_bot_partner() 機器人管理
-│   │                             #   - action_test_ai_connection() 測試連線
-│   │                             #   - action_view_api_logs() 檢視記錄
-│   ├── discuss_channel.py        # 訊息攔截 + 對話上下文建構器
-│   │                             #   - _notify_thread() 覆寫
-│   │                             #   - _should_trigger_ai_response() 觸發判斷
-│   │                             #   - _is_visitor_message() 迴圈防護
-│   │                             #   - _build_llm_messages() 上下文建構
-│   └── llm_api_log.py            # API 呼叫記錄模型
-│                                 #   - 時間戳、狀態、token 用量
-│                                 #   - 請求/回應 payload
-│                                 #   - _cleanup_old_logs() 30 天清理
+│   ├── im_livechat_channel.py    # 頻道 AI 欄位、LiteLLM 連線（_llm_request、
+│   │                             #   _fetch_llm_models）、含工具輪次與重試的
+│   │                             #   回覆產生、機器人聯絡人、轉真人關鍵字
+│   ├── discuss_channel.py        # _notify_thread 攔截：客服發言暫停、轉真人、
+│   │                             #   建立工作；作者判斷；_build_llm_messages
+│   ├── livechat_ai_job.py        # im_livechat.ai.job：回覆佇列、postcommit 執行緒、
+│   │                             #   advisory lock、補救排程、通知客服
+│   ├── livechat_ai_tools.py      # im_livechat.ai.tools：search_products、
+│   │                             #   get_product_details（ORM 唯讀）
+│   ├── llm_api_log.py            # llm.api.log：預設只存中繼資料、保留天數清理
+│   └── res_config_settings.py    # 設定 → Live Chat AI（只有系統管理員）
 ├── views/
-│   ├── im_livechat_channel_views.xml  # AI 整合設定分頁
-│   └── llm_api_log_views.xml          # API 記錄列表與表單視圖
+│   ├── im_livechat_channel_views.xml  # 頻道表單的「AI 整合」分頁
+│   ├── llm_api_log_views.xml          # API 日誌（選單：AI API 日誌）
+│   ├── livechat_ai_job_views.xml      # 回覆工作（選單：AI 回覆工作）
+│   └── res_config_settings_views.xml  # 設定頁＋選單：AI 設定
 ├── data/
-│   └── ai_data.xml               # AI 機器人合作夥伴 + 每日清理排程
+│   └── ai_data.xml               # 「AI 機器人」標籤、預設機器人、每日日誌清理排程、
+│                                 #   每 2 分鐘的回覆工作補救排程
 ├── security/
-│   └── ir.model.access.csv       # 存取控制規則
-├── tests/
-│   ├── __init__.py
-│   ├── test_im_livechat_ai.py    # 28 項核心單元測試
-│   ├── test_discuss_channel.py   # 18 項頻道整合測試
-│   └── test_integration.py       # 9 項端對端整合測試
+│   └── ir.model.access.csv       # 日誌與工作：只有即時聊天管理員（讀取／刪除）
+├── migrations/18.0.1.1.0/
+│   ├── pre-migrate.py            # 清空頻道的 API 網址／金鑰
+│   └── post-migrate.py           # 移除舊欄位、關閉 AI、清理日誌、中文錯誤訊息、
+│                                 #   機器人加標籤
+├── tests/                        # 296 項測試（見「測試」）
 └── i18n/
     └── zh_TW.po                  # 繁體中文翻譯
 ```
+
+儲存庫另有 `odoo-ailivechat/`（本機 Docker，掛載上面的模組）、`.github/workflows/odoo-tests.yml`（自動測試）與 `docs/`。
 
 ---
 
 ## 安全性
 
+### LiteLLM 金鑰
+
+LiteLLM 位址與金鑰存在 `ir.config_parameter`，只有系統管理員能讀寫，設定頁的每個欄位也都加上 `groups='base.group_system'`。頻道只選模型，所以即時聊天使用者或管理員既看不到金鑰，也沒辦法把金鑰送到別的網址。金鑰在設定頁只能寫入、不會再顯示，也不會留在暫存的設定資料表。介面上的錯誤與日誌都不含上游回應內容。
+
+### API 日誌與對話內容
+
+`llm.api.log` 與 `im_livechat.ai.job` 只有即時聊天管理員看得到。日誌預設不存對話內容；「記錄對話內容」只用於短暫除錯，關閉時會清除已保存的內容。每日清理排程依保留天數（預設 14 天）刪除舊資料。
+
 ### XSS 防護
 
-所有 LLM API 回覆在發送至聊天前，都會經過 `Markup.escape` 進行 HTML 跳脫處理，防止跨站指令碼攻擊。換行符號會被轉換為安全的 `<br/>` 標籤以保持格式。
+AI 回覆在發送前一律用 `markupsafe` 跳脫。只有 markdown 連結與 `http(s)` 網址會變成連結（`target="_blank" rel="noopener noreferrer"`），`**文字**` 變粗體，換行轉成 `<br/>`；所有文字與網址都經過跳脫。
 
-### HTML 清理
+### 迴圈防護與作者判斷
 
-建構 LLM 對話上下文時，歷史訊息的 HTML 標籤會被正規表達式去除，HTML 實體會被解碼為純文字，確保傳送給 LLM 的內容是乾淨的。
+- **頻道 AI 機器人**（`ai_bot_partner_id`）、**預設 AI 機器人**（`im_livechat_ai.partner_ai_bot`）與 **OdooBot**（`base.partner_root`）不會觸發 AI。
+- 擁有**內部使用者帳號**的聯絡人是客服：發言會暫停 AI，並以同事回覆的身分送給 LLM。
+- 這段對話**指派的客服**若沒有內部使用者帳號（例如 Odoo 聊天機器人），視為機器人。
+- **網站訪客、入口網站客戶與公開使用者**都是訪客。
 
-### 迴圈防護
+### 商品工具
 
-`_is_visitor_message()` 方法確保只有真正的訪客訊息才會觸發 AI 回覆。以下作者會被排除：
-
-- **頻道 AI 機器人合作夥伴**（`ai_bot_partner_id`）
-- **預設 AI 機器人合作夥伴**（`im_livechat_ai.partner_ai_bot`）
-- **OdooBot**（`base.partner_root`）
-- 任何擁有**使用者帳號**的合作夥伴（`user_ids`）
-
-### API 金鑰安全
-
-LiteLLM 位址與金鑰存在 `ir.config_parameter`，只有系統管理員能讀寫。頻道只選模型，所以即時聊天使用者或管理者沒辦法把金鑰送到別的網址。金鑰在設定頁只能寫入、不會再顯示，也不會留在暫存的設定資料表。API 日誌不保存上游回應內容，只有即時聊天管理員看得到。
+工具只做 ORM 唯讀查詢，限頻道所屬網站已上架、可銷售的商品，不經過 MCP 或外部呼叫；每則回覆的輪數與次數都有上限。
 
 ### 輸入驗證
 
@@ -418,17 +480,18 @@ LiteLLM 位址與金鑰存在 `ir.config_parameter`，只有系統管理員能�
 | LiteLLM 位址格式 | 必須以 `http://` 或 `https://` 開頭 |
 | 歷史訊息數 | 必須介於 1-200 之間 |
 | 溫度參數 | 必須介於 0.0-2.0 之間 |
-| 最大重試次數 | 必須介於 1-10 之間 |
-| 重試延遲 | 必須介於 1-30 秒之間 |
+| 最大重試次數 | 必須介於 0-2 之間 |
+| 暫停分鐘數 | 必須介於 1-1440 之間 |
+| 日誌保留天數 | 至少 1 天 |
 | 必填欄位 | 啟用 AI 時，必須選模型，且系統管理員已設定 LiteLLM 金鑰 |
 
 ### 最佳實踐
 
-1. **使用 HTTPS** 作為 LLM API 的連線協定，保護 API 金鑰傳輸安全。
+1. **使用專用的 LiteLLM 金鑰**，並在閘道設定可用模型、每月預算與速率上限。
 2. **定期輪換 API 金鑰**，降低金鑰洩漏風險。
-3. **監控 API 記錄**，定期檢查失敗或異常的 API 呼叫。
-4. **限制系統提示詞範圍**，避免 AI 回覆超出客服範疇。
-5. **設定適當的 max_tokens**，控制回覆長度與 API 成本。
+3. **監控 API 日誌與回覆工作**，定期檢查失敗或被略過的工作。
+4. **「記錄對話內容」除錯完立刻關閉**。
+5. **限制系統提示詞範圍**，避免 AI 回覆超出客服範疇。
 
 ---
 
@@ -436,54 +499,40 @@ LiteLLM 位址與金鑰存在 `ir.config_parameter`，只有系統管理員能�
 
 ### 測試套件總覽
 
-本模組包含 **55 項自動化測試**，分布在 3 個測試套件中，提供從單元測試到端對端整合的全面覆蓋。
+本模組包含 **296 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要 LiteLLM 金鑰或網路。
 
 | 測試套件 | 檔案 | 測試數 | 說明 |
 |----------|------|:---:|------|
-| 核心單元測試 | `test_im_livechat_ai.py` | 28 | 頻道設定、API 呼叫邏輯、記錄清理、機器人管理 |
-| 頻道整合測試 | `test_discuss_channel.py` | 18 | 訊息攔截、迴圈防護、對話上下文建構 |
-| 端對端整合測試 | `test_integration.py` | 9 | 完整流程測試、重試邏輯、錯誤處理 |
+| 核心單元測試 | `test_im_livechat_ai.py` | 25 | 頻道欄位、驗證、LLM 呼叫、機器人訊息、日誌 |
+| 頻道整合測試 | `test_discuss_channel.py` | 18 | 訊息攔截、訪客判斷、對話上下文建構 |
+| 端對端整合測試 | `test_integration.py` | 9 | 完整流程、多輪對話、重試、錯誤訊息 |
+| 邊界情境測試 | `test_edge_cases.py` | 97 | 回應格式、think 標籤、XSS、上限、日誌 |
+| LiteLLM 設定測試 | `test_litellm_settings.py` | 42 | 只有管理員能設定、金鑰只寫不讀、模型清單、隱私、升級遷移 |
+| 回覆工作測試 | `test_ai_job.py` | 29 | 與訊息同交易建立、合併連發、加鎖、略過、重試、補救排程 |
+| 轉真人測試 | `test_handoff.py` | 43 | 入口網站客戶、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人、中文預設 |
+| 商品工具測試 | `test_product_tools.py` | 33 | 搜尋與詳情、只查已上架、價格、工具輪數與上限 |
 
 ### 執行測試
 
 ```bash
-# 執行模組的所有測試
-./odoo-bin -d your_db --test-enable --stop-after-init -i im_livechat_ai
-
-# 執行特定測試標籤
-./odoo-bin -d your_db --test-enable --stop-after-init --test-tags /im_livechat_ai
+# 全新資料庫；部分測試需要 website_sale、website_livechat、portal
+odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
+  --without-demo=all --test-enable --test-tags /im_livechat_ai --stop-after-init
 
 # Docker 環境中執行
-docker exec -it odoo-ailivechat-web \
-  odoo --test-enable --stop-after-init -d odooailivechat -i im_livechat_ai
+docker compose run --rm odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
+  --without-demo=all --test-enable --test-tags /im_livechat_ai --stop-after-init
 ```
 
-### 測試覆蓋範圍
+請確認日誌裡有 `odoo.addons.im_livechat_ai.tests` 的 `Starting ...` 行：標籤選不到任何測試時，結尾一樣會顯示「0 failed」。
 
-核心單元測試（28 項）涵蓋：
+### 自動測試（GitHub Actions）
 
-- AI 設定欄位的 CRUD 操作
-- 輸入驗證約束（URL 格式、參數範圍）
-- `_call_llm_api()` 請求建構與錯誤處理
-- `_create_bot_message()` XSS 防護
-- `_get_or_create_bot_partner()` 機器人合作夥伴管理
-- `_create_api_log()` 記錄建立與 token 追蹤
-- `action_test_ai_connection()` 連線測試
-- `_cleanup_old_logs()` 30 天清理邏輯
+`.github/workflows/odoo-tests.yml` 在每個 PR 用 `odoo:18.0` 容器與 PostgreSQL 16 執行同樣的指令；Odoo 結束碼不是 0、沒有任何 `im_livechat_ai` 測試開始、或日誌出現 `FAIL`、`ERROR`、`CRITICAL` 時就判定失敗。請在主分支的保護規則把這個檢查設為必須通過，PR 沒過就不能合併。
 
-頻道整合測試（18 項）涵蓋：
+### 實測
 
-- `_notify_thread()` 訊息攔截機制
-- `_should_trigger_ai_response()` 觸發條件判斷
-- `_is_visitor_message()` 迴圈防護（機器人排除、OdooBot 排除、使用者帳號排除）
-- `_build_llm_messages()` 對話上下文建構（角色指派、HTML 清理、歷史限制）
-
-端對端整合測試（9 項）涵蓋：
-
-- 完整的訪客訊息到 AI 回覆流程
-- API 呼叫失敗後的重試邏輯
-- 所有重試耗盡後的錯誤訊息發送
-- 序列化失敗處理
+18.0.1.0.0 的 15 情境端對端測試計畫保留在 `docs/plans/`。18.0.1.1.0 請在測試站用真的 LiteLLM 金鑰確認：連發 3 則只得到 1 個回覆、客服發言後 AI 暫停、說「我要找真人」會暫停並通知客服、問商品價格會回官網價格並附連結。
 
 ---
 
@@ -491,41 +540,38 @@ docker exec -it odoo-ailivechat-web \
 
 ### AI 沒有回覆
 
-1. 確認頻道的 **啟用 AI 整合** 已勾選。
-2. 確認 **API Base URL**、**API Key** 和 **Model** 三個必填欄位都已填寫。
-3. 點擊 **測試 AI 連線** 按鈕，檢查連線是否正常。
-4. 點擊 **查看 API 記錄**，查看是否有錯誤記錄。
+1. **剛從 18.0.1.0.x 升級**：所有頻道的 AI 都已關閉，請設定 LiteLLM 後逐一重新啟用（見[升級須知](#從-18010x-升級)）。
+2. **LiteLLM 設定好了嗎**：「設定 → Live Chat AI」顯示「已設定金鑰」，且 **測試連線** 成功。
+3. **是否暫停中**：客服剛發言或訪客剛要求真人，暫停時間內（預設 30 分鐘）AI 不回覆。
+4. **誰發的訊息**：內部使用者（例如登入後台的管理員直接在小工具測試）發言會讓 AI 暫停，不會得到回覆；請用訪客或入口網站帳號測試。
+5. **AI 回覆工作**：找到這則訊息的工作：`略過`（較新的訊息已回覆）、`失敗`（看錯誤欄）、一直`待處理`（補救排程是否啟用？）。
+6. **伺服器日誌**：搜尋 `odoo.addons.im_livechat_ai`。
 
-### 連線測試失敗
+### 下拉選單沒有想要的模型
 
-1. 確認 API Base URL 格式正確（例如 `https://api.openai.com/v1`）。
-2. 確認 API Key 有效且未過期。
-3. 確認模型名稱拼寫正確。
-4. 檢查 Odoo 伺服器是否能存取外部網路（防火牆、Proxy 設定）。
+到「設定 → Live Chat AI」按 **讀取可用模型**。清單就是這把 LiteLLM 金鑰可以用的模型。
 
-### 回覆品質不佳
+### AI 不知道商品價格
 
-1. 調整 **系統提示詞**，明確定義 AI 助理的角色、語言和行為規範。
-2. 增加 **最大歷史訊息數**，提供更多對話上下文。
-3. 調整 **溫度參數**：降低溫度（如 0.3）可獲得更確定性的回覆，提高溫度（如 1.0）可獲得更有創意的回覆。
-4. 增加 **最大回應 token 數**，允許更長的回覆。
-5. 嘗試不同的 LLM 模型。
+商品查詢需要電子商務模組、頻道開啟 **允許查詢商品**，且商品已在頻道所屬網站上架。沒有工具時 AI 會請訪客留下聯絡方式，不會報價。
 
 ### API 記錄顯示錯誤
 
-1. 檢查 **Error Message** 欄位中的具體錯誤訊息。
-2. 常見錯誤：
-   - `401 Unauthorized` -- API 金鑰無效或已過期。
-   - `429 Too Many Requests` -- 超過 API 速率限制，考慮增加重試延遲。
-   - `500 Internal Server Error` -- LLM 供應商端問題，稍後重試。
-   - `Connection Error` -- 網路連線問題。
-   - `Timeout` -- API 回應超時（預設 60 秒），考慮減少 max_tokens 或使用更快的模型。
+| 錯誤 | 原因 | 處理方式 |
+|------|------|----------|
+| `HTTP 401` | 金鑰無效或已撤銷 | 到「設定 → Live Chat AI」填入有效金鑰 |
+| `HTTP 403` | 金鑰沒有使用此模型的權限 | 在 LiteLLM 允許這把金鑰使用該模型，或換模型 |
+| `HTTP 404` | 網址或模型不存在 | 位址要以 `/v1` 結尾；重新讀取模型清單 |
+| `HTTP 429` | 呼叫太頻繁或額度已用完 | 檢查金鑰在 LiteLLM 的速率與預算 |
+| `HTTP 5xx` | 閘道或上游服務故障 | 會自動重試（3 秒、10 秒）；檢查 LiteLLM 狀態 |
+| 逾時／無法連線 | 網路或防火牆 | Odoo 必須連得到 LiteLLM 位址；每次呼叫 45 秒逾時 |
 
 ### Docker 相關問題
 
 1. 確認所有容器正在執行：`docker compose ps`
 2. 檢查容器日誌：`docker compose logs -f odoo`
 3. 確認資料庫健康檢查通過：`docker compose logs db`
+4. 啟動時出現 `set POSTGRES_PASSWORD`：還沒從 `.env.example` 建立 `.env`。
 
 ### Odoo 伺服器日誌
 
@@ -541,17 +587,30 @@ odoo.addons.im_livechat_ai
 
 | 模組 | 類型 | 用途 |
 |------|------|------|
-| `im_livechat` | Odoo 核心模組 | 提供即時聊天頻道模型（`im_livechat.channel`）和即時聊天小工具 |
-| `mail` | Odoo 核心模組 | 提供 `discuss.channel`、`mail.message` 及訊息基礎架構 |
+| `im_livechat` | Odoo 核心模組（必要） | 提供即時聊天頻道模型（`im_livechat.channel`）和即時聊天小工具 |
+| `mail` | Odoo 核心模組（必要） | 提供 `discuss.channel`、`mail.message` 及訊息基礎架構 |
+| `website_sale` | Odoo 核心模組（選用） | 商品查詢工具（已上架商品、官網價格） |
 
 **Python 相依套件：**
 
 | 套件 | 用途 |
 |------|------|
-| `requests` | HTTP POST 呼叫 LLM API（Odoo 內建） |
+| `requests` | 呼叫 LiteLLM（Odoo 內建） |
 | `markupsafe` | XSS 防護的 HTML 跳脫處理（Odoo 內建） |
+| `psycopg2` | PostgreSQL 連線（回覆工作使用 READ COMMITTED）（Odoo 內建） |
 
 > 無需安裝額外的 Python 套件，所有相依套件皆包含在標準 Odoo 18 安裝中。
+
+**外部服務：** LiteLLM（或其他 OpenAI 相容）閘道，需提供 `/v1/chat/completions` 與 `/v1/models`；商品工具需要模型支援工具呼叫。
+
+---
+
+## 參與開發
+
+- 儲存庫根目錄的 `im_livechat_ai/` 是唯一正本；平台映像改成從這個 repo 的版本標籤同步，不再各自修改。
+- 模型、視圖、資料或遷移有變更時要升版本號：平台發版的升級檢查只在版本號改變時才會執行模組升級。
+- 提交訊息用一句話寫明改了什麼、為什麼。PR 依 `.github/pull_request_template.md`（改了什麼／為什麼／怎麼測）填寫，且必須通過 **Odoo tests** 檢查。
+- 不要提交金鑰或密碼：只提交 `*.example` 範本；`.env`、`config/odoo.conf` 與 `.playwright-cli/` 已列入 `.gitignore`。
 
 ---
 
@@ -559,10 +618,13 @@ odoo.addons.im_livechat_ai
 
 ### v18.0.1.1.0
 
-- LLM 連線改為全站共用的 LiteLLM 設定（設定 → Live Chat AI，只有系統管理員），拿掉頻道上的 API 網址與金鑰。
-- 頻道的模型改成下拉選單，選項來自「讀取可用模型」；預設 `chatgpt-pool/gpt-6-sol`。
-- 升級時清空並移除舊的頻道金鑰／網址欄位，並把所有頻道的 AI 關閉，等系統管理員設定 LiteLLM 後再逐一打開。
-- API 日誌：只有即時聊天管理員看得到；預設不存對話內容（「記錄對話內容」開關）；錯誤只存簡短訊息、不含上游回應；保留 14 天（可調）。
+- **LiteLLM 系統設定**：連線移到「設定 → Live Chat AI」（只有系統管理員、金鑰只寫不讀、錯誤只顯示簡短說明），拿掉頻道上的 API 網址與金鑰。頻道模型改成下拉選單，選項來自「讀取可用模型」；預設 `chatgpt-pool/gpt-6-sol`。
+- **升級**：清空並移除舊的頻道金鑰／網址欄位，**所有頻道的 AI 先關閉**，等系統管理員設定 LiteLLM 後再逐一打開；移除重試延遲、最大重試次數上限改為 2；預設錯誤訊息改繁中；機器人聯絡人封存並加標籤；清理舊日誌。
+- **工作佇列**：訪客訊息與 `im_livechat.ai.job` 回覆工作同一筆交易建立，交易完成後處理；等 1.5 秒合併連發、同一段對話加鎖，連發只回一次；逾時 45 秒、最多重試 2 次（3 秒／10 秒）；每 2 分鐘補救排程；失敗時回錯誤訊息並通知客服。
+- **轉真人／暫停**：入口網站客戶也會得到回覆；客服發言後 AI 暫停 30 分鐘（頻道可調）；轉真人關鍵字回一次轉接訊息、暫停並通知客服；客服訊息以標記過的同事回覆送給 LLM；啟用 AI 的當下建立機器人聯絡人。
+- **商品工具**：`search_products` 與 `get_product_details`（ORM 唯讀、只查已上架、官網價格、附連結），每則回覆最多 3 輪；頻道開關「允許查詢商品」；系統提示固定加上不可編造價格的規則。
+- **隱私**：API 日誌與回覆工作只有即時聊天管理員看得到；預設不存對話內容（「記錄對話內容」開關）；保留 14 天（可調）。
+- **儲存庫**：模組只留一份正本（Docker 直接掛載）、設定改用範本不再提交密碼、新增 GitHub Actions 自動測試與 PR 範本、所有新字串補上繁中翻譯。
 
 ### v18.0.1.0.0（2026-04-11）
 

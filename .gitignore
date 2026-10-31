@@ -2,6 +2,17 @@
 odoo-ailivechat/data/
 odoo-linelivechat/data/
 
+# Local secrets and config: commit only the *.example templates
+.env
+odoo-ailivechat/.env
+odoo-ailivechat/config/odoo.conf
+
+# Browser automation artefacts (Playwright CLI logs, scripts, page dumps)
+.playwright-cli/
+.playwright-mcp/
+playwright-report/
+test-results/
+
 # Python
 __pycache__/
 *.py[cod]

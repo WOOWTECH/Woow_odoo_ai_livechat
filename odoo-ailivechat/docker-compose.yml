@@ -1,4 +1,14 @@
-version: '3.8'
+# Local development stack for im_livechat_ai (Odoo 18 + PostgreSQL 16).
+#
+# First run:
+#   cp .env.example .env                          # then set POSTGRES_PASSWORD
+#   cp config/odoo.conf.example config/odoo.conf  # optional edits, see the file
+#   docker compose up -d
+#
+# The module is mounted from the repository root (../im_livechat_ai), the
+# single canonical copy; there is no copy of the module in this directory.
+# .env and config/odoo.conf are git-ignored: never commit real passwords.
+
 name: odoo-ailivechat
 
 services:
@@ -7,15 +17,15 @@ services:
     container_name: odoo-ailivechat-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: odooailivechat
-      POSTGRES_USER: odooailivechat
-      POSTGRES_PASSWORD: odooailivechat
+      POSTGRES_DB: ${POSTGRES_DB:-odooailivechat}
+      POSTGRES_USER: ${POSTGRES_USER:-odooailivechat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in odoo-ailivechat/.env (copy .env.example)}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
       - odoo-ailivechat-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U odooailivechat -d odooailivechat"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,15 +35,16 @@ services:
     container_name: odoo-ailivechat-web
     restart: unless-stopped
     ports:
-      - "9094:8069"
+      - "${ODOO_PORT:-9094}:8069"
     environment:
+      # Read by the official image entrypoint and passed as --db_* options.
       HOST: db
       PORT: 5432
-      USER: odooailivechat
-      PASSWORD: odooailivechat
+      USER: ${POSTGRES_USER:-odooailivechat}
+      PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in odoo-ailivechat/.env (copy .env.example)}
     volumes:
-      - ./addons:/mnt/extra-addons
-      - ./config/odoo.conf:/etc/odoo/odoo.conf
+      - ../im_livechat_ai:/mnt/extra-addons/im_livechat_ai:ro
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
       - ./data/odoo:/var/lib/odoo
     networks:
       - odoo-ailivechat-net

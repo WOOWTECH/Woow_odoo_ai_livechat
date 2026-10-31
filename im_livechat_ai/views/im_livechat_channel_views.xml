@@ -22,6 +22,11 @@
                         <group string="Bot Settings" invisible="not ai_enabled">
                             <field name="ai_bot_name"/>
                             <field name="ai_bot_partner_id" readonly="1"/>
+                            <field name="ai_welcome_message"/>
+                            <div class="text-muted" colspan="2">
+                                While AI is enabled, visitors see this welcome message instead of the
+                                channel welcome message, so they know they are talking to an AI.
+                            </div>
                         </group>
                     </group>
 
@@ -47,13 +52,17 @@
 
                     <group string="Human Handoff" invisible="not ai_enabled">
                         <field name="ai_handoff_pause_minutes"/>
+                        <field name="ai_handoff_wait_minutes"/>
                         <field name="ai_handoff_keywords"/>
                         <field name="ai_handoff_message"/>
+                        <field name="ai_pause_notice"/>
                         <div class="text-muted" colspan="2">
-                            When an operator posts in a conversation, or the visitor writes one of
-                            the keywords, the AI stops answering that conversation for this many minutes.
-                            For a keyword the visitor gets the handoff message once and the operators
-                            are notified.
+                            When an operator posts in a conversation, the AI stays silent for the pause
+                            minutes (every operator message extends it). When the visitor writes one of
+                            the keywords, the visitor gets the handoff message, the operators are notified
+                            and the AI waits for an operator; the first visitor message during the wait
+                            gets the waiting notice once. If no operator replies before the wait ends, the
+                            AI answers the messages the visitor wrote meanwhile.
                         </div>
                     </group>
 

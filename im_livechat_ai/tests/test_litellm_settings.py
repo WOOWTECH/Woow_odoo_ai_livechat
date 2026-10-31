@@ -513,8 +513,12 @@ class TestMigration18011(TransactionCase):
         cls.pre = _load_migration('pre-migrate')
         cls.post = _load_migration('post-migrate')
         Channel = cls.env['im_livechat.channel']
-        cls.ch_on = Channel.create({'name': 'Legacy On', 'ai_enabled': True, 'ai_model': 'MiniMax-M1'})
+        cls.ch_on = Channel.create({'name': 'Legacy On', 'ai_enabled': True})
         cls.ch_off = Channel.create({'name': 'Legacy Off', 'ai_enabled': False})
+        # A model chosen in 18.0.1.0.x (not in the LiteLLM list any more).
+        cls.env.cr.execute("UPDATE im_livechat_channel SET ai_model = 'MiniMax-M1' WHERE id = %s",
+                           (cls.ch_on.id,))
+        cls.env.invalidate_all()
 
     def _add_legacy_columns(self):
         cr = self.env.cr
@@ -564,6 +568,8 @@ class TestMigration18011(TransactionCase):
             'error_message': 'All 3 retries exhausted. Last error: 401 | Response: {"secret": "body"}',
         })
         long_error = Log.create({'status': 'error', 'error_message': 'E' * 2000})
+        self._add_legacy_columns()
+        self.pre.migrate(self.env.cr, '18.0.1.0.1')
         with self.assertLogs(self.post.__name__, level='INFO'):
             self.post.migrate(self.env.cr, '18.0.1.0.1')
         self.env.invalidate_all()
@@ -573,8 +579,9 @@ class TestMigration18011(TransactionCase):
         self.assertEqual(len(long_error.error_message), 300)
 
     def test_migration_idempotent_without_legacy_columns(self):
+        """P2-4: without the 18.0.1.0.x columns (already migrated), AI stays on."""
         self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        with self.assertLogs(self.post.__name__, level='WARNING'):
-            self.post.migrate(self.env.cr, '18.0.1.0.1')
+        self.post.migrate(self.env.cr, '18.0.1.0.1')
         self.env.invalidate_all()
-        self.assertFalse(self.ch_on.ai_enabled)
+        self.assertTrue(self.ch_on.ai_enabled)
+        self.assertEqual(self.ch_on.ai_model, 'MiniMax-M1')

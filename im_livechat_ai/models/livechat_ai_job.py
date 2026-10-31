@@ -21,11 +21,17 @@ Flow:
        reply)
     -> when the lock holder finishes it runs the newest pending job of the
        session (the jobs whose own thread found the lock busy)
-  Human handoff (package D, P1-2): an operator's post pauses the session
-  (discuss.channel.ai_paused_until) so no job is created; a visitor asking
-  for a human creates a 'handoff' job that posts a fixed notice (no LLM)
-  and notifies the operators. Reply jobs check the pause before calling the
-  LLM and again before posting.
+  Human handoff (package D, P1-2; P0-1): an operator's post pauses the
+  session (discuss.channel.ai_paused_until, reason 'operator') so no job is
+  created; a visitor asking for a human creates a 'handoff' job that posts a
+  fixed notice (no LLM), notifies the operators and starts a handoff wait
+  (reason 'handoff'). The first visitor message during the wait gets a
+  'notice' job (fixed waiting notice, no LLM); every visitor message during
+  the wait gets a DEFERRED reply job due when the wait ends, run by the
+  recovery cron (triggered for that time). If an operator replied meanwhile
+  the deferred jobs are closed quietly; otherwise the newest one answers
+  everything the visitor wrote. Reply jobs check the pause before calling
+  the LLM and again before posting.
   A cron (every 2 minutes) hands jobs left pending/running after a crash or
   restart to recovery threads (one per session), at most MAX_JOB_RUNS runs
   per job, and never answers a job whose trigger message was already in the
@@ -44,6 +50,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
 
+from .discuss_channel import PAUSE_HANDOFF
 from .im_livechat_channel import DEFAULT_ERROR_MESSAGE, DEFAULT_HANDOFF_MESSAGE
 
 _logger = logging.getLogger(__name__)
@@ -61,6 +68,12 @@ SESSION_ROW_LOCK_TIMEOUT = '15s'  # waiting for a visitor/operator transaction t
 # The recovery cron is triggered this long after a job is due, in case its
 # thread died (the cron only takes pending jobs STALE_PENDING_SECONDS late).
 CRON_TRIGGER_DELAY_SECONDS = STALE_PENDING_SECONDS + 5
+# Deferred jobs: the cron is triggered this long after the end of the wait
+# (clock differences between the Odoo processes and PostgreSQL).
+DEFERRED_TRIGGER_DELAY_SECONDS = 2
+# Settings monitoring (P1-6): unfinished jobs this old, or a recovery cron
+# that has not run for this long, are reported.
+MONITOR_STALE_MINUTES = 5
 
 # First key of the two-int advisory lock; the second is the discuss.channel id.
 LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.job') & 0x7FFFFFFF
@@ -146,13 +159,23 @@ class LivechatAiJob(models.Model):
         selection=[
             ('reply', 'AI Reply'),
             ('handoff', 'Human Handoff'),
+            ('notice', 'Waiting Notice'),
         ],
         string='Type',
         default='reply',
         required=True,
         readonly=True,
         help='AI Reply: answer with the LLM. Human Handoff: the visitor asked '
-             'for a human; send the handoff message and notify the operators.',
+             'for a human; send the handoff message and notify the operators. '
+             'Waiting Notice: first visitor message while waiting for a human; '
+             'send the waiting notice once (no LLM).',
+    )
+    deferred = fields.Boolean(
+        string='Deferred',
+        readonly=True,
+        help='Reply to a message written while the AI waited for an operator: run '
+             'by the recovery cron when the wait ends (Run After), closed quietly '
+             'if an operator replied meanwhile.',
     )
     message_id = fields.Many2one(
         comodel_name='mail.message',
@@ -218,26 +241,41 @@ class LivechatAiJob(models.Model):
     # --- Creation (visitor transaction) ---
 
     @api.model
-    def _create_for_message(self, discuss_channel, message, kind='reply'):
+    def _create_for_message(self, discuss_channel, message, kind='reply', run_after=None):
         """Create the job for a visitor message and start it after commit.
 
         Runs in the visitor's transaction, so the job exists if and only if
         the message was committed.
+
+        Args:
+            run_after (datetime|None): deferred reply (end of a handoff
+                wait): no thread is started; the recovery cron is triggered
+                for that time and runs it (this works with a separate cron
+                process and survives restarts)
         """
+        deferred = bool(run_after)
         job = self.sudo().create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
             'message_id': message.id,
             'kind': kind,
-            'run_after': fields.Datetime.now() + timedelta(seconds=DEBOUNCE_SECONDS),
+            'deferred': deferred,
+            'run_after': run_after or fields.Datetime.now() + timedelta(seconds=DEBOUNCE_SECONDS),
         })
+        if deferred:
+            self._trigger_recovery_cron(job.run_after + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
+            return job
         job._start_after_commit()
         # Safety net when the process running the thread dies: wake the
         # recovery cron (cron process) instead of waiting for its interval.
+        self._trigger_recovery_cron(job.run_after + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
+        return job
+
+    @api.model
+    def _trigger_recovery_cron(self, at):
         cron = self.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs', raise_if_not_found=False)
         if cron:
-            cron.sudo()._trigger(job.run_after + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
-        return job
+            cron.sudo()._trigger(at)
 
     def _start_after_commit(self):
         """Start one worker thread per job once the transaction is committed.
@@ -318,10 +356,12 @@ class LivechatAiJob(models.Model):
 
     @api.model
     def _next_pending_job_id(self, session_id):
-        """Newest pending job of a session (older ones are superseded by it)."""
+        """Newest pending job of a session (older ones are superseded by it),
+        except deferred jobs that are not due yet (the cron runs those)."""
         job = self.search([
             ('discuss_channel_id', '=', session_id),
             ('state', '=', 'pending'),
+            '|', ('deferred', '=', False), ('run_after', '<=', fields.Datetime.now()),
         ], order='id desc', limit=1)
         return job.id
 
@@ -385,7 +425,11 @@ class LivechatAiJob(models.Model):
         if not self.exists() or self.state not in ('pending', 'running'):
             return
         now = fields.Datetime.now()
-        if self.create_date and self.create_date < now - timedelta(minutes=JOB_MAX_AGE_MINUTES):
+        if self.deferred and self.state == 'pending' and self._defer_again(commit_step, now):
+            return
+        # A deferred job is as old as its due time (the wait can be long).
+        reference = max(self.create_date, self.run_after) if self.deferred and self.run_after else self.create_date
+        if reference and reference < now - timedelta(minutes=JOB_MAX_AGE_MINUTES):
             self._finish('failed', f'超過 {JOB_MAX_AGE_MINUTES} 分鐘仍未處理，已放棄')
             self._notify_failure('訪客的訊息超過 %s 分鐘未能由 AI 處理' % JOB_MAX_AGE_MINUTES,
                                  visitor_told=False)
@@ -409,13 +453,16 @@ class LivechatAiJob(models.Model):
         if self.kind == 'handoff':
             self._process_handoff(commit_step)
             return
+        if self.kind == 'notice':
+            self._process_notice(commit_step)
+            return
         if self._skip_reply(commit_step):
             return
 
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         context = session._ai_context_messages(channel)
-        messages = session._build_llm_messages(channel, recent_messages=context)
+        messages = session._build_llm_messages(channel, recent_messages=context, resume=self.deferred)
         if not any(m.get('role') == 'user' for m in messages):
             self._finish('skipped', '對話中沒有訪客訊息')
             commit_step()
@@ -469,10 +516,52 @@ class LivechatAiJob(models.Model):
         elif self.discuss_channel_id._ai_is_paused():
             self._finish('skipped', '真人客服處理中，AI 暫停回覆')
             self._supersede_older()
+        elif self.deferred and self._operator_replied_since_trigger():
+            # The wait ended, but an operator answered meanwhile.
+            self._finish('skipped', '等候期間真人客服已接手，AI 不補回覆')
+            self._supersede_older()
         else:
             return False
         commit_step()
         return True
+
+    def _defer_again(self, commit_step, now):
+        """Deferred job run before its time (a chained run, an early cron
+        trigger) or whose handoff wait was extended: leave it pending, due at
+        the end of the wait, and trigger the cron for then. A wait turned
+        into an operator pause is not waited for: the run closes the job.
+
+        Returns:
+            bool: True when the job was left pending
+        """
+        session = self.discuss_channel_id
+        due = self.run_after
+        if session._ai_waiting_for_human() and session.ai_paused_until > (due or now):
+            due = session.ai_paused_until
+        if not due or due <= now + timedelta(seconds=1):
+            return False
+        if due != self.run_after:
+            self.write({'run_after': due})
+            self._trigger_recovery_cron(due + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
+            commit_step()
+        return True
+
+    def _operator_replied_since_trigger(self):
+        """True when a human operator commented in the session after this
+        job's trigger message (they took over during the handoff wait)."""
+        session = self.discuss_channel_id
+        domain = [
+            ('model', '=', 'discuss.channel'),
+            ('res_id', '=', session.id),
+            ('message_type', '=', 'comment'),
+        ]
+        if self.message_id:
+            domain.append(('id', '>', self.message_id.id))
+        visitor = session._ai_visitor_partner()
+        for message in self.env['mail.message'].search(domain, order='id'):
+            if session._ai_author_kind(message, visitor_partner=visitor) == 'operator':
+                return True
+        return False
 
     def _finish_exhausted(self, commit_step):
         """MAX_JOB_RUNS runs died before finishing. A handoff still gets its
@@ -481,6 +570,9 @@ class LivechatAiJob(models.Model):
         the visitor gets the error message."""
         if self.kind == 'handoff':
             self._process_handoff(commit_step)
+            return
+        if self.kind == 'notice':
+            self._process_notice(commit_step)
             return
         if self._skip_reply(commit_step):
             return
@@ -506,10 +598,25 @@ class LivechatAiJob(models.Model):
         self._finish('done', False, reply_message=message)
         self._supersede_older()
         commit_step()
-        minutes = channel._ai_pause_minutes()
-        text = '訪客在對話「%s」要求真人客服，AI 已暫停回覆 %s 分鐘，請盡快接手。' % (
-            session.display_name, minutes)
+        minutes = channel._ai_wait_minutes()
+        text = ('訪客在對話「%s」要求真人客服，AI 會先等候 %s 分鐘；'
+                '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, minutes)
         self._notify_operators(text, 'AI 客服：訪客要求真人客服', notification_type='warning')
+        commit_step()
+
+    def _process_notice(self, commit_step):
+        """First visitor message of a handoff wait: post the waiting notice
+        (fixed text with the wait minutes, no LLM). Not sent when the wait
+        is over or an operator took over meanwhile."""
+        channel = self.livechat_channel_id
+        session = self.discuss_channel_id
+        if not channel or not channel.ai_enabled:
+            self._finish('skipped', 'AI 已關閉')
+        elif not session._ai_waiting_for_human():
+            self._finish('skipped', '已不在等候真人客服（客服已接手或等候已結束），不送等候通知')
+        else:
+            message = channel._create_bot_message(self.env, session, channel._ai_pause_notice_text())
+            self._finish('done', False, reply_message=message)
         commit_step()
 
     def _finish(self, state, error, reply_message=None):
@@ -652,14 +759,30 @@ class LivechatAiJob(models.Model):
 
     @api.model
     def _recovery_domain(self):
+        """Jobs the cron runs: pending jobs whose thread was lost, running
+        jobs whose process died, and deferred jobs that are due."""
         now = fields.Datetime.now()
         return [
-            '|',
+            '|', '|',
             '&', ('state', '=', 'pending'),
             ('run_after', '<', now - timedelta(seconds=STALE_PENDING_SECONDS)),
+            '&', '&', ('state', '=', 'pending'), ('deferred', '=', True),
+            ('run_after', '<=', now),
             '&', ('state', '=', 'running'),
             ('started_at', '<', now - timedelta(seconds=STALE_RUNNING_SECONDS)),
         ]
+
+    @api.model
+    def _stale_job_count(self, minutes=MONITOR_STALE_MINUTES):
+        """Settings monitoring (P1-6): pending jobs due more than `minutes`
+        ago and jobs running for more than `minutes` (deferred jobs that are
+        not due yet are not counted)."""
+        cutoff = fields.Datetime.now() - timedelta(minutes=minutes)
+        return self.sudo().search_count([
+            '|',
+            '&', ('state', '=', 'pending'), ('run_after', '<', cutoff),
+            '&', ('state', '=', 'running'), ('started_at', '<', cutoff),
+        ])
 
     @api.model
     def _cron_recover_jobs(self, commit=True):

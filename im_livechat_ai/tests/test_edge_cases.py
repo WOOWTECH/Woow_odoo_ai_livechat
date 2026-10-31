@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock, PropertyMock
 import requests
 
 from odoo import fields
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
@@ -224,21 +224,22 @@ class TestConstraintEdgeCases(TransactionCase):
 
     # --- Disabled AI bypasses range checks ---
 
-    def test_disabled_ai_allows_any_max_history(self):
-        """When AI is disabled, range constraints should not fire."""
+    def test_disabled_ai_still_checks_max_history(self):
+        """P1-1: range constraints also apply while AI is disabled."""
         channel = self.env['im_livechat.channel'].create({
             'name': 'Disabled Test',
             'ai_enabled': False,
         })
-        # Should not raise even with 0 because ai_enabled=False
-        channel.write({'ai_max_history': 0})
+        with self.assertRaises(ValidationError):
+            channel.write({'ai_max_history': 0})
 
-    def test_disabled_ai_allows_any_temperature(self):
+    def test_disabled_ai_still_checks_temperature(self):
         channel = self.env['im_livechat.channel'].create({
             'name': 'Disabled Test 2',
             'ai_enabled': False,
         })
-        channel.write({'ai_temperature': 5.0})
+        with self.assertRaises(ValidationError):
+            channel.write({'ai_temperature': 5.0})
 
     # --- Required fields when enabling AI ---
 
@@ -420,10 +421,12 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         self.channel.write({'ai_temperature': 0.7})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_max_tokens_zero_excluded(self, mock_post):
-        """Max tokens 0 should NOT be included in payload."""
-        # 0 is rejected by the constraint while AI is on; disable to store it.
-        self.channel.write({'ai_enabled': False, 'ai_max_tokens': 0})
+    def test_max_tokens_zero_uses_default(self, mock_post):
+        """A stored 0 (legacy data; the constraint rejects it) is sent as the
+        default 1024, never as an unbounded request (P1-1 runtime clamp)."""
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_tokens = 0 WHERE id = %s",
+                            (self.channel.id,))
+        self.env.invalidate_all()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'choices': [{'message': {'content': 'OK'}}]}
@@ -432,10 +435,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
 
         self.channel._call_llm_api([{'role': 'user', 'content': 'test'}])
         payload = mock_post.call_args[1]['json']
-        self.assertNotIn('max_tokens', payload)
-
-        # Restore
-        self.channel.write({'ai_max_tokens': 1024, 'ai_enabled': True})
+        self.assertEqual(payload['max_tokens'], 1024)
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_authorization_header_format(self, mock_post):
@@ -676,9 +676,10 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
     # --- Max history clamping ---
 
     def test_max_history_none_defaults_to_50(self):
-        """ai_max_history=0 (only storable with AI off) falls back to 50 internally."""
-        self.channel.write({'ai_enabled': False})
-        self.channel.write({'ai_max_history': 0})
+        """ai_max_history=0 (legacy data only) falls back to 50 internally."""
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 0 WHERE id = %s",
+                            (self.channel.id,))
+        self.env.invalidate_all()
         # _build_llm_messages clamps: max(1, min(0 or 50, 200)) = 50
         self._post_msg('Msg 1', author_id=self.visitor.id)
         self._post_msg('Msg 2', author_id=self.visitor.id)
@@ -687,7 +688,7 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
         # Both messages fit in the 50-message fallback window
         self.assertEqual(len(non_system), 2)
         # Restore
-        self.channel.write({'ai_enabled': True, 'ai_max_history': 50})
+        self.channel.write({'ai_max_history': 50})
 
     # --- Message type filtering ---
 

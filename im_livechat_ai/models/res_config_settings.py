@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+from datetime import timedelta
 
 from odoo import api, fields, models, _
 from odoo.exceptions import AccessError, ValidationError
@@ -29,8 +30,14 @@ class ResConfigSettings(models.TransientModel):
     The API key is write-only: it is never loaded back into the form and is
     not stored in the transient res_config_settings table (non-stored field
     whose inverse writes the parameter directly).
+
+    default_get() and get_values() are public RPC methods that Odoo does not
+    check against the field groups or the model access rights, so they drop
+    the livechat_ai_* values for anyone but system administrators (P1-3).
     """
     _inherit = 'res.config.settings'
+
+    _LIVECHAT_AI_FIELD_PREFIX = 'livechat_ai_'
 
     livechat_ai_base_url = fields.Char(
         string='LiteLLM Base URL',
@@ -72,6 +79,59 @@ class ResConfigSettings(models.TransientModel):
         help='API logs older than this are deleted by the daily cleanup job.',
     )
 
+    # --- Reply job monitoring (P1-6) ---
+    livechat_ai_cron_lastcall = fields.Datetime(
+        string='Recovery Cron Last Run',
+        compute='_compute_livechat_ai_monitoring',
+        groups='base.group_system',
+    )
+    livechat_ai_stale_job_count = fields.Integer(
+        string='Unfinished Jobs Older Than 5 Minutes',
+        compute='_compute_livechat_ai_monitoring',
+        groups='base.group_system',
+    )
+    livechat_ai_job_warning = fields.Text(
+        string='Reply Job Warning',
+        compute='_compute_livechat_ai_monitoring',
+        groups='base.group_system',
+    )
+
+    # company_id gets its default in the form's first onchange: without a
+    # dependency Odoo leaves these fields empty in that onchange (the
+    # settings page would show nothing).
+    @api.depends('company_id')
+    def _compute_livechat_ai_monitoring(self):
+        Job = self.env['im_livechat.ai.job']
+        cron = self.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs', raise_if_not_found=False)
+        cron = cron.sudo() if cron else cron
+        lastcall = cron.lastcall if cron else False
+        stale = Job._stale_job_count()
+        minutes = 5
+        warnings = []
+        if not cron or not cron.active:
+            warnings.append(_('排程「Live Chat AI: Recover Reply Jobs」已停用，重啟或部署後遺留的 AI 回覆不會補送。'))
+        elif not lastcall or lastcall < fields.Datetime.now() - timedelta(minutes=minutes):
+            warnings.append(_(
+                '排程「Live Chat AI: Recover Reply Jobs」超過 %(minutes)s 分鐘沒有執行。'
+                '請確認 Odoo 的排程程序（cron worker，max_cron_threads ≥ 1）正在執行；'
+                '重啟或部署後的回覆與等候真人後的自動回覆都要靠它送出。',
+                minutes=minutes,
+            ))
+        if stale:
+            warnings.append(_(
+                '有 %(count)s 個 AI 回覆工作超過 %(minutes)s 分鐘仍未完成，請到「AI 回覆工作」查看。',
+                count=stale, minutes=minutes,
+            ))
+        text = '\n'.join(warnings) or False
+        for settings in self:
+            settings.livechat_ai_cron_lastcall = lastcall
+            settings.livechat_ai_stale_job_count = stale
+            settings.livechat_ai_job_warning = text
+
+    # company_id gets its default in the form's first onchange: without a
+    # dependency Odoo leaves these fields empty in that onchange (the
+    # settings page would show nothing).
+    @api.depends('company_id')
     def _compute_livechat_ai_api_key(self):
         _base_url, api_key = self.env['im_livechat.channel']._get_llm_connection()
         for settings in self:
@@ -90,6 +150,10 @@ class ResConfigSettings(models.TransientModel):
         # the computed (empty) value instead of echoing the key.
         self.invalidate_recordset(['livechat_ai_api_key', 'livechat_ai_api_key_set'])
 
+    # company_id gets its default in the form's first onchange: without a
+    # dependency Odoo leaves these fields empty in that onchange (the
+    # settings page would show nothing).
+    @api.depends('company_id')
     def _compute_livechat_ai_model_list(self):
         model_ids = self.env['im_livechat.channel']._get_cached_llm_models()
         text = '\n'.join(model_ids) if model_ids else False
@@ -99,7 +163,6 @@ class ResConfigSettings(models.TransientModel):
     def _check_livechat_ai_admin(self):
         if not self.env.su and not self.env.user.has_group('base.group_system'):
             raise AccessError(_('Only system administrators can change the Live Chat AI connection.'))
-
     @api.constrains('livechat_ai_base_url')
     def _check_livechat_ai_base_url(self):
         for settings in self:
@@ -114,14 +177,34 @@ class ResConfigSettings(models.TransientModel):
                 raise ValidationError(_('Log retention must be at least 1 day.'))
 
     @api.model
+    def _livechat_ai_values_allowed(self):
+        return self.env.su or self.env.user.has_group('base.group_system')
+
+    @api.model
+    def _livechat_ai_strip(self, values):
+        """Remove the livechat_ai_* values for non-system users (P1-3)."""
+        if self._livechat_ai_values_allowed():
+            return values
+        return {
+            name: value for name, value in values.items()
+            if not name.startswith(self._LIVECHAT_AI_FIELD_PREFIX)
+        }
+
+    @api.model
     def default_get(self, fields_list):
         res = super().default_get(fields_list)
         # A hand-edited invalid parameter must not block saving Settings.
         if 'livechat_ai_log_retention_days' in res and (res['livechat_ai_log_retention_days'] or 0) < 1:
             res['livechat_ai_log_retention_days'] = DEFAULT_LOG_RETENTION_DAYS
-        return res
+        return self._livechat_ai_strip(res)
+
+    def get_values(self):
+        return self._livechat_ai_strip(super().get_values())
 
     def set_values(self):
+        # Odoo writes every config_parameter field through sudo here; a
+        # non-system caller (direct RPC) must not change the LiteLLM settings.
+        self._check_livechat_ai_admin()
         ICP = self.env['ir.config_parameter'].sudo()
         payload_was_on = str(ICP.get_param(ICP_LOG_PAYLOAD)).lower() in ('true', '1')
         super().set_values()

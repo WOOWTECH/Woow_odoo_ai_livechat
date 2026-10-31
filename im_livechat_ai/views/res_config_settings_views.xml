@@ -42,6 +42,25 @@
                             </div>
                         </setting>
                     </block>
+                    <block title="Reply Jobs" name="livechat_ai_jobs">
+                        <setting id="livechat_ai_jobs_monitoring_setting" string="Recovery Cron &amp; Reply Jobs"
+                                 help="Replies after a restart or deploy, and the AI answers after an unanswered handoff wait, are sent by the cron &quot;Live Chat AI: Recover Reply Jobs&quot; (every 2 minutes). A cron process must be running.">
+                            <div class="row mt8">
+                                <label for="livechat_ai_cron_lastcall" class="col-lg-6 o_light_label"/>
+                                <field name="livechat_ai_cron_lastcall" readonly="1" class="col-lg-6"/>
+                            </div>
+                            <div class="row">
+                                <label for="livechat_ai_stale_job_count" class="col-lg-6 o_light_label"/>
+                                <field name="livechat_ai_stale_job_count" readonly="1" class="col-lg-6"/>
+                            </div>
+                            <div class="alert alert-warning mt8" role="alert" invisible="not livechat_ai_job_warning">
+                                <field name="livechat_ai_job_warning" readonly="1"/>
+                            </div>
+                            <div class="text-success mt8" invisible="livechat_ai_job_warning">
+                                The recovery cron ran in the last 5 minutes and no reply job is stuck.
+                            </div>
+                        </setting>
+                    </block>
                     <block title="API Logs &amp; Privacy" name="livechat_ai_logs">
                         <setting id="livechat_ai_log_payload_setting" string="Log Conversation Content"
                                  help="Keep the messages exchanged with the LLM in the API logs. Turn on only while debugging; turning it off erases stored content.">

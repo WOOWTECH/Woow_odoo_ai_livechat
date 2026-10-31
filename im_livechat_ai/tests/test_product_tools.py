@@ -389,7 +389,8 @@ class TestProductGuard(ProductToolsCase):
         self._post('崁燈多少錢？')
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertTrue(messages[0]['content'].startswith('你是 woowtech 的客服助理。'))
+        self.assertTrue(messages[0]['content'].startswith(self.channel._ai_identity_block()))
+        self.assertIn('你是 woowtech 的客服助理。', messages[0]['content'])
         self.assertTrue(messages[0]['content'].endswith(PRODUCT_GUARD_WITH_TOOLS))
         self.assertIn('絕對不可編造價格', PRODUCT_GUARD_WITH_TOOLS)
 

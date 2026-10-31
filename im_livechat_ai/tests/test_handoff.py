@@ -23,6 +23,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     DEFAULT_HANDOFF_KEYWORDS,
     DEFAULT_HANDOFF_MESSAGE,
     DEFAULT_HANDOFF_PAUSE_MINUTES,
+    DEFAULT_HANDOFF_WAIT_MINUTES,
     ICP_API_KEY,
     LEGACY_ERROR_MESSAGE,
 )
@@ -297,7 +298,8 @@ class TestKeywordHandoff(HandoffCase):
         self.assertEqual(job.message_id, msg)
         self.assertTrue(self.session._ai_is_paused())
         self.assertGreaterEqual(self.session.ai_paused_until,
-                                before + timedelta(minutes=DEFAULT_HANDOFF_PAUSE_MINUTES - 1))
+                                before + timedelta(minutes=DEFAULT_HANDOFF_WAIT_MINUTES - 1))
+        self.assertEqual(self.session.ai_pause_reason, 'handoff')
         with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send:
             job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
@@ -314,10 +316,13 @@ class TestKeywordHandoff(HandoffCase):
         self.assertEqual(len(calls), 1)
         self.assertIn(self.operator, calls[0].args[0])
         self.assertTrue(calls[0].args[2]['sticky'])
-        # Replied once: more visitor messages (even with keywords) do nothing.
-        self._post('真人在嗎？', self.visitor)
+        # Handoff notice sent once: more visitor messages (even with keywords)
+        # during the wait get one waiting notice and deferred replies only.
+        self._post('找真人在嗎？', self.visitor)
         self._post('還在嗎', self.visitor)
-        self.assertEqual(len(self._jobs()), 1)
+        jobs = self._jobs()
+        self.assertEqual(jobs.mapped('kind'), ['handoff', 'notice', 'reply', 'reply'])
+        self.assertEqual(len(jobs.filtered('deferred')), 2)
         job._run_job(commit=False)
         self.assertEqual(len(self._bot_messages()), 1)
 
@@ -331,9 +336,10 @@ class TestKeywordHandoff(HandoffCase):
     def test_default_keywords(self):
         self.assertEqual(self.channel.ai_handoff_keywords, DEFAULT_HANDOFF_KEYWORDS)
         hit = self.channel._ai_is_handoff_request
-        for text in ('真人', '找客服', '人工服務', 'I need a HUMAN', 'Agent please', 'operator?'):
+        for text in ('找真人', '找客服', '轉人工服務', 'I want to talk to a HUMAN', 'Live agent please'):
             self.assertTrue(hit(text), text)
-        for text in ('請問價格', 'reagent', 'agents', 'cooperators', ''):
+        for text in ('請問價格', '真人', '客服', '人工服務', 'human', 'Agent please', 'operator?',
+                     'reagent', 'agents', 'cooperators', ''):
             self.assertFalse(hit(text), text)
 
     def test_custom_keywords_and_message(self):
@@ -357,13 +363,13 @@ class TestKeywordHandoff(HandoffCase):
         self.assertFalse(self.session.ai_paused_until)
 
     def test_keyword_in_html_body(self):
-        self._post('<p>麻煩<b>真人</b>回覆</p>', self.visitor)
+        self._post('<p>麻煩<b>找真人</b>回覆</p>', self.visitor)
         self.assertEqual(self._jobs().kind, 'handoff')
 
     def test_handoff_without_litellm(self):
         """The handoff notice needs no LLM, so it works without the key."""
         self.env['ir.config_parameter'].sudo().set_param(ICP_API_KEY, False)
-        self._post('客服在嗎', self.visitor)
+        self._post('找客服', self.visitor)
         job = self._jobs()
         self.assertEqual(job.kind, 'handoff')
         job._run_job(commit=False)
@@ -412,7 +418,7 @@ class TestHistoryRoles(HandoffCase):
         self._msg(None, '匿名訪客')
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertTrue(messages[0]['content'].startswith('你是客服助理。'))
+        self.assertTrue(messages[0]['content'].startswith(self.channel._ai_identity_block() + '\n\n你是客服助理。'))
         self.assertIn(OPERATOR_SYSTEM_NOTE, messages[0]['content'])
         self.assertEqual(messages[1:], [
             {'role': 'user', 'content': '請問可以退貨嗎？'},
@@ -426,7 +432,9 @@ class TestHistoryRoles(HandoffCase):
         self._msg(self.visitor, 'hi')
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0], {
-            'role': 'system', 'content': '你是客服助理。\n\n' + self.channel._ai_product_guard(),
+            'role': 'system',
+            'content': self.channel._ai_identity_block() + '\n\n你是客服助理。\n\n'
+            + self.channel._ai_product_guard(),
         })
 
     def test_operator_note_without_custom_prompt(self):
@@ -436,7 +444,8 @@ class TestHistoryRoles(HandoffCase):
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0], {
             'role': 'system',
-            'content': OPERATOR_SYSTEM_NOTE + '\n\n' + self.channel._ai_product_guard(),
+            'content': self.channel._ai_identity_block() + '\n\n' + OPERATOR_SYSTEM_NOTE + '\n\n'
+            + self.channel._ai_product_guard(),
         })
 
     @patch(POST)

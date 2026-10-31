@@ -44,6 +44,11 @@ msgid "AI Integration"
 msgstr "AI 整合"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_pause_reason
+msgid "AI Pause Reason"
+msgstr "AI 暫停原因"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_paused_until
 msgid "AI Paused Until"
 msgstr "AI 暫停到"
@@ -67,14 +72,23 @@ msgstr "AI 回覆工作"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__kind
-msgid ""
-"AI Reply: answer with the LLM. Human Handoff: the visitor asked for a human; send the handoff message and notify the operators."
-msgstr "AI 回覆：由 LLM 回答。轉真人客服：訪客要求真人客服，送出轉接訊息並通知客服。"
+msgid "AI Reply: answer with the LLM. Human Handoff: the visitor asked for a human; send the handoff message and notify the operators. Waiting Notice: first visitor message while waiting for a human; send the waiting notice once (no LLM)."
+msgstr "AI 回覆：用 LLM 回答。轉真人：訪客要求真人客服，送出轉接訊息並通知客服。等候通知：等候真人期間訪客的第一則訊息，送一次等候通知（不呼叫 LLM）。"
 
 #. module: im_livechat_ai
 #: model:ir.ui.menu,name:im_livechat_ai.livechat_ai_settings_menu
 msgid "AI Settings"
 msgstr "AI 設定"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_pause_notice_sent
+msgid "AI Waiting Notice Sent"
+msgstr "已送等候通知"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_welcome_message
+msgid "AI Welcome Message"
+msgstr "AI 歡迎訊息"
 
 #. module: im_livechat_ai
 #. odoo-python
@@ -86,6 +100,12 @@ msgstr "此頻道尚未啟用 AI 整合。"
 #: model:res.partner.category,name:im_livechat_ai.partner_category_ai_bot
 msgid "AI 機器人"
 msgstr "AI 機器人"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "AI 機器人的聯絡人由系統自動建立，不能指定。"
+msgstr "AI 機器人的聯絡人由系統自動建立，不能指定。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_api_key_set
@@ -186,9 +206,8 @@ msgstr "清理 LLM API 日誌"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
-msgid ""
-"Comma-separated words. When a visitor message contains one of them, the AI sends the handoff message once, pauses and notifies the operators. Latin words match whole words only, case-insensitive."
-msgstr "以逗號分隔。訪客訊息包含其中任一詞時，AI 送出一次轉接訊息、暫停回覆並通知客服。英文詞須完整比對，不分大小寫。"
+msgid "Comma-separated words or phrases. When a visitor message contains one of them, the AI sends the handoff message once, waits for an operator and notifies the operators. Chinese entries match anywhere in the message; English entries match whole words or phrases only, case-insensitive."
+msgstr "以逗號分隔的字詞或片語。訪客訊息含其中之一時，AI 回一次轉接訊息、通知客服並等候客服接手。中文關鍵字出現在訊息任何位置都算；英文字詞要整個字或整個片語相符，不分大小寫。"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
@@ -207,8 +226,7 @@ msgstr "設定"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_temperature
-msgid ""
-"Controls randomness of LLM responses. Lower = more deterministic (0.0-2.0)"
+msgid "Controls randomness of LLM responses. Lower = more deterministic (0.0-2.0)"
 msgstr "控制 LLM 回覆的隨機性。越低越確定（0.0-2.0）"
 
 #. module: im_livechat_ai
@@ -233,6 +251,11 @@ msgstr "建立時間"
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
 msgid "Date"
 msgstr "日期"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__deferred
+msgid "Deferred"
+msgstr "延後"
 
 #. module: im_livechat_ai
 #: model:ir.model,name:im_livechat_ai.model_discuss_channel
@@ -318,6 +341,11 @@ msgid "Handoff Message"
 msgstr "轉接訊息"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid "Highest message id sent to the LLM as conversation; visitor messages up to it are covered by this job's reply"
+msgstr "送給 AI 當作對話內容的最大訊息 ID；這個 ID 以前的訪客訊息都已由此工作的回覆一併回答"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__attempts
 msgid "How many times processing of this job started (at most 3)"
 msgstr "此工作開始處理的次數（最多 3 次）"
@@ -342,8 +370,7 @@ msgstr "ID"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
-msgid ""
-"Keep the messages exchanged with the LLM in the API logs. Turn on only while debugging; turning it off erases stored content."
+msgid "Keep the messages exchanged with the LLM in the API logs. Turn on only while debugging; turning it off erases stored content."
 msgstr "在 API 日誌中保存與 LLM 往來的對話內容。只在除錯時暫時開啟；關閉時會清除已保存的內容。"
 
 #. module: im_livechat_ai
@@ -353,8 +380,7 @@ msgstr "LLM API 日誌"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__llm_calls
-msgid ""
-"LLM API calls made in the last run (one per product lookup round plus the answer, and at most 2 retries)"
+msgid "LLM API calls made in the last run (one per product lookup round plus the answer, and at most 2 retries)"
 msgstr "最近一次處理呼叫 LLM API 的次數（每輪商品查詢 1 次加上回答 1 次，另外最多重試 2 次）"
 
 #. module: im_livechat_ai
@@ -373,6 +399,11 @@ msgid "Last 7 Days"
 msgstr "最近 7 天"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid "Last Message In Context"
+msgstr "送給 AI 的最後一則訊息"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_uid
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_uid
 msgid "Last Updated by"
@@ -386,14 +417,12 @@ msgstr "最後更新時間"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_api_key
-msgid ""
-"Leave empty to keep the current key. The saved key is never shown again."
+msgid "Leave empty to keep the current key. The saved key is never shown again."
 msgstr "留空表示沿用目前的金鑰。儲存後的金鑰不會再顯示。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_product_lookup
-msgid ""
-"Let the AI look up published products on the website (name, website price, specifications, link) while answering. Needs the eCommerce module. Prices are never quoted from anything else."
+msgid "Let the AI look up published products on the website (name, website price, specifications, link) while answering. Needs the eCommerce module. Prices are never quoted from anything else."
 msgstr "讓 AI 回覆時查詢官網已上架的商品（品名、官網售價、規格、連結）。需要安裝電子商務模組。AI 不會使用其他來源的價格。"
 
 #. module: im_livechat_ai
@@ -421,8 +450,7 @@ msgstr "LiteLLM 連線"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_model
-msgid ""
-"LiteLLM model used by this channel. The list comes from the models cached by \"Fetch Available Models\" in Settings > Live Chat AI."
+msgid "LiteLLM model used by this channel. The list comes from the models cached by \"Fetch Available Models\" in Settings > Live Chat AI."
 msgstr "此頻道使用的 LiteLLM 模型。清單來自「設定 → Live Chat AI」中「讀取可用模型」所讀到的模型。"
 
 #. module: im_livechat_ai
@@ -517,9 +545,14 @@ msgid "Max Tokens must be at least 1."
 msgstr "最大 Token 數至少要 1。"
 
 #. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Max Tokens 必須介於 1 到 %s 之間。"
+msgstr "Max Tokens 必須介於 1 到 %s 之間。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_history
-msgid ""
-"Maximum number of recent messages to include as conversation context (1-200)"
+msgid "Maximum number of recent messages to include as conversation context (1-200)"
 msgstr "作為對話上下文包含的最近訊息最大數量（1-200）"
 
 #. module: im_livechat_ai
@@ -593,9 +626,18 @@ msgstr "只有系統管理員可以變更 Live Chat AI 連線設定。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_base_url
-msgid ""
-"OpenAI-compatible base URL of the company LiteLLM gateway, ending in /v1."
+msgid "OpenAI-compatible base URL of the company LiteLLM gateway, ending in /v1."
 msgstr "公司 LiteLLM 閘道的 OpenAI 相容位址，結尾為 /v1。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__discuss_channel__ai_pause_reason__operator
+msgid "Operator replied"
+msgstr "客服已發言"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_pause_reason
+msgid "Operator replied: the AI stays silent until the pause ends. Visitor asked for a human: the AI waits for an operator; if none replies, it answers the messages written meanwhile when the wait ends."
+msgstr "客服已發言：暫停結束前 AI 不出聲。訪客要求真人：AI 等候客服接手；等候結束時若沒有客服回覆，AI 會回答等候期間的訊息。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
@@ -630,8 +672,7 @@ msgstr "處理狀況"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__tool_names
-msgid ""
-"Product lookup tools the model asked for in this response (names only; the arguments are conversation content)"
+msgid "Product lookup tools the model asked for in this response (names only; the arguments are conversation content)"
 msgstr "模型在這次回應中要求使用的商品查詢工具（只記名稱；參數屬於對話內容，不記錄）"
 
 #. module: im_livechat_ai
@@ -640,9 +681,39 @@ msgid "Prompt Tokens"
 msgstr "Prompt Token 數"
 
 #. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Recovery Cron & Reply Jobs"
+msgstr "補救排程與回覆工作"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_cron_lastcall
+msgid "Recovery Cron Last Run"
+msgstr "補救排程上次執行"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Replies after a restart or deploy, and the AI answers after an unanswered handoff wait, are sent by the cron \"Live Chat AI: Recover Reply Jobs\" (every 2 minutes). A cron process must be running."
+msgstr "重啟或部署後的回覆，以及等候真人逾時後的 AI 回覆，都由排程「Live Chat AI: Recover Reply Jobs」（每 2 分鐘）送出，必須有排程程序在執行。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_job_warning
+msgid "Reply Job Warning"
+msgstr "回覆工作警告"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Reply Jobs"
+msgstr "回覆工作"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__reply_message_id
 msgid "Reply Message"
 msgstr "回覆訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__deferred
+msgid "Reply to a message written while the AI waited for an operator: run by the recovery cron when the wait ends (Run After), closed quietly if an operator replied meanwhile."
+msgstr "等候真人期間訪客訊息的回覆：等候結束（預定處理時間）時由補救排程執行；若期間客服已回覆，就安靜關閉。"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
@@ -671,8 +742,7 @@ msgstr "回應時間（秒）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
-msgid ""
-"Retries after a failed or timed-out LLM call (0-2). Calls time out after 45 seconds; retries wait 3 seconds, then 10 seconds."
+msgid "Retries after a failed or timed-out LLM call (0-2). Calls time out after 45 seconds; retries wait 3 seconds, then 10 seconds."
 msgstr "LLM 呼叫失敗或逾時後的重試次數（0-2）。每次呼叫 45 秒逾時；重試前分別等待 3 秒與 10 秒。"
 
 #. module: im_livechat_ai
@@ -712,6 +782,11 @@ msgid "Search API Logs"
 msgstr "搜尋 API 日誌"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_pause_notice
+msgid "Sent once to the first visitor message written while the AI waits for an operator after a handoff request. %(minutes)s is replaced with the wait minutes."
+msgstr "訪客要求真人後、AI 等候客服期間，訪客的第一則訊息會收到這則回覆（每次等候一次）。%(minutes)s 會換成等候分鐘數。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_message
 msgid "Sent to the visitor when they ask for a human operator"
 msgstr "訪客要求真人客服時送給訪客的訊息"
@@ -720,6 +795,11 @@ msgstr "訪客要求真人客服時送給訪客的訊息"
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__error_message
 msgid "Short error message if the API call failed (no upstream response body)"
 msgstr "API 呼叫失敗時的簡短錯誤訊息（不含上游回應內容）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_welcome_message
+msgid "Shown as the welcome message of the chat window while AI is enabled (instead of the channel welcome message), so visitors know they are talking to an AI."
+msgstr "啟用 AI 時，聊天視窗以這則訊息作為歡迎訊息（取代頻道原本的歡迎訊息），讓訪客知道正在和 AI 對話。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__skipped
@@ -752,8 +832,7 @@ msgstr "API 呼叫狀態"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_log_payload
-msgid ""
-"Store the messages sent to and received from the LLM in the API logs. Keep off unless debugging; when turned off, stored content is erased."
+msgid "Store the messages sent to and received from the LLM in the API logs. Keep off unless debugging; when turned off, stored content is erased."
 msgstr "在 API 日誌中保存送給 LLM 與 LLM 回覆的內容。除錯以外請保持關閉；關閉時會清除已保存的內容。"
 
 #. module: im_livechat_ai
@@ -796,8 +875,7 @@ msgstr "測試連線"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_paused_until
-msgid ""
-"The AI does not answer this live chat conversation before this time: an operator replied or the visitor asked for a human."
+msgid "The AI does not answer this live chat conversation before this time: an operator replied or the visitor asked for a human."
 msgstr "在此時間之前，AI 不會回覆這段即時聊天對話：真人客服已回覆，或訪客要求真人客服。"
 
 #. module: im_livechat_ai
@@ -829,27 +907,33 @@ msgstr "此次 API 呼叫所屬的即時聊天頻道"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__request_payload
-msgid ""
-"The messages array sent to the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
+msgid "The messages array sent to the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
 msgstr "送給 LLM API 的訊息（JSON）。只有在「設定 → Live Chat AI」開啟「記錄對話內容」時才會保存。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
-msgid ""
-"The partner record used as the author for AI-generated messages (created by "
-"the module; it cannot be chosen)"
+msgid "The partner record used as the author for AI-generated messages (created by the module; it cannot be chosen)"
 msgstr "用作 AI 生成訊息作者的聯絡人記錄（由模組自動建立，不能指定）"
 
 #. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "The recovery cron ran in the last 5 minutes and no reply job is stuck."
+msgstr "補救排程在 5 分鐘內有執行，沒有卡住的回覆工作。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_payload
-msgid ""
-"The response received from the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
+msgid "The response received from the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
 msgstr "LLM API 的回應（JSON）。只有在「設定 → Live Chat AI」開啟「記錄對話內容」時才會保存。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__message_id
 msgid "The visitor message that created this job"
 msgstr "建立此工作的訪客訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_pause_notice_sent
+msgid "The waiting notice was already sent during the current handoff wait."
+msgstr "這次等候真人期間已經送過等候通知。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_time
@@ -892,9 +976,13 @@ msgid "Type"
 msgstr "類型"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_stale_job_count
+msgid "Unfinished Jobs Older Than 5 Minutes"
+msgstr "超過 5 分鐘未完成的工作"
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
-msgid ""
-"Use the dedicated odoo-livechat key. Leave empty to keep the current key."
+msgid "Use the dedicated odoo-livechat key. Leave empty to keep the current key."
 msgstr "請使用專用的 odoo-livechat 金鑰。留空表示沿用目前的金鑰。"
 
 #. module: im_livechat_ai
@@ -903,19 +991,36 @@ msgid "View API Logs"
 msgstr "查看 API 日誌"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
-msgid ""
-"When an operator posts in a conversation, or the visitor asks for a human, the AI stops answering that conversation for this many minutes (1-1440)."
-msgstr "真人客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話的分鐘數（1-1440）。"
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__discuss_channel__ai_pause_reason__handoff
+msgid "Visitor asked for a human"
+msgstr "訪客要求真人"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes
+msgid "Wait For Human After Handoff Request (minutes)"
+msgstr "要求真人後等候（分鐘）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_pause_notice
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__notice
+msgid "Waiting Notice"
+msgstr "等候通知"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid ""
-"When an operator posts in a conversation, or the visitor writes one of\n"
-"                            the keywords, the AI stops answering that conversation for this many minutes.\n"
-"                            For a keyword the visitor gets the handoff message once and the operators\n"
-"                            are notified."
-msgstr "真人客服在對話中發言，或訪客寫到任一關鍵字時，AI 會在設定的分鐘數內暫停回覆這段對話。若是關鍵字，訪客會收到一次轉接訊息，並通知客服。"
+"When an operator posts in a conversation, the AI stays silent for the pause\n"
+"                            minutes (every operator message extends it). When the visitor writes one of\n"
+"                            the keywords, the visitor gets the handoff message, the operators are notified\n"
+"                            and the AI waits for an operator; the first visitor message during the wait\n"
+"                            gets the waiting notice once. If no operator replies before the wait ends, the\n"
+"                            AI answers the messages the visitor wrote meanwhile."
+msgstr "客服在對話中發言後，AI 在暫停分鐘數內不出聲（客服每次發言都會延長）。訪客寫到關鍵字時，會收到轉接訊息、客服會收到通知，AI 開始等候客服接手；等候期間訪客的第一則訊息會收到一次等候通知。等候結束前若沒有客服回覆，AI 會回答訪客在等候期間寫的訊息。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
+msgid "When an operator posts in a conversation, the AI stops answering that conversation for this many minutes; every further operator message extends the pause again (1-1440)."
+msgstr "客服在對話中發言後，AI 暫停回覆這段對話的分鐘數；客服每次發言都會再延長（1-1440）。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__timestamp
@@ -923,9 +1028,20 @@ msgid "When the API call was made"
 msgstr "API 呼叫的時間"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes
+msgid "When the visitor asks for a human, the AI waits this many minutes for an operator. If no operator replies in that time, the AI answers the messages the visitor sent meanwhile (1-1440)."
+msgstr "訪客要求真人後，AI 等候客服接手的分鐘數；這段時間內沒有客服回覆，AI 會回答訪客在等候期間寫的訊息（1-1440）。"
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid ""
-"You are a helpful customer service assistant. Please answer in the user's language..."
+"While AI is enabled, visitors see this welcome message instead of the\n"
+"                                channel welcome message, so they know they are talking to an AI."
+msgstr "啟用 AI 時，訪客看到的是這則歡迎訊息（取代頻道原本的歡迎訊息），讓他們知道正在和 AI 對話。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "You are a helpful customer service assistant. Please answer in the user's language..."
 msgstr "你是一位親切的客服助理，請用使用者的語言回答…"
 
 #. module: im_livechat_ai
@@ -937,6 +1053,18 @@ msgstr "https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1"
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
 msgid "sk-..."
 msgstr "sk-..."
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "只有 Live Chat 管理員可以使用此功能。"
+msgstr "只有 Live Chat 管理員可以使用此功能。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "只有 Live Chat 管理員可以設定 AI。"
+msgstr "只有 Live Chat 管理員可以設定 AI。"
 
 #. module: im_livechat_ai
 #. odoo-python
@@ -958,9 +1086,39 @@ msgstr "已讀取 %(count)s 個模型（注意：清單中沒有預設模型 %(m
 
 #. module: im_livechat_ai
 #. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "排程「Live Chat AI: Recover Reply Jobs」已停用，重啟或部署後遺留的 AI 回覆不會補送。"
+msgstr "排程「Live Chat AI: Recover Reply Jobs」已停用，重啟或部署後遺留的 AI 回覆不會補送。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "排程「Live Chat AI: Recover Reply Jobs」超過 %(minutes)s 分鐘沒有執行。請確認 Odoo 的排程程序（cron worker，max_cron_threads ≥ 1）正在執行；重啟或部署後的回覆與等候真人後的自動回覆都要靠它送出。"
+msgstr "排程「Live Chat AI: Recover Reply Jobs」超過 %(minutes)s 分鐘沒有執行。請確認 Odoo 的排程程序（cron worker，max_cron_threads ≥ 1）正在執行；重啟或部署後的回覆與等候真人後的自動回覆都要靠它送出。"
+
+#. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "暫停分鐘數必須介於 1 到 1440 之間。"
 msgstr "暫停分鐘數必須介於 1 到 1440 之間。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "有 %(count)s 個 AI 回覆工作超過 %(minutes)s 分鐘仍未完成，請到「AI 回覆工作」查看。"
+msgstr "有 %(count)s 個 AI 回覆工作超過 %(minutes)s 分鐘仍未完成，請到「AI 回覆工作」查看。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "模型「%(model)s」不在可用模型清單中。請系統管理員到「設定 → Live Chat AI」按「讀取可用模型」更新清單，再從清單中選擇模型。"
+msgstr "模型「%(model)s」不在可用模型清單中。請系統管理員到「設定 → Live Chat AI」按「讀取可用模型」更新清單，再從清單中選擇模型。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "等候真人客服的分鐘數必須介於 1 到 1440 之間。"
+msgstr "等候真人客服的分鐘數必須介於 1 到 1440 之間。"
 
 #. module: im_livechat_ai
 #. odoo-python
@@ -991,15 +1149,3 @@ msgstr "連線失敗：%(reason)s"
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
 msgstr "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
-msgid "Last Message In Context"
-msgstr "送給 AI 的最後一則訊息"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__context_message_id
-msgid ""
-"Highest message id sent to the LLM as conversation; visitor messages up to "
-"it are covered by this job's reply"
-msgstr "送給 AI 當作對話內容的最大訊息 ID；這個 ID 以前的訪客訊息都已由此工作的回覆一併回答"

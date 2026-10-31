@@ -385,7 +385,7 @@ class TestJobRecovery(AiJobCase):
         message_a = self._visitor_post('問題 A')
         job_a = self._jobs()
         message_b = self.session.message_post(
-            body='真人', author_id=self.visitor.id, message_type='comment',
+            body='找真人', author_id=self.visitor.id, message_type='comment',
             subtype_xmlid='mail.mt_comment')
         job_b = self._jobs() - job_a
         self.assertEqual(job_b.kind, 'handoff')

@@ -10,6 +10,7 @@
                 <field name="livechat_channel_id"/>
                 <field name="discuss_channel_id"/>
                 <field name="kind"/>
+                <field name="deferred" optional="show"/>
                 <field name="state"
                        decoration-success="state == 'done'"
                        decoration-danger="state == 'failed'"
@@ -45,6 +46,7 @@
                         </group>
                         <group string="Processing">
                             <field name="create_date"/>
+                            <field name="deferred"/>
                             <field name="run_after"/>
                             <field name="started_at"/>
                             <field name="finished_at"/>

@@ -26,8 +26,15 @@ Features:
 * Portal (logged-in) customers are answered like guests; internal users,
   the session operator and the bots never trigger the AI
 * Human handoff: an operator's reply pauses the AI for the conversation
-  (30 minutes by default, per channel); visitor keywords such as "真人" or
-  "客服" send a handoff notice once, pause the AI and notify the operators
+  (30 minutes by default, per channel, extended by every operator reply);
+  explicit visitor requests such as "找真人" or "talk to a human" send a
+  handoff notice once, notify the operators and wait for an operator
+  (10 minutes by default); the first visitor message during the wait gets
+  one waiting notice, and if no operator replies the AI answers what the
+  visitor wrote meanwhile when the wait ends (recovery cron)
+* AI disclosure: robot avatar on the AI bot, an AI welcome message in the
+  chat window and a fixed identity block at the start of the system prompt
+* Settings show the last run of the reply recovery cron and stuck jobs
 * Operator replies are sent to the LLM as colleague replies ("[真人客服 name]")
   so the AI does not contradict them
 * Product lookup tools (per channel, on by default, needs eCommerce): the AI

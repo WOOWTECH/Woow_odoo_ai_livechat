@@ -6,10 +6,12 @@ import re
 import time
 from urllib.parse import urlsplit
 
+import base64
+
 import requests
 from markupsafe import Markup
 
-from odoo import api, fields, models, _
+from odoo import api, fields, models, tools, _
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, sql
 
@@ -74,13 +76,41 @@ LEGACY_ERROR_MESSAGE = (
     'Sorry, the AI assistant is temporarily unavailable. '
     'Please try again later or leave your contact information.'
 )
-DEFAULT_HANDOFF_KEYWORDS = '真人,客服,人工,真人客服,human,agent,operator'
+# Explicit requests only (P0-1): single words such as 客服/人工/agent no
+# longer hand the conversation over.
+DEFAULT_HANDOFF_KEYWORDS = (
+    '找真人,真人客服,轉真人,轉人工,人工客服,找客服,聯絡客服,我要客服,'
+    'human agent,talk to a human,real person,live agent'
+)
+# The earlier default; the 18.0.1.1.0 post-migration replaces it.
+LEGACY_HANDOFF_KEYWORDS = '真人,客服,人工,真人客服,human,agent,operator'
 DEFAULT_HANDOFF_MESSAGE = '已幫您通知客服，請稍候。'
-DEFAULT_HANDOFF_PAUSE_MINUTES = 30
+DEFAULT_HANDOFF_PAUSE_MINUTES = 30  # after an operator's reply
+DEFAULT_HANDOFF_WAIT_MINUTES = 10  # after a visitor's handoff request, then the AI resumes
 MAX_HANDOFF_PAUSE_MINUTES = 1440
+# One-time bot reply to the first visitor message during a handoff wait;
+# %(minutes)s is replaced with the wait minutes.
+DEFAULT_PAUSE_NOTICE = (
+    '已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 %(minutes)s 分鐘後繼續為您服務。'
+)
+# Welcome message of AI-enabled channels (AI disclosure, P1-7).
+DEFAULT_WELCOME_MESSAGE = (
+    '您好，我是 AI 客服助理，可以先為您解答商品與價格問題；需要真人客服請輸入「找真人」。'
+)
+# First block of every system prompt (P1-8).
+IDENTITY_TEMPLATE = (
+    '你是 {company} 的 AI 客服助理「{bot}」。被問到身分時就這樣回答；'
+    '不要自稱 ChatGPT、GPT、Codex、OpenAI 或其他產品／模型名稱。'
+)
 DEFAULT_BOT_NAME = 'AI 客服助理'
 LEGACY_BOT_NAME = 'AI Assistant'  # the 18.0.1.0.x default, renamed by the 18.0.1.1.0 migration
+BOT_AVATAR_PATH = 'im_livechat_ai/static/img/ai_bot.png'
 MAX_AI_MAX_TOKENS = 8192
+DEFAULT_AI_MAX_TOKENS = 1024
+MAX_AI_MAX_HISTORY = 200
+DEFAULT_AI_MAX_HISTORY = 50
+MIN_AI_TEMPERATURE = 0.0
+MAX_AI_TEMPERATURE = 2.0
 # Only Live Chat managers configure the AI of a channel; the ai_* fields are
 # neither readable nor writable for operators, employees, portal or public.
 AI_CONFIG_GROUP = 'im_livechat.im_livechat_group_manager'
@@ -97,9 +127,12 @@ _REPLY_FORMAT_RE = re.compile(
 _URL_TRAILING_PUNCTUATION = '.,;:!?\''
 _LINK_MARKUP = Markup('<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>')
 
-# Keywords made only of these characters must match as a whole word
-# ("agent" does not match "reagent"); others (e.g. Chinese) match anywhere.
-_WORD_CHARS_RE = re.compile(r'^[0-9a-z_ ]+$')
+# Keywords made only of these characters (English words or phrases) must
+# match as whole words, case-insensitive, with any whitespace between the
+# words ("live agent" does not match "olive agents"); others (e.g. Chinese)
+# match anywhere in the text.
+_WORD_CHARS_RE = re.compile(r"^[0-9a-z_' \-]+$")
+_PAUSE_NOTICE_PLACEHOLDER_RE = re.compile(r'%\(minutes\)[sd]')
 
 
 class LLMNotConfigured(Exception):
@@ -191,17 +224,43 @@ class ImLivechatChannel(models.Model):
         string='Pause After Human Reply (minutes)',
         groups=AI_CONFIG_GROUP,
         default=DEFAULT_HANDOFF_PAUSE_MINUTES,
-        help='When an operator posts in a conversation, or the visitor asks for a '
-             'human, the AI stops answering that conversation for this many '
-             'minutes (1-1440).',
+        help='When an operator posts in a conversation, the AI stops answering that '
+             'conversation for this many minutes; every further operator message '
+             'extends the pause again (1-1440).',
+    )
+    ai_handoff_wait_minutes = fields.Integer(
+        string='Wait For Human After Handoff Request (minutes)',
+        groups=AI_CONFIG_GROUP,
+        default=DEFAULT_HANDOFF_WAIT_MINUTES,
+        help='When the visitor asks for a human, the AI waits this many minutes for '
+             'an operator. If no operator replies in that time, the AI answers the '
+             'messages the visitor sent meanwhile (1-1440).',
     )
     ai_handoff_keywords = fields.Char(
         string='Human Handoff Keywords',
         groups=AI_CONFIG_GROUP,
         default=DEFAULT_HANDOFF_KEYWORDS,
-        help='Comma-separated words. When a visitor message contains one of them, '
-             'the AI sends the handoff message once, pauses and notifies the '
-             'operators. Latin words match whole words only, case-insensitive.',
+        help='Comma-separated words or phrases. When a visitor message contains one '
+             'of them, the AI sends the handoff message once, waits for an operator '
+             'and notifies the operators. Chinese entries match anywhere in the '
+             'message; English entries match whole words or phrases only, '
+             'case-insensitive.',
+    )
+    ai_pause_notice = fields.Text(
+        string='Waiting Notice',
+        groups=AI_CONFIG_GROUP,
+        default=DEFAULT_PAUSE_NOTICE,
+        help='Sent once to the first visitor message written while the AI waits for '
+             'an operator after a handoff request. %(minutes)s is replaced with the '
+             'wait minutes.',
+    )
+    ai_welcome_message = fields.Text(
+        string='AI Welcome Message',
+        groups=AI_CONFIG_GROUP,
+        default=DEFAULT_WELCOME_MESSAGE,
+        help='Shown as the welcome message of the chat window while AI is enabled '
+             '(instead of the channel welcome message), so visitors know they are '
+             'talking to an AI.',
     )
     ai_handoff_message = fields.Text(
         string='Handoff Message',
@@ -233,47 +292,80 @@ class ImLivechatChannel(models.Model):
              'module. Prices are never quoted from anything else.',
     )
 
-    # --- Constraints ---
+    # --- Constraints (P1-1: checked on every create/write, AI on or off) ---
 
     @api.constrains('ai_max_history')
     def _check_ai_max_history(self):
         """Validate max history range."""
         for record in self:
-            if record.ai_enabled:
-                if record.ai_max_history < 1 or record.ai_max_history > 200:
-                    raise ValidationError(_('Max History Messages must be between 1 and 200.'))
+            if record.ai_max_history < 1 or record.ai_max_history > MAX_AI_MAX_HISTORY:
+                raise ValidationError(_('Max History Messages must be between 1 and 200.'))
 
     @api.constrains('ai_temperature')
     def _check_ai_temperature(self):
         """Validate temperature range."""
         for record in self:
-            if record.ai_enabled:
-                if record.ai_temperature < 0.0 or record.ai_temperature > 2.0:
-                    raise ValidationError(_('Temperature must be between 0.0 and 2.0.'))
+            if record.ai_temperature < MIN_AI_TEMPERATURE or record.ai_temperature > MAX_AI_TEMPERATURE:
+                raise ValidationError(_('Temperature must be between 0.0 and 2.0.'))
 
     @api.constrains('ai_max_tokens')
     def _check_ai_max_tokens(self):
         """Validate max tokens range (bounded: cost per reply)."""
         for record in self:
-            if record.ai_enabled:
-                if record.ai_max_tokens < 1 or record.ai_max_tokens > MAX_AI_MAX_TOKENS:
-                    raise ValidationError(_('Max Tokens 必須介於 1 到 %s 之間。', MAX_AI_MAX_TOKENS))
+            if record.ai_max_tokens < 1 or record.ai_max_tokens > MAX_AI_MAX_TOKENS:
+                raise ValidationError(_('Max Tokens 必須介於 1 到 %s 之間。', MAX_AI_MAX_TOKENS))
 
     @api.constrains('ai_max_retries')
     def _check_ai_max_retries(self):
         """Validate max retries range."""
         for record in self:
-            if record.ai_enabled:
-                if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
-                    raise ValidationError(_('Max Retries must be between 0 and 2.'))
+            if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
+                raise ValidationError(_('Max Retries must be between 0 and 2.'))
 
     @api.constrains('ai_handoff_pause_minutes')
     def _check_ai_handoff_pause_minutes(self):
         for record in self:
-            if record.ai_enabled:
-                minutes = record.ai_handoff_pause_minutes
-                if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
-                    raise ValidationError(_('暫停分鐘數必須介於 1 到 1440 之間。'))
+            minutes = record.ai_handoff_pause_minutes
+            if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
+                raise ValidationError(_('暫停分鐘數必須介於 1 到 1440 之間。'))
+
+    @api.constrains('ai_handoff_wait_minutes')
+    def _check_ai_handoff_wait_minutes(self):
+        for record in self:
+            minutes = record.ai_handoff_wait_minutes
+            if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
+                raise ValidationError(_('等候真人客服的分鐘數必須介於 1 到 1440 之間。'))
+
+    # Re-checked when AI is enabled (values stored before these checks
+    # existed, e.g. by an earlier version, must not reach the LLM).
+    _AI_RANGE_CHECKS = (
+        '_check_ai_max_history',
+        '_check_ai_temperature',
+        '_check_ai_max_tokens',
+        '_check_ai_max_retries',
+        '_check_ai_handoff_pause_minutes',
+        '_check_ai_handoff_wait_minutes',
+    )
+
+    def _ai_check_all_ranges(self):
+        for method in self._AI_RANGE_CHECKS:
+            getattr(self, method)()
+
+    @api.model
+    def _ai_allowed_models(self):
+        """Models a channel may choose: the cached LiteLLM list and the default."""
+        return set(self._get_cached_llm_models()) | {DEFAULT_MODEL}
+
+    @api.model
+    def _ai_validate_model(self, model):
+        """P1-2: a newly chosen model (or the model of a channel whose AI is
+        being enabled) must be in the cached LiteLLM model list."""
+        if model and model not in self._ai_allowed_models():
+            raise ValidationError(_(
+                '模型「%(model)s」不在可用模型清單中。請系統管理員到「設定 → Live Chat AI」'
+                '按「讀取可用模型」更新清單，再從清單中選擇模型。',
+                model=model,
+            ))
 
     @api.constrains('ai_enabled', 'ai_model')
     def _check_ai_required_fields(self):
@@ -323,6 +415,8 @@ class ImLivechatChannel(models.Model):
     def create(self, vals_list):
         for vals in vals_list:
             self._check_ai_config_access(vals)
+            if vals.get('ai_enabled') or vals.get('ai_model'):
+                self._ai_validate_model(vals.get('ai_model', DEFAULT_MODEL))
         channels = super().create(vals_list)
         # sudo: an operator may create a channel (AI off); the ai_* fields
         # are manager-only.
@@ -331,10 +425,33 @@ class ImLivechatChannel(models.Model):
 
     def write(self, vals):
         self._check_ai_config_access(vals)
+        current = self.sudo()
+        enabling = current.filtered(lambda c: not c.ai_enabled) if vals.get('ai_enabled') else current.browse()
+        # P1-2: only a newly set/changed model, or the model of a channel
+        # being enabled, is checked; an unchanged legacy value does not block
+        # saving other fields.
+        if vals.get('ai_model') and any(c.ai_model != vals['ai_model'] for c in current):
+            self._ai_validate_model(vals['ai_model'])
+        for channel in enabling:
+            self._ai_validate_model(vals.get('ai_model', channel.ai_model))
         res = super().write(vals)
+        if enabling:
+            # P1-1: enabling AI re-validates every AI setting.
+            enabling._ai_check_all_ranges()
         if 'ai_enabled' in vals or 'ai_bot_name' in vals:
             self.sudo().filtered('ai_enabled')._get_or_create_bot_partner()
         return res
+
+    # --- Live chat window (AI disclosure, P1-7) ---
+
+    def _get_channel_infos(self):
+        """Visitors of an AI-enabled channel see the AI welcome message
+        (rendered by the widget as the first message of the chat)."""
+        infos = super()._get_channel_infos()
+        channel = self.sudo()
+        if channel.ai_enabled:
+            infos['default_message'] = channel.ai_welcome_message or DEFAULT_WELCOME_MESSAGE
+        return infos
 
     # --- Model Selection ---
 
@@ -585,6 +702,8 @@ class ImLivechatChannel(models.Model):
                     vals['name'] = bot_name
                 if category and category not in partner.sudo().category_id:
                     vals['category_id'] = [(4, category.id)]
+                if not partner.sudo().image_1920:
+                    vals['image_1920'] = self._ai_bot_avatar()
                 if vals:
                     partner.sudo().write(vals)
             else:
@@ -594,10 +713,17 @@ class ImLivechatChannel(models.Model):
                     'is_company': False,
                     'type': 'contact',
                     'category_id': [(4, category.id)] if category else [],
+                    'image_1920': self._ai_bot_avatar(),
                 })
                 channel.sudo().write({'ai_bot_partner_id': partner.id})
             partners |= partner
         return partners
+
+    @api.model
+    def _ai_bot_avatar(self):
+        """Base64 avatar of the AI bot partners (shipped with the module)."""
+        with tools.file_open(BOT_AVATAR_PATH, 'rb') as avatar:
+            return base64.b64encode(avatar.read())
 
     def _get_bot_partner(self):
         """Author of AI messages, read-only (no write during reply processing).
@@ -625,19 +751,24 @@ class ImLivechatChannel(models.Model):
     # --- Human handoff (P1-2) ---
 
     def _ai_handoff_keyword_list(self):
+        """Keywords, lower case, inner whitespace collapsed to one space."""
         self.ensure_one()
         raw = self.ai_handoff_keywords or ''
-        return [k.strip().lower() for k in re.split(r'[,，、\n]', raw) if k.strip()]
+        return [' '.join(k.lower().split()) for k in re.split(r'[,，、\n]', raw) if k.strip()]
 
     def _ai_is_handoff_request(self, text):
-        """True when the visitor text contains one of the handoff keywords."""
+        """True when the visitor text contains one of the handoff keywords:
+        Chinese (any non-Latin) entries anywhere in the text, English words
+        and phrases as whole words, case-insensitive, any whitespace between
+        the words."""
         self.ensure_one()
         text = (text or '').lower()
         if not text:
             return False
         for keyword in self._ai_handoff_keyword_list():
             if _WORD_CHARS_RE.match(keyword):
-                pattern = r'(?<![0-9a-z_])' + re.escape(keyword) + r'(?![0-9a-z_])'
+                phrase = r'\s+'.join(re.escape(word) for word in keyword.split(' '))
+                pattern = r'(?<![0-9a-z_])' + phrase + r'(?![0-9a-z_])'
                 if re.search(pattern, text):
                     return True
             elif keyword in text:
@@ -645,9 +776,62 @@ class ImLivechatChannel(models.Model):
         return False
 
     def _ai_pause_minutes(self):
+        """Pause after an operator's message (minutes)."""
         self.ensure_one()
         minutes = self.ai_handoff_pause_minutes or DEFAULT_HANDOFF_PAUSE_MINUTES
         return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
+
+    def _ai_wait_minutes(self):
+        """Wait for an operator after a visitor's handoff request (minutes)."""
+        self.ensure_one()
+        minutes = self.ai_handoff_wait_minutes or DEFAULT_HANDOFF_WAIT_MINUTES
+        return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
+
+    def _ai_pause_notice_text(self):
+        """The waiting notice with %(minutes)s replaced by the wait minutes.
+
+        Plain replacement, not %-formatting: an administrator's text with
+        other % signs or placeholders is sent as written and never raises.
+        The bot message escapes the text when it is posted.
+        """
+        self.ensure_one()
+        text = self.ai_pause_notice or DEFAULT_PAUSE_NOTICE
+        return _PAUSE_NOTICE_PLACEHOLDER_RE.sub(str(self._ai_wait_minutes()), text)
+
+    # --- Identity (P1-8) ---
+
+    def _ai_company_name(self):
+        """Name the AI introduces itself with: the website using this
+        channel, else the company."""
+        self.ensure_one()
+        if 'website' in self.env and 'channel_id' in self.env['website']._fields:
+            website = self.env['website'].sudo().search([('channel_id', '=', self.id)], limit=1)
+            if website and website.name:
+                return website.name
+        return self.env.company.name or ''
+
+    def _ai_identity_block(self):
+        self.ensure_one()
+        return IDENTITY_TEMPLATE.format(
+            company=self._ai_company_name(), bot=self.ai_bot_name or DEFAULT_BOT_NAME,
+        )
+
+    # --- Runtime bounds (P1-1: legacy or hand-edited values never reach the LLM) ---
+
+    def _ai_max_history_value(self):
+        self.ensure_one()
+        return max(1, min(self.ai_max_history or DEFAULT_AI_MAX_HISTORY, MAX_AI_MAX_HISTORY))
+
+    def _ai_max_tokens_value(self):
+        self.ensure_one()
+        tokens = self.ai_max_tokens
+        if not tokens or tokens < 1:
+            return DEFAULT_AI_MAX_TOKENS
+        return min(tokens, MAX_AI_MAX_TOKENS)
+
+    def _ai_temperature_value(self):
+        self.ensure_one()
+        return max(MIN_AI_TEMPERATURE, min(float(self.ai_temperature or 0.0), MAX_AI_TEMPERATURE))
 
     # --- Product lookup tools (package E, P1-8) ---
 
@@ -739,7 +923,7 @@ class ImLivechatChannel(models.Model):
 
     # --- LLM API Call Logic ---
 
-    def _trigger_ai_response(self, discuss_channel, message, kind='reply'):
+    def _trigger_ai_response(self, discuss_channel, message, kind='reply', run_after=None):
         """
         Queue an AI reply (or a human handoff notice) for a visitor message.
 
@@ -750,7 +934,10 @@ class ImLivechatChannel(models.Model):
         Args:
             discuss_channel (discuss.channel): The livechat session
             message (mail.message): The visitor's message
-            kind (str): 'reply' (LLM answer) or 'handoff' (fixed notice, no LLM)
+            kind (str): 'reply' (LLM answer), 'handoff' (fixed notice and
+                operator alert, no LLM) or 'notice' (waiting notice, no LLM)
+            run_after (datetime|None): deferred reply: answer at this time
+                (end of a handoff wait), run by the recovery cron
 
         Returns:
             im_livechat.ai.job: the queued job, or an empty recordset
@@ -761,8 +948,8 @@ class ImLivechatChannel(models.Model):
         if not self.ai_enabled:
             return Job
 
-        if kind == 'handoff':
-            return Job._create_for_message(discuss_channel, message, kind='handoff')
+        if kind in ('handoff', 'notice'):
+            return Job._create_for_message(discuss_channel, message, kind=kind)
 
         if not self.ai_model or not self._llm_is_configured():
             _logger.warning(
@@ -772,7 +959,7 @@ class ImLivechatChannel(models.Model):
             )
             return Job
 
-        return Job._create_for_message(discuss_channel, message)
+        return Job._create_for_message(discuss_channel, message, run_after=run_after)
 
     def _generate_ai_reply(self, discuss_channel, messages, before_call=None):
         """
@@ -984,10 +1171,10 @@ class ImLivechatChannel(models.Model):
             'messages': messages,
         }
 
-        if self.ai_temperature is not None:
-            payload['temperature'] = self.ai_temperature
-        if self.ai_max_tokens:
-            payload['max_tokens'] = self.ai_max_tokens
+        # Clamped (P1-1): values stored before the range checks existed are
+        # never sent as they are.
+        payload['temperature'] = self._ai_temperature_value()
+        payload['max_tokens'] = self._ai_max_tokens_value()
         if tools:
             payload['tools'] = tools
             if tool_choice:

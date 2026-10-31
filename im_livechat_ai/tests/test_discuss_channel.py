@@ -140,7 +140,8 @@ class TestDiscussChannel(TransactionCase):
         self.assertEqual(messages[0]['role'], 'system')
         self.assertEqual(
             messages[0]['content'],
-            'You are a helpful assistant.\n\n' + self.livechat_channel._ai_product_guard(),
+            self.livechat_channel._ai_identity_block() + '\n\nYou are a helpful assistant.\n\n'
+            + self.livechat_channel._ai_product_guard(),
         )
 
     def test_build_llm_messages_visitor_role(self):
@@ -237,7 +238,9 @@ class TestDiscussChannel(TransactionCase):
 
         self.assertTrue(len(messages) >= 2)
         self.assertEqual(messages[0], {
-            'role': 'system', 'content': self.livechat_channel._ai_product_guard(),
+            'role': 'system',
+            'content': self.livechat_channel._ai_identity_block() + '\n\n'
+            + self.livechat_channel._ai_product_guard(),
         })
         self.assertEqual(messages[1]['role'], 'user')
 

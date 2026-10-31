@@ -19,6 +19,17 @@ OPERATOR_SYSTEM_NOTE = (
     '對話中以「[真人客服 姓名]」開頭的 assistant 訊息是真人客服同事的回覆，'
     '不是你說的；不要推翻、否認或更改同事的說法與承諾，必要時請訪客等候同事處理。'
 )
+# Added to the system prompt of a reply sent when a handoff wait ended
+# without an operator (auto-resume, P0-1).
+RESUME_SYSTEM_NOTE = (
+    '訪客先前要求真人客服，但客服人員在等候時間內沒有回覆，現在由你繼續服務。'
+    '對話中「已幫您通知客服」「已通知客服人員」這類訊息是系統自動送出的等候通知，不是回答；'
+    '請一併回答訪客在等候期間提出、還沒有被回答的所有問題。'
+)
+
+# Why the AI of a session is paused (discuss.channel.ai_pause_reason)
+PAUSE_OPERATOR = 'operator'
+PAUSE_HANDOFF = 'handoff'
 
 # Author kinds returned by _ai_author_kind
 AUTHOR_VISITOR = 'visitor'
@@ -46,6 +57,24 @@ class DiscussChannel(models.Model):
         copy=False,
         help='The AI does not answer this live chat conversation before this '
              'time: an operator replied or the visitor asked for a human.',
+    )
+    ai_pause_reason = fields.Selection(
+        selection=[
+            (PAUSE_OPERATOR, 'Operator replied'),
+            (PAUSE_HANDOFF, 'Visitor asked for a human'),
+        ],
+        string='AI Pause Reason',
+        readonly=True,
+        copy=False,
+        help='Operator replied: the AI stays silent until the pause ends. Visitor '
+             'asked for a human: the AI waits for an operator; if none replies, it '
+             'answers the messages written meanwhile when the wait ends.',
+    )
+    ai_pause_notice_sent = fields.Boolean(
+        string='AI Waiting Notice Sent',
+        readonly=True,
+        copy=False,
+        help='The waiting notice was already sent during the current handoff wait.',
     )
 
     def _notify_thread(self, message, msg_vals=False, **kwargs):
@@ -84,21 +113,40 @@ class DiscussChannel(models.Model):
         kind = self._ai_author_kind(message)
         if kind == AUTHOR_OPERATOR:
             if message.message_type == 'comment':
-                self._ai_pause()
+                # Operator pause; also ends a handoff wait (the operator took over).
+                self._ai_pause(reason=PAUSE_OPERATOR)
             return
         # Only what the visitor writes is answered: not the rating/feedback
         # notification posted as the visitor after the chat, nor other
         # notifications.
         if message.message_type != 'comment':
             return
-        if kind != AUTHOR_VISITOR or self._ai_is_paused():
+        if kind != AUTHOR_VISITOR:
             return
         channel = self.livechat_channel_id
+        if self._ai_is_paused():
+            if self.ai_pause_reason == PAUSE_HANDOFF:
+                self._ai_handle_waiting_visitor(message)
+            # Operator pause: no reply, no notice.
+            return
         if channel._ai_is_handoff_request(_clean_text(message.body)):
-            self._ai_pause()
+            self._ai_pause(minutes=channel._ai_wait_minutes(), reason=PAUSE_HANDOFF)
             channel._trigger_ai_response(discuss_channel=self, message=message, kind='handoff')
         else:
             channel._trigger_ai_response(discuss_channel=self, message=message)
+
+    def _ai_handle_waiting_visitor(self, message):
+        """Visitor message during a handoff wait: the first one gets the
+        waiting notice (once per wait), every one gets a deferred reply job
+        due when the wait ends (the newest answers them all; an operator's
+        reply cancels them)."""
+        channel = self.livechat_channel_id
+        if not self.ai_pause_notice_sent:
+            # Written in the visitor's transaction: two concurrent visitor
+            # posts serialize on this row, so only one notice is queued.
+            self.write({'ai_pause_notice_sent': True})
+            channel._trigger_ai_response(discuss_channel=self, message=message, kind='notice')
+        channel._trigger_ai_response(discuss_channel=self, message=message, run_after=self.ai_paused_until)
 
     def _ai_session_enabled(self):
         self.ensure_one()
@@ -139,16 +187,35 @@ class DiscussChannel(models.Model):
         paused_until = self.sudo().ai_paused_until
         return bool(paused_until and paused_until > fields.Datetime.now())
 
-    def _ai_pause(self, minutes=None):
-        """Pause the AI for this session (extends, never shortens, a pause)."""
+    def _ai_pause(self, minutes=None, reason=PAUSE_OPERATOR):
+        """Pause the AI for this session (extends, never shortens, a pause).
+
+        reason 'operator': an operator replied (ai_handoff_pause_minutes by
+        default); it also turns a handoff wait into an operator pause.
+        reason 'handoff': the visitor asked for a human (called when the
+        session is not paused); a new wait, its waiting notice not sent yet.
+        """
         self.ensure_one()
+        session = self.sudo()
         if minutes is None:
-            minutes = self.sudo().livechat_channel_id._ai_pause_minutes()
+            minutes = session.livechat_channel_id._ai_pause_minutes()
         until = fields.Datetime.now() + timedelta(minutes=minutes)
-        current = self.sudo().ai_paused_until
+        current = session.ai_paused_until
+        vals = {}
         if not current or current < until:
-            self.sudo().write({'ai_paused_until': until})
-        return until
+            vals['ai_paused_until'] = until
+        if reason == PAUSE_HANDOFF:
+            vals.update(ai_pause_reason=PAUSE_HANDOFF, ai_pause_notice_sent=False)
+        elif session.ai_pause_reason != PAUSE_OPERATOR:
+            vals['ai_pause_reason'] = PAUSE_OPERATOR
+        if vals:
+            session.write(vals)
+        return session.ai_paused_until
+
+    def _ai_waiting_for_human(self):
+        """True during a handoff wait that no operator answered yet."""
+        self.ensure_one()
+        return self._ai_is_paused() and self.sudo().ai_pause_reason == PAUSE_HANDOFF
 
     # --- Who wrote a message (P1-1) ---
 
@@ -238,7 +305,7 @@ class DiscussChannel(models.Model):
     def _ai_context_messages(self, livechat_channel):
         """The most recent ai_max_history comment/email messages of this
         session, oldest first (what the LLM gets as conversation)."""
-        max_history = max(1, min(livechat_channel.ai_max_history or 50, 200))
+        max_history = livechat_channel._ai_max_history_value()
         recent_messages = self.env['mail.message'].search(
             [
                 ('res_id', '=', self.id),
@@ -257,21 +324,23 @@ class DiscussChannel(models.Model):
         user = author.with_context(active_test=False).user_ids.filtered(lambda u: not u.share)[:1]
         return (user.livechat_username if user else '') or author.name or ''
 
-    def _build_llm_messages(self, livechat_channel, recent_messages=None):
+    def _build_llm_messages(self, livechat_channel, recent_messages=None, resume=False):
         """
         Build the messages array for an OpenAI-compatible chat completions API.
 
         Fetches the most recent N messages from this discuss.channel,
         determines the role for each (visitor: user; AI bot and human
         operators: assistant, operators marked "[真人客服 name]" with the
-        name visitors see) and prepends the system message: the channel
-        prompt, a note about operator messages when there are any, and the
-        fixed product rules.
+        name visitors see) and prepends the system message: the fixed
+        identity block (P1-8), the channel prompt, a note about operator
+        messages when there are any, the resume note for a reply sent after
+        an unanswered handoff wait, and the fixed product rules.
 
         Args:
             livechat_channel (im_livechat.channel): The livechat channel config
             recent_messages (mail.message|None): result of
                 _ai_context_messages() when the caller already fetched it
+            resume (bool): the reply ends a handoff wait no operator answered
 
         Returns:
             list: List of dicts with 'role' and 'content' keys
@@ -302,9 +371,11 @@ class DiscussChannel(models.Model):
 
         # The product rules (package E, P1-8) are always appended: prices,
         # specifications and stock only come from the product tools.
-        parts = [livechat_channel.ai_system_prompt or '']
+        parts = [livechat_channel._ai_identity_block(), livechat_channel.ai_system_prompt or '']
         if has_operator:
             parts.append(OPERATOR_SYSTEM_NOTE)
+        if resume:
+            parts.append(RESUME_SYSTEM_NOTE)
         parts.append(livechat_channel._ai_product_guard())
         system_prompt = '\n\n'.join(p.strip() for p in parts if p and p.strip())
         return [{'role': 'system', 'content': system_prompt}] + history

@@ -9,3 +9,4 @@ from . import test_ai_job
 from . import test_handoff
 from . import test_product_tools
 from . import test_review_fixes
+from . import test_pause_disclosure

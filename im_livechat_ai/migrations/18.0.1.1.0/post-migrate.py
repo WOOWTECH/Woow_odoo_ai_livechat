@@ -25,11 +25,17 @@
   customised keywords stay.
 - P1-7: AI bot partners without an image get the module's bot avatar.
 
-Idempotency (P2-4): turning AI off, converting ai_max_retries and scrubbing
-the API logs only happen when pre-migrate saw the 18.0.1.0.x schema (flag
-im_livechat_ai.migration_1_1_0_legacy, deleted here). Every other step only
-changes values that are still old defaults or missing, so running the
-18.0.1.1.0 scripts again on a migrated database changes nothing.
+Idempotency (P2-4): every step that changes data (turning AI off,
+converting ai_max_retries, scrubbing the API logs, the error message, the
+bot name, unlinking/archiving/tagging the bot partners, the handoff
+keywords, the bot avatars) only runs when pre-migrate saw the 18.0.1.0.x
+schema (flag im_livechat_ai.migration_1_1_0_legacy, deleted here). Without
+it only leftover legacy columns are dropped and ai_max_tokens above 8192
+(which the model refuses) is capped. So running the 18.0.1.1.0 scripts
+again on a migrated database changes nothing, also not values an
+administrator cleared or changed afterwards (an emptied bot name or error
+message, an unarchived or untagged bot partner, a removed avatar, emptied
+keywords).
 """
 
 import base64
@@ -252,32 +258,38 @@ def migrate(cr, version):
     dropped = drop_legacy_columns(cr)
     if dropped:
         _logger.info("im_livechat_ai: dropped legacy columns %s.%s", TABLE, dropped)
-    if legacy:
-        disabled = disable_all_channels(cr)
-        _logger.warning(
-            "im_livechat_ai 18.0.1.1.0: AI replies were turned OFF on all live chat channels "
-            "(%s channel(s) had AI on: %s). The per-channel API URL/key were removed. "
-            "A system administrator must set the LiteLLM URL and API key in Settings > Live Chat AI, "
-            "click 'Fetch Available Models', then re-enable AI on each channel.",
-            len(disabled), disabled,
-        )
-        converted = convert_max_retries(cr)
-        if converted:
-            _logger.info("im_livechat_ai: converted ai_max_retries (total calls -> retries) on %s channel(s)",
-                         converted)
-        scrubbed = scrub_logs(cr)
-        if scrubbed:
-            _logger.info("im_livechat_ai: removed conversation content/response bodies from %s API log(s)",
-                         scrubbed)
-    else:
-        _logger.info("im_livechat_ai 18.0.1.1.0 post-migrate: no 18.0.1.0.x schema found; "
-                     "AI settings, retries and API logs left as they are")
     unused = drop_unused_columns(cr)
     if unused:
         _logger.info("im_livechat_ai: dropped unused columns %s.%s", TABLE, unused)
     capped = cap_max_tokens(cr)
     if capped:
         _logger.info("im_livechat_ai: capped ai_max_tokens to %s on %s channel(s)", MAX_TOKENS, capped)
+    if not legacy:
+        _logger.info("im_livechat_ai 18.0.1.1.0 post-migrate: no 18.0.1.0.x schema found; "
+                     "channel settings, bot partners and API logs left as they are")
+        return
+    migrate_legacy_data(cr)
+
+
+def migrate_legacy_data(cr):
+    """The data conversions of an upgrade from 18.0.1.0.x (run once, gated
+    on the pre-migrate flag)."""
+    disabled = disable_all_channels(cr)
+    _logger.warning(
+        "im_livechat_ai 18.0.1.1.0: AI replies were turned OFF on all live chat channels "
+        "(%s channel(s) had AI on: %s). The per-channel API URL/key were removed. "
+        "A system administrator must set the LiteLLM URL and API key in Settings > Live Chat AI, "
+        "click 'Fetch Available Models', then re-enable AI on each channel.",
+        len(disabled), disabled,
+    )
+    converted = convert_max_retries(cr)
+    if converted:
+        _logger.info("im_livechat_ai: converted ai_max_retries (total calls -> retries) on %s channel(s)",
+                     converted)
+    scrubbed = scrub_logs(cr)
+    if scrubbed:
+        _logger.info("im_livechat_ai: removed conversation content/response bodies from %s API log(s)",
+                     scrubbed)
     translated = translate_error_message(cr)
     if translated:
         _logger.info("im_livechat_ai: error message set to the Chinese default on channel(s) %s", translated)

@@ -62,7 +62,7 @@ Upgrading to 18.0.1.1.0 (`-u im_livechat_ai`, or the platform upgrade gate, whic
 | AI bot partners | Archived and tagged "AI 機器人", like Odoo chatbot partners; partners without an image get the module's robot avatar. |
 | Existing **API logs** | Conversation content and upstream response bodies removed. |
 
-Turning AI off, converting Max Retries and scrubbing the logs only happen when the pre-migration finds the 18.0.1.0.x columns (`ai_api_key`, `ai_api_base_url` or `ai_retry_delay`); it passes that to the post-migration in the temporary system parameter `im_livechat_ai.migration_1_1_0_legacy`, which the post-migration deletes. Running the 18.0.1.1.0 scripts again on an already migrated database changes nothing.
+Every row above except the API URL/key columns (turning AI off, Max Retries, error message, handoff keywords, bot partners and avatars, log scrub) only happens when the pre-migration finds the 18.0.1.0.x columns (`ai_api_key`, `ai_api_base_url` or `ai_retry_delay`); it passes that to the post-migration in the temporary system parameter `im_livechat_ai.migration_1_1_0_legacy`, which the post-migration deletes. Running the 18.0.1.1.0 scripts again on an already migrated database changes nothing, also not values an administrator cleared or changed after the upgrade (an emptied bot name or error message, an unarchived bot partner).
 
 #### Rollout: replies after a restart or deploy
 
@@ -206,10 +206,10 @@ flowchart TD
 
 Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until`, `ai_pause_reason`):
 
-- **Operator replied** (`operator`) -- When an internal user posts in a conversation, the AI stays quiet there for **30 minutes** (**Pause After Human Reply**, per channel, 1-1440). Each operator post extends the pause to now + 30 minutes (never shortens it). During this pause the AI sends nothing: no reply, no notice.
+- **Operator replied** (`operator`) -- When an internal user posts in a conversation, the AI stays quiet there for **30 minutes** (**Pause After Human Reply**, per channel, 1-1440). Each further operator post extends the pause to now + 30 minutes (never shortens it). During this pause the AI sends nothing: no reply, no notice.
 - **Visitor asked for a human** (`handoff`) -- Only explicit requests trigger it: `找真人`, `真人客服`, `轉真人`, `轉人工`, `人工客服`, `找客服`, `聯絡客服`, `我要客服`, `human agent`, `talk to a human`, `real person`, `live agent` (configurable). Chinese entries match anywhere in the message; English entries match whole words or phrases, case-insensitive, with any whitespace between the words. Single words such as `客服`, `人工`, `agent` no longer hand over (a question about "客服電話" is answered by the AI). The AI sends the handoff message once ("已幫您通知客服，請稍候。"), notifies the operators and **waits 10 minutes** (**Wait For Human After Handoff Request**, 1-1440).
 - **Waiting notice** -- The first visitor message during that wait gets one fixed reply (**Waiting Notice**, default "已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 10 分鐘後繼續為您服務。"; `%(minutes)s` is replaced with the wait minutes). Once per wait (`discuss.channel.ai_pause_notice_sent`), no LLM call.
-- **Operator takes over** -- An operator post during the wait turns it into an operator pause (30 minutes); the notice and the deferred replies are dropped quietly.
+- **Operator takes over** -- An operator post during the wait turns it into an operator pause that ends 30 minutes after that post, even when the wait was set longer (a 120-minute wait does not keep the AI quiet for 120 minutes); the notice and the deferred replies are dropped quietly.
 - **Auto-resume** -- If no operator replied when the wait ends, the AI answers everything the visitor wrote during the wait, without the visitor writing again: each such message gets a deferred reply job due at the end of the wait (`im_livechat.ai.job.deferred`), the recovery cron is triggered for that time, and the newest job answers them all in one reply (the others are skipped). Expect the answer within about a minute after the wait ends (cron wake-up).
 
 ### Product Lookup Tools (needs eCommerce)
@@ -465,7 +465,7 @@ im_livechat_ai/
 │   ├── pre-migrate.py                   # Wipe per-channel API URL/key
 │   └── post-migrate.py                  # Drop old columns, AI off, scrub logs,
 │                                        #   Chinese error message, tag bot partners
-├── tests/                               # 371 tests (see Testing)
+├── tests/                               # 373 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -512,7 +512,7 @@ The tools are read-only ORM searches limited to products published on the channe
 
 ### Test Suite Overview
 
-The module has **371 automated tests**. All HTTP calls are mocked: no LiteLLM key or network access is needed.
+The module has **373 automated tests**. All HTTP calls are mocked: no LiteLLM key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -525,7 +525,7 @@ The module has **371 automated tests**. All HTTP calls are mocked: no LiteLLM ke
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_product_tools.py` | 37 | search_products / get_product_details, published-only, prices, tool rounds and limits |
 | `test_review_fixes.py` | 20 | Branch review fixes: AI config access, bot partner protection, which messages trigger, no open transaction during LLM calls, retries migration |
-| `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume (deferred jobs), range/model validation, settings privacy, job monitoring, AI disclosure, identity block, idempotent migration |
+| `test_pause_disclosure.py` | 44 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume (deferred jobs), range/model validation, settings privacy, job monitoring, AI disclosure, identity block, idempotent migration |
 
 ### Running the Tests
 
@@ -638,7 +638,7 @@ A LiteLLM (or other OpenAI-compatible) gateway with `/v1/chat/completions` and `
 - **Validation**: range checks on every save (AI on or off) and again when AI is enabled; runtime clamp of Max Tokens/History/Temperature; the model must be in the cached LiteLLM list when chosen or when AI is enabled.
 - **Settings privacy and monitoring**: non-administrators no longer get the LiteLLM URL, log settings or model cache through `default_get`/`get_values`, and `set_values` refuses them; Settings shows the recovery cron's last run and stuck jobs.
 - **AI disclosure**: robot avatar on the bot partners, AI welcome message (`ai_welcome_message`), fixed identity block at the start of the system prompt.
-- **Migration**: the legacy-only steps (AI off, retries conversion, log scrub) need the 18.0.1.0.x columns, so re-running the scripts on a migrated database changes nothing.
+- **Migration**: every data conversion (AI off, retries, log scrub, error message, bot name, bot partners, keywords, avatars) needs the 18.0.1.0.x columns, so re-running the scripts on a migrated database changes nothing.
 
 ### v18.0.1.0.0 (Initial Release)
 

@@ -295,6 +295,34 @@ class TestHandoffWait(PauseCase):
         self.assertEqual(len(self._bot_bodies()), 1)  # only the handoff notice
 
     @patch(POST)
+    def test_operator_reply_shortens_long_wait_to_operator_pause(self, mock_post):
+        """An operator reply during a 120-minute wait gives a 30-minute
+        operator pause (not the rest of the wait); later operator replies
+        only extend it."""
+        self.channel.ai_handoff_wait_minutes = 120
+        self._handoff(minutes=120)
+        self._post('請問有現貨嗎？', self.visitor)
+        deferred = self._jobs(kind='reply')
+        self.assertEqual(len(deferred), 1)
+        before = fields.Datetime.now()
+        self._post('有現貨，我幫您處理', self.operator)
+        self.assertEqual(self.session.ai_pause_reason, 'operator')
+        self.assertAlmostEqual(self.session.ai_paused_until,
+                               before + timedelta(minutes=DEFAULT_HANDOFF_PAUSE_MINUTES),
+                               delta=timedelta(seconds=5))
+        # A later operator reply never shortens the operator pause.
+        later = fields.Datetime.now() + timedelta(hours=2)
+        self.session.sudo().ai_paused_until = later
+        self._post('還在幫您查', self.operator)
+        self.assertEqual(self.session.ai_paused_until, later)
+        # The deferred reply of the wait stays quiet once it is due.
+        self._expire_pause()
+        self._make_due(deferred)
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(deferred.state, 'skipped')
+        mock_post.assert_not_called()
+
+    @patch(POST)
     def test_operator_pause_still_active_when_due(self, mock_post):
         self._handoff()
         self._post('有人嗎', self.visitor)
@@ -720,6 +748,50 @@ class TestMigrationIdempotency(TransactionCase):
         self.assertTrue(self.on.ai_enabled)
         self.assertEqual(self.on.ai_max_retries, 1)
         self.assertEqual(self.log.request_payload, '[{"x": 1}]')
+
+    def test_rerun_keeps_values_cleared_after_migration(self):
+        """Values an administrator cleared or changed after the upgrade (bot
+        name, error message, keywords, an unarchived/untagged bot partner
+        without avatar) stay as they are when the scripts run again."""
+        bot = self.on.ai_bot_partner_id
+        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot')
+        category = self.env.ref('im_livechat_ai.partner_category_ai_bot')
+        self.env.cr.execute("""UPDATE im_livechat_channel
+                                  SET ai_bot_name = NULL, ai_error_message = NULL, ai_handoff_keywords = NULL
+                                WHERE id = %s""", (self.on.id,))
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_error_message = '' WHERE id = %s",
+                            (self.custom.id,))
+        (bot | default_bot).with_context(active_test=False).write({
+            'active': True, 'category_id': [(3, category.id)], 'image_1920': False,
+        })
+        self.env.invalidate_all()
+
+        def state():
+            self.env.flush_all()
+            self.env.cr.execute("""SELECT p.id, p.name, p.active,
+                                          array(SELECT category_id FROM res_partner_res_partner_category_rel r
+                                                 WHERE r.partner_id = p.id ORDER BY category_id),
+                                          (SELECT count(*) FROM ir_attachment a
+                                            WHERE a.res_model = 'res.partner' AND a.res_id = p.id
+                                              AND a.res_field = 'image_1920')
+                                     FROM res_partner p WHERE p.id IN %s ORDER BY p.id""",
+                                   (tuple((bot | default_bot).ids),))
+            partners = self.env.cr.fetchall()
+            return self._snapshot(), partners
+
+        before = state()
+        self.assertEqual(before[1][0][4], 0)  # avatar really removed
+        for version in ('18.0.1.1.0', '18.0.1.0.1'):
+            self.pre.migrate(self.env.cr, version)
+            self.post.migrate(self.env.cr, version)
+            self.env.invalidate_all()
+            self.assertEqual(state(), before)
+        self.assertFalse(self.on.ai_bot_name)
+        self.assertFalse(self.on.ai_error_message)
+        self.assertFalse(self.on.ai_handoff_keywords)
+        self.assertTrue(bot.active)
+        self.assertNotIn(category, bot.category_id)
+        self.assertFalse(bot.image_1920)
 
     def test_legacy_schema_sets_flag_and_converts(self):
         self.env.cr.execute(SQL("ALTER TABLE im_livechat_channel ADD COLUMN %s integer",

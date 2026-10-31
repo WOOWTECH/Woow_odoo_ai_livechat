@@ -188,10 +188,14 @@ class DiscussChannel(models.Model):
         return bool(paused_until and paused_until > fields.Datetime.now())
 
     def _ai_pause(self, minutes=None, reason=PAUSE_OPERATOR):
-        """Pause the AI for this session (extends, never shortens, a pause).
+        """Pause the AI for this session.
 
         reason 'operator': an operator replied (ai_handoff_pause_minutes by
-        default); it also turns a handoff wait into an operator pause.
+        default). Between operator replies the pause is extended, never
+        shortened. An operator reply during a handoff wait turns the wait
+        into an operator pause that ends ai_handoff_pause_minutes after the
+        reply, even when the wait would have lasted longer (a 120-minute
+        wait becomes a 30-minute operator pause).
         reason 'handoff': the visitor asked for a human (called when the
         session is not paused); a new wait, its waiting notice not sent yet.
         """
@@ -199,10 +203,18 @@ class DiscussChannel(models.Model):
         session = self.sudo()
         if minutes is None:
             minutes = session.livechat_channel_id._ai_pause_minutes()
-        until = fields.Datetime.now() + timedelta(minutes=minutes)
+        now = fields.Datetime.now()
+        until = now + timedelta(minutes=minutes)
         current = session.ai_paused_until
+        # The operator takes over an active handoff wait: its end no longer
+        # applies, the operator pause starts now.
+        taking_over = (
+            reason == PAUSE_OPERATOR
+            and session.ai_pause_reason == PAUSE_HANDOFF
+            and current and current > now
+        )
         vals = {}
-        if not current or current < until:
+        if taking_over or not current or current < until:
             vals['ai_paused_until'] = until
         if reason == PAUSE_HANDOFF:
             vals.update(ai_pause_reason=PAUSE_HANDOFF, ai_pause_notice_sent=False)

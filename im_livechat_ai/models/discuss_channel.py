@@ -22,7 +22,7 @@ OPERATOR_SYSTEM_NOTE = (
 
 # Author kinds returned by _ai_author_kind
 AUTHOR_VISITOR = 'visitor'
-AUTHOR_OPERATOR = 'operator'  # internal (non-share) user: a human operator
+AUTHOR_OPERATOR = 'operator'  # internal (non-share) user who is not the visitor: a human operator
 AUTHOR_BOT = 'bot'  # AI bot, OdooBot, or a session operator without internal user (chatbot)
 
 
@@ -86,6 +86,11 @@ class DiscussChannel(models.Model):
             if message.message_type == 'comment':
                 self._ai_pause()
             return
+        # Only what the visitor writes is answered: not the rating/feedback
+        # notification posted as the visitor after the chat, nor other
+        # notifications.
+        if message.message_type != 'comment':
+            return
         if kind != AUTHOR_VISITOR or self._ai_is_paused():
             return
         channel = self.livechat_channel_id
@@ -97,10 +102,12 @@ class DiscussChannel(models.Model):
 
     def _ai_session_enabled(self):
         self.ensure_one()
+        # sudo: the ai_* fields are restricted to Live Chat managers.
+        livechat_channel = self.sudo().livechat_channel_id
         return bool(
             self.channel_type == 'livechat'
-            and self.livechat_channel_id
-            and self.livechat_channel_id.ai_enabled
+            and livechat_channel
+            and livechat_channel.ai_enabled
         )
 
     def _should_trigger_ai_response(self, message):
@@ -136,7 +143,7 @@ class DiscussChannel(models.Model):
         """Pause the AI for this session (extends, never shortens, a pause)."""
         self.ensure_one()
         if minutes is None:
-            minutes = self.livechat_channel_id._ai_pause_minutes()
+            minutes = self.sudo().livechat_channel_id._ai_pause_minutes()
         until = fields.Datetime.now() + timedelta(minutes=minutes)
         current = self.sudo().ai_paused_until
         if not current or current < until:
@@ -145,7 +152,38 @@ class DiscussChannel(models.Model):
 
     # --- Who wrote a message (P1-1) ---
 
-    def _ai_author_kind(self, message):
+    def _ai_bot_ids(self):
+        """Partner ids that are bots: the AI bots and OdooBot."""
+        ids = set(self.env['im_livechat.channel']._ai_bot_partner_ids(self.sudo().livechat_channel_id))
+        odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
+        if odoobot:
+            ids.add(odoobot.id)
+        return ids
+
+    def _ai_visitor_partner(self):
+        """Partner of the session's visitor member, or an empty recordset.
+
+        Odoo creates the operator's member first and then, in the same
+        transaction, the visitor's (a logged-in visitor's partner, or a guest
+        member without partner; the LINE connector does the same); operators
+        invited later get later members, created in a later transaction. So
+        the visitor member is the first member created with the session that
+        is neither the session operator nor a bot.
+        """
+        self.ensure_one()
+        session = self.sudo()
+        operator = session.livechat_operator_id
+        bot_ids = self._ai_bot_ids()
+        for member in session.channel_member_ids.sorted('id'):
+            if member.create_date and session.create_date and member.create_date > session.create_date:
+                break  # joined later: an invited operator, never the visitor
+            partner = member.partner_id
+            if partner and (partner == operator or partner.id in bot_ids):
+                continue
+            return partner
+        return self.env['res.partner']
+
+    def _ai_author_kind(self, message, visitor_partner=None):
         """
         Classify the author of a message: visitor, operator or bot.
 
@@ -154,27 +192,35 @@ class DiscussChannel(models.Model):
         - OdooBot (base.partner_root)
         Then:
         - guest (author_guest_id, e.g. LINE user) or no author: visitor
-        - author with an internal (non-share) user: human operator
+        - author with an internal (non-share) user: human operator, except
+          when the author is the session's visitor member (an employee
+          chatting on the website, e.g. the internal trial) and not the
+          session operator: visitor
         - the session's assigned operator (livechat_operator_id) without an
           internal user, e.g. an Odoo chatbot: bot
         - anyone else, including portal users and the public user: visitor
+
+        Args:
+            visitor_partner (res.partner|None): result of
+                _ai_visitor_partner(), when the caller classifies many messages
         """
         author = message.author_id
-        if author:
-            bot_ids = self.env['im_livechat.channel']._ai_bot_partner_ids(self.livechat_channel_id)
-            if author.id in bot_ids:
-                return AUTHOR_BOT
-            odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
-            if odoobot and author.id == odoobot.id:
-                return AUTHOR_BOT
+        if author and author.id in self._ai_bot_ids():
+            return AUTHOR_BOT
 
         if message.author_guest_id or not author:
             return AUTHOR_VISITOR
 
         users = author.sudo().with_context(active_test=False).user_ids
         if any(not user.share for user in users):
+            if author == self.sudo().livechat_operator_id:
+                return AUTHOR_OPERATOR
+            if visitor_partner is None:
+                visitor_partner = self._ai_visitor_partner()
+            if visitor_partner and author == visitor_partner:
+                return AUTHOR_VISITOR
             return AUTHOR_OPERATOR
-        if author == self.livechat_operator_id:
+        if author == self.sudo().livechat_operator_id:
             return AUTHOR_BOT
         return AUTHOR_VISITOR
 
@@ -189,25 +235,10 @@ class DiscussChannel(models.Model):
         """
         return self._ai_author_kind(message) == AUTHOR_VISITOR
 
-    def _build_llm_messages(self, livechat_channel):
-        """
-        Build the messages array for an OpenAI-compatible chat completions API.
-
-        Fetches the most recent N messages from this discuss.channel,
-        determines the role for each (visitor: user; AI bot and human
-        operators: assistant, operators marked "[真人客服 name]") and
-        prepends the system message: the channel prompt, a note about
-        operator messages when there are any, and the fixed product rules.
-
-        Args:
-            livechat_channel (im_livechat.channel): The livechat channel config
-
-        Returns:
-            list: List of dicts with 'role' and 'content' keys
-        """
+    def _ai_context_messages(self, livechat_channel):
+        """The most recent ai_max_history comment/email messages of this
+        session, oldest first (what the LLM gets as conversation)."""
         max_history = max(1, min(livechat_channel.ai_max_history or 50, 200))
-
-        # Fetch recent messages ordered by id (chronological)
         recent_messages = self.env['mail.message'].search(
             [
                 ('res_id', '=', self.id),
@@ -217,9 +248,37 @@ class DiscussChannel(models.Model):
             order='id desc',
             limit=max_history,
         )
+        return recent_messages.sorted('id')
 
-        # Reverse to chronological order
-        recent_messages = recent_messages.sorted('id')
+    @staticmethod
+    def _ai_operator_name(author):
+        """Name visitors see for an operator: the Live Chat username when set."""
+        author = author.sudo()
+        user = author.with_context(active_test=False).user_ids.filtered(lambda u: not u.share)[:1]
+        return (user.livechat_username if user else '') or author.name or ''
+
+    def _build_llm_messages(self, livechat_channel, recent_messages=None):
+        """
+        Build the messages array for an OpenAI-compatible chat completions API.
+
+        Fetches the most recent N messages from this discuss.channel,
+        determines the role for each (visitor: user; AI bot and human
+        operators: assistant, operators marked "[真人客服 name]" with the
+        name visitors see) and prepends the system message: the channel
+        prompt, a note about operator messages when there are any, and the
+        fixed product rules.
+
+        Args:
+            livechat_channel (im_livechat.channel): The livechat channel config
+            recent_messages (mail.message|None): result of
+                _ai_context_messages() when the caller already fetched it
+
+        Returns:
+            list: List of dicts with 'role' and 'content' keys
+        """
+        if recent_messages is None:
+            recent_messages = self._ai_context_messages(livechat_channel)
+        visitor_partner = self._ai_visitor_partner()
 
         # Roles (P1-3): visitor -> user; AI bot -> assistant; human operator
         # -> assistant marked "[真人客服 name]" so the model treats it as a
@@ -230,14 +289,13 @@ class DiscussChannel(models.Model):
             clean_body = _clean_text(msg.body)
             if not clean_body:
                 continue
-            kind = self._ai_author_kind(msg)
+            kind = self._ai_author_kind(msg, visitor_partner=visitor_partner)
             if kind == AUTHOR_VISITOR:
                 role = 'user'
             elif kind == AUTHOR_OPERATOR:
                 role = 'assistant'
                 has_operator = True
-                name = msg.author_id.sudo().name or ''
-                clean_body = (OPERATOR_PREFIX % name) + clean_body
+                clean_body = (OPERATOR_PREFIX % self._ai_operator_name(msg.author_id)) + clean_body
             else:
                 role = 'assistant'
             history.append({'role': role, 'content': clean_body})

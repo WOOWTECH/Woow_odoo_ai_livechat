@@ -5,14 +5,20 @@ Flow:
   visitor message_post
     -> discuss.channel._notify_thread creates an im_livechat.ai.job in the
        SAME transaction as the message (state pending)
-    -> after COMMIT (cr.postcommit) a daemon thread starts, waits the
-       debounce delay and runs the job with its own cursor
+    -> after COMMIT (cr.postcommit) a worker thread starts, waits the
+       debounce delay and runs the job with its own cursor (not a daemon
+       thread: a prefork worker that recycles itself finishes the reply
+       before it exits; the recovery cron is also triggered for the case
+       the process dies)
     -> the job runs under a per-session PostgreSQL advisory lock, so only
        one job per discuss.channel is processed at a time, across all
        prefork workers and the cron process
     -> before calling the LLM and again before posting, a job that has a
        newer job in the same session is marked skipped; the newest job
-       answers with the full conversation as context
+       answers with the full conversation as context. The checks before
+       posting run with the session row locked, so a visitor or operator
+       post that is being committed is waited for (or retried after the
+       reply)
     -> when the lock holder finishes it runs the newest pending job of the
        session (the jobs whose own thread found the lock busy)
   Human handoff (package D, P1-2): an operator's post pauses the session
@@ -22,8 +28,8 @@ Flow:
   LLM and again before posting.
   A cron (every 2 minutes) hands jobs left pending/running after a crash or
   restart to recovery threads (one per session), at most MAX_JOB_RUNS runs
-  per job, and never answers a job when the bot already replied after its
-  trigger message.
+  per job, and never answers a job whose trigger message was already in the
+  LLM context of a finished reply.
 """
 
 import logging
@@ -51,6 +57,10 @@ CRON_SEARCH_LIMIT = 200
 CRON_BATCH_LIMIT = 10  # sessions handed to recovery threads per cron run
 CHAIN_LIMIT = 20  # jobs one thread runs back to back for the same session
 MAX_JOB_ERROR_LENGTH = 300
+SESSION_ROW_LOCK_TIMEOUT = '15s'  # waiting for a visitor/operator transaction to commit
+# The recovery cron is triggered this long after a job is due, in case its
+# thread died (the cron only takes pending jobs STALE_PENDING_SECONDS late).
+CRON_TRIGGER_DELAY_SECONDS = STALE_PENDING_SECONDS + 5
 
 # First key of the two-int advisory lock; the second is the discuss.channel id.
 LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.job') & 0x7FFFFFFF
@@ -193,6 +203,12 @@ class LivechatAiJob(models.Model):
     started_at = fields.Datetime(string='Started', readonly=True)
     finished_at = fields.Datetime(string='Finished', readonly=True)
     error = fields.Char(string='Error', readonly=True)
+    context_message_id = fields.Integer(
+        string='Last Message In Context',
+        readonly=True,
+        help='Highest message id sent to the LLM as conversation; visitor '
+             'messages up to it are covered by this job\'s reply',
+    )
 
     @api.depends('discuss_channel_id')
     def _compute_display_name(self):
@@ -216,10 +232,21 @@ class LivechatAiJob(models.Model):
             'run_after': fields.Datetime.now() + timedelta(seconds=DEBOUNCE_SECONDS),
         })
         job._start_after_commit()
+        # Safety net when the process running the thread dies: wake the
+        # recovery cron (cron process) instead of waiting for its interval.
+        cron = self.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs', raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger(job.run_after + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
         return job
 
     def _start_after_commit(self):
-        """Start one worker thread per job once the transaction is committed."""
+        """Start one worker thread per job once the transaction is committed.
+
+        Not daemon threads: a prefork worker exits with sys.exit() when it
+        recycles itself (memory or request limit, rollout), and Python joins
+        non-daemon threads first, so the reply in progress is finished (the
+        server's watchdog still kills the process after limit_time_real).
+        """
         db_name = self.env.cr.dbname
         job_ids = list(self.ids)
 
@@ -230,7 +257,7 @@ class LivechatAiJob(models.Model):
                         target=_job_worker,
                         args=(db_name, job_id),
                         name=f'im_livechat_ai.job.{job_id}',
-                        daemon=True,
+                        daemon=False,
                     ).start()
                 except Exception:  # noqa: BLE001 - the cron recovers the job
                     _logger.exception("Could not start live chat AI job %s", job_id)
@@ -250,6 +277,35 @@ class LivechatAiJob(models.Model):
     @api.model
     def _unlock_session(self, session_id):
         self.env.cr.execute("SELECT pg_advisory_unlock(%s, %s)", (LOCK_NAMESPACE, session_id))
+
+    @api.model
+    def _session_lock_held(self, session_id):
+        """True when some connection (a job thread) holds the session lock."""
+        self.env.cr.execute("""
+            SELECT 1 FROM pg_locks
+             WHERE locktype = 'advisory' AND granted
+               AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+               AND classid = %s AND objid = %s AND objsubid = 2
+             LIMIT 1""", (LOCK_NAMESPACE, session_id))
+        return bool(self.env.cr.fetchone())
+
+    def _lock_session_row(self):
+        """Lock the session row until the next commit, before the final checks
+        and the post.
+
+        A visitor or operator post updates this row (last_interest_dt, and
+        ai_paused_until for an operator) in its own transaction. If that
+        transaction already wrote the row, this waits until it commits, and
+        the checks that follow (READ COMMITTED) see its new job or pause.
+        A post that comes later waits for the reply to be committed and is
+        retried by Odoo (serialization failure), so its message comes after
+        the reply and gets its own job.
+        """
+        cr = self.env.cr
+        cr.execute("SET LOCAL lock_timeout = %s", (SESSION_ROW_LOCK_TIMEOUT,))
+        cr.execute("SELECT id FROM discuss_channel WHERE id = %s FOR NO KEY UPDATE",
+                   (self.discuss_channel_id.id,))
+        cr.execute("SET LOCAL lock_timeout = DEFAULT")
 
     # --- Processing ---
 
@@ -337,8 +393,7 @@ class LivechatAiJob(models.Model):
             return
         if self.attempts >= MAX_JOB_RUNS:
             # Previous runs died (worker killed, crash) before finishing.
-            self._give_up(f'已嘗試處理 {self.attempts} 次仍未完成')
-            commit_step()
+            self._finish_exhausted(commit_step)
             return
 
         # Claim: the run counter is durable before any LLM call.
@@ -351,41 +406,32 @@ class LivechatAiJob(models.Model):
         })
         commit_step()
 
-        channel = self.livechat_channel_id
-        session = self.discuss_channel_id
         if self.kind == 'handoff':
             self._process_handoff(commit_step)
             return
-        if not channel or not channel.ai_enabled or not channel.ai_model or not channel._llm_is_configured():
-            self._finish('skipped', 'AI 已關閉或 LiteLLM 未設定')
-            commit_step()
-            return
-        if self._has_newer_job():
-            self._finish('skipped', '有更新的訪客訊息，由最新的工作一併回覆')
-            commit_step()
-            return
-        if self._already_answered():
-            self._finish('done', '觸發訊息之後已有 AI 回覆，不重複回答')
-            self._supersede_older()
-            commit_step()
-            return
-        if session._ai_is_paused():
-            self._finish('skipped', '真人客服處理中，AI 暫停回覆')
-            self._supersede_older()
-            commit_step()
+        if self._skip_reply(commit_step):
             return
 
-        messages = session._build_llm_messages(channel)
+        channel = self.livechat_channel_id
+        session = self.discuss_channel_id
+        context = session._ai_context_messages(channel)
+        messages = session._build_llm_messages(channel, recent_messages=context)
         if not any(m.get('role') == 'user' for m in messages):
             self._finish('skipped', '對話中沒有訪客訊息')
             commit_step()
             return
+        # The visitor messages up to this id are answered by this reply.
+        self.write({'context_message_id': max(context.ids)})
 
-        # No transaction stays open during the HTTP calls and retry waits.
+        # No transaction stays open during the HTTP calls and retry waits:
+        # before_call commits right before each request.
         commit_step()
         result = channel._generate_ai_reply(session, messages, before_call=commit_step)
         self.write({'llm_calls': result['calls']})
 
+        # Final checks and the post, with the session row locked (see
+        # _lock_session_row): committed in one transaction.
+        self._lock_session_row()
         if self._has_newer_job():
             # A newer message arrived while the LLM was answering: drop this
             # answer, the newest job answers with the full context.
@@ -406,18 +452,52 @@ class LivechatAiJob(models.Model):
         self._supersede_older()
         commit_step()
 
+    def _skip_reply(self, commit_step):
+        """Finish a reply job without calling the LLM when it must not answer.
+
+        Returns:
+            bool: True when the job was finished (and committed)
+        """
+        channel = self.livechat_channel_id
+        if not channel or not channel.ai_enabled or not channel.ai_model or not channel._llm_is_configured():
+            self._finish('skipped', 'AI 已關閉或 LiteLLM 未設定')
+        elif self._has_newer_job():
+            self._finish('skipped', '有更新的訪客訊息，由最新的工作一併回覆')
+        elif self._already_answered():
+            self._finish('done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答')
+            self._supersede_older()
+        elif self.discuss_channel_id._ai_is_paused():
+            self._finish('skipped', '真人客服處理中，AI 暫停回覆')
+            self._supersede_older()
+        else:
+            return False
+        commit_step()
+        return True
+
+    def _finish_exhausted(self, commit_step):
+        """MAX_JOB_RUNS runs died before finishing. A handoff still gets its
+        notice (no LLM involved); a reply job that must not answer anyway
+        (newer job, AI off, paused, answered) is closed quietly; otherwise
+        the visitor gets the error message."""
+        if self.kind == 'handoff':
+            self._process_handoff(commit_step)
+            return
+        if self._skip_reply(commit_step):
+            return
+        self._give_up(f'已嘗試處理 {self.attempts} 次仍未完成')
+        commit_step()
+
     def _process_handoff(self, commit_step):
         """Visitor asked for a human: send the handoff message once, then
-        notify the operators (the session was paused by the visitor post)."""
+        notify the operators (the session was paused by the visitor post).
+
+        The notice and the job state are committed together, so a job that
+        is not done has never posted its notice; a reply that covered the
+        message does not replace the notice and the operator alert."""
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         if not channel or not channel.ai_enabled:
             self._finish('skipped', 'AI 已關閉')
-            commit_step()
-            return
-        if self._already_answered():
-            self._finish('done', '觸發訊息之後已有 AI 回覆，不重複回答')
-            self._supersede_older()
             commit_step()
             return
         message = channel._create_bot_message(
@@ -462,19 +542,23 @@ class LivechatAiJob(models.Model):
         return list(self.env['im_livechat.channel']._ai_bot_partner_ids(self.livechat_channel_id))
 
     def _already_answered(self):
-        """True when the AI bot posted in the session after the trigger message
-        (e.g. the reply was committed but the process died afterwards)."""
-        domain = [
-            ('model', '=', 'discuss.channel'),
-            ('res_id', '=', self.discuss_channel_id.id),
-            ('author_id', 'in', self._bot_partner_ids()),
-            ('message_type', '=', 'comment'),
-        ]
-        if self.message_id:
-            domain.append(('id', '>', self.message_id.id))
-        else:
-            domain.append(('create_date', '>=', self.create_date))
-        return bool(self.env['mail.message'].search_count(domain, limit=1))
+        """True when a finished reply job of the session had this job's
+        trigger message in its LLM context, so its reply covered it.
+
+        A bot message posted after the trigger is not enough: that reply may
+        have been produced before the trigger message was visible (posted
+        while the reply was being written), and then the visitor's question
+        was never answered."""
+        if not self.message_id:
+            return False
+        return bool(self.search_count([
+            ('discuss_channel_id', '=', self.discuss_channel_id.id),
+            ('id', '!=', self.id),
+            ('kind', '=', 'reply'),
+            ('state', '=', 'done'),
+            ('reply_message_id', '!=', False),
+            ('context_message_id', '>=', self.message_id.id),
+        ], limit=1))
 
     def _supersede_older(self):
         """Older unfinished jobs of the session are covered by this answer.
@@ -581,9 +665,12 @@ class LivechatAiJob(models.Model):
     def _cron_recover_jobs(self, commit=True):
         """Run jobs whose thread was lost (restart, crash, worker recycled).
 
-        Jobs being processed right now hold their session lock and are left
-        alone. Each job still counts its runs (MAX_JOB_RUNS) and is never
-        answered twice (see _already_answered).
+        Sessions whose lock is held (a job is being processed right now) are
+        left alone, so repeated cron runs do not start duplicate threads.
+        Each job still counts its runs (MAX_JOB_RUNS) and is never answered
+        twice (see _already_answered). The work is handed to threads, so the
+        cron reports no progress (Odoo would re-run it at once otherwise);
+        sessions beyond CRON_BATCH_LIMIT are taken on the next runs.
 
         Args:
             commit (bool): True: start one recovery thread per session (own
@@ -599,7 +686,13 @@ class LivechatAiJob(models.Model):
         by_session = {}
         for job in jobs:
             by_session.setdefault(job.discuss_channel_id.id, []).append(job)
-        batch = list(by_session.values())[:CRON_BATCH_LIMIT]
+        batch = []
+        for session_id, session_jobs in by_session.items():
+            if self._session_lock_held(session_id):
+                continue
+            batch.append(session_jobs)
+            if len(batch) >= CRON_BATCH_LIMIT:
+                break
         for session_jobs in batch:
             for job in session_jobs:
                 _logger.info("Recovering live chat AI job %s (state %s, runs %s)",
@@ -614,14 +707,12 @@ class LivechatAiJob(models.Model):
                     target=_recovery_worker,
                     args=(self.env.cr.dbname, job_ids),
                     name=f'im_livechat_ai.recover.{job_ids[0]}',
-                    daemon=True,
+                    daemon=False,
                 ).start()
             else:
                 for job_id in job_ids:
                     self._run_chain_in_transaction(job_id)
-        tried = sum(len(session_jobs) for session_jobs in batch)
-        self.env['ir.cron']._notify_progress(done=tried, remaining=len(jobs) - tried)
-        return tried
+        return sum(len(session_jobs) for session_jobs in batch)
 
     @api.model
     def _run_chain_in_transaction(self, job_id):

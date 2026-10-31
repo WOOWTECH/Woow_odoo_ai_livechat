@@ -1090,13 +1090,13 @@ class TestBotPartnerEdgeCases(TransactionCase):
     """Edge cases for _get_or_create_bot_partner."""
 
     def test_empty_bot_name_defaults(self):
-        """Empty bot name should default to 'AI Assistant'."""
+        """Empty bot name should default to 'AI 客服助理'."""
         channel = self.env['im_livechat.channel'].create({
             'name': 'No Bot Name',
             'ai_bot_name': False,
         })
         partner = channel._get_or_create_bot_partner()
-        self.assertEqual(partner.name, 'AI Assistant')
+        self.assertEqual(partner.name, 'AI 客服助理')
 
     def test_unicode_bot_name(self):
         """Unicode bot name should be preserved."""
@@ -1173,7 +1173,7 @@ class TestTriggerAiResponseEdgeCases(TransactionCase):
 
     @patch('odoo.addons.im_livechat_ai.models.livechat_ai_job.threading.Thread')
     def test_job_queued_thread_only_after_commit(self, mock_thread):
-        """The job is queued now; its daemon thread starts only after commit."""
+        """The job is queued now; its (non-daemon) thread starts only after commit."""
         msg = self._msg()
         job = self.channel._trigger_ai_response(self.session, msg)
         self.assertEqual(job.state, 'pending')
@@ -1184,7 +1184,7 @@ class TestTriggerAiResponseEdgeCases(TransactionCase):
         self.assertEqual(len(callbacks), 1)
         callbacks[0]()  # what cr.commit() runs
         mock_thread.assert_called_once()
-        self.assertTrue(mock_thread.call_args[1].get('daemon', False))
+        self.assertIs(mock_thread.call_args[1].get('daemon'), False)
         self.assertEqual(mock_thread.call_args[1]['args'], (self.env.cr.dbname, job.id))
 
 

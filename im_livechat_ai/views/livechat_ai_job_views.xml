@@ -41,6 +41,7 @@
                             <field name="discuss_channel_id"/>
                             <field name="message_id"/>
                             <field name="reply_message_id"/>
+                            <field name="context_message_id"/>
                         </group>
                         <group string="Processing">
                             <field name="create_date"/>

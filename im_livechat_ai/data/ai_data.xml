@@ -8,7 +8,7 @@
 
         <!-- Default AI Bot Partner: used as fallback author for AI-generated messages -->
         <record id="partner_ai_bot" model="res.partner">
-            <field name="name">AI Assistant</field>
+            <field name="name">AI 客服助理</field>
             <field name="active" eval="False"/>
             <field name="category_id" eval="[(4, ref('partner_category_ai_bot'))]"/>
             <field name="is_company" eval="False"/>

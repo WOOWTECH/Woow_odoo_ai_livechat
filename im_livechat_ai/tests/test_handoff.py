@@ -384,12 +384,14 @@ class TestKeywordHandoff(HandoffCase):
         self.assertEqual(len(self._bot_messages()), 1)
 
     def test_handoff_not_repeated_by_recovery(self):
-        """The notice was committed but the job state was not."""
+        """The notice and the done state are committed together: a finished
+        handoff job is never run again."""
         self._post('真人客服', self.visitor)
         job = self._jobs()
-        self.channel._create_bot_message(self.env, self.session, DEFAULT_HANDOFF_MESSAGE)
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
+        job._run_job(commit=False)
+        self.Job._cron_recover_jobs(commit=False)
         self.assertEqual(len(self._bot_messages()), 1)
 
 

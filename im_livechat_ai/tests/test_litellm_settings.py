@@ -153,8 +153,11 @@ class TestLiteLLMPermissions(LivechatAiUsersCase):
         for user in (self.manager, self.lc_user):
             data = self.channel.with_user(user).read()
             self.assertNotIn(SECRET_KEY, json.dumps(data, default=str))
-            data = self.channel.with_user(user).web_read({'ai_model': {}, 'ai_enabled': {}})
-            self.assertNotIn(SECRET_KEY, json.dumps(data, default=str))
+        # The AI fields themselves are for Live Chat managers only.
+        data = self.channel.with_user(self.manager).web_read({'ai_model': {}, 'ai_enabled': {}})
+        self.assertNotIn(SECRET_KEY, json.dumps(data, default=str))
+        with self.assertRaises(AccessError), mute_logger('odoo.models'):
+            self.channel.with_user(self.lc_user).web_read({'ai_model': {}, 'ai_enabled': {}})
 
     def test_non_admin_cannot_write_legacy_fields(self):
         for user in (self.manager, self.lc_user):
@@ -191,7 +194,7 @@ class TestLiteLLMPermissions(LivechatAiUsersCase):
     def test_key_goes_only_to_system_url_even_with_context(self, mock_post):
         """Nothing a channel user controls changes the target URL."""
         mock_post.return_value = _ok_chat_response()
-        channel = self.channel.with_user(self.lc_user).with_context(
+        channel = self.channel.with_user(self.manager).with_context(
             im_livechat_ai_base_url='https://attacker.example/v1',
         )
         channel.write({'ai_system_prompt': 'base url: https://attacker.example/v1'})

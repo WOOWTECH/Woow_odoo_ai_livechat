@@ -56,7 +56,7 @@ Upgrading to 18.0.1.1.0 (`-u im_livechat_ai`, or the platform upgrade gate, whic
 |---|---|
 | Per-channel **API URL** and **API key** | Values wiped before the new code loads (pre-migration), then the columns are dropped. Old keys never stay in the database. |
 | **Enable AI Integration** | Turned off on **every** channel. The server log lists the channels that had AI on. |
-| **Retry Delay** | Removed (fixed backoff of 3 s, then 10 s). **Max Retries** capped to 2. |
+| **Retry Delay** | Removed (fixed backoff of 3 s, then 10 s). **Max Retries** converted from total calls to retries (old value - 1, at most 2). |
 | Default English **Error Message** (or empty) | Replaced by the Traditional Chinese default. Custom messages are kept. |
 | AI bot partners | Archived and tagged "AI 機器人", like Odoo chatbot partners. |
 | Existing **API logs** | Conversation content and upstream response bodies removed. |
@@ -97,7 +97,7 @@ Revoke the old per-channel provider keys at the provider: the upgrade removes th
 │  (Browser)  │<──│ (discuss.channel) │<──│ (after commit thread, │<──│  /v1/chat/   │
 └─────────────┘   └───────────────────┘   │  recovery cron)       │   │  completions │
    Chat UI          _notify_thread():      └──────────┬────────────┘   └──────────────┘
-                    create job in the                 │ tool calls (max 3 rounds)
+                    create job in the                 │ tool calls (max 3 calls) 
                     visitor's transaction             v
                                            ┌───────────────────────┐
                                            │ im_livechat.ai.tools  │
@@ -183,7 +183,7 @@ flowchart TD
 - **Company LiteLLM gateway** -- One system-wide OpenAI-compatible base URL and API key (Settings > Live Chat AI), managed by system administrators only.
 - **Model dropdown per channel** -- Channels pick a model from the list cached by **Fetch Available Models** (`GET {base}/models`). The value already stored on a channel always stays selectable.
 - **Multi-turn context** -- Recent history (1-200 messages) as system/user/assistant messages. Operator replies are sent as `assistant` messages marked `[真人客服 name]`, and the prompt tells the AI not to contradict them.
-- **Visitors and portal customers** -- Guests, logged-in portal customers and the public user are answered; internal users, the session's assigned operator and the bots never trigger the AI.
+- **Visitors and portal customers** -- Guests, logged-in portal customers and the public user are answered, and so is an employee who opens the website chat as the visitor; operators (the session operator and internal users who join) and the bots never trigger the AI. Only visitor chat messages are answered, not the rating/feedback notification.
 
 ### Reliability (job queue)
 
@@ -219,6 +219,8 @@ flowchart TD
 
 - **XSS protection** -- AI replies are escaped; only markdown links / bare `http(s)` URLs become links and `**text**` bold.
 - **Loop prevention** -- AI bots, OdooBot and the session operator never trigger the AI.
+- **AI settings for Live Chat managers only** -- The channel's AI fields (prompt, model, handoff keywords, error text, ...) and "Test AI Connection" are restricted to Live Chat managers; operators, employees and portal customers cannot read them. The bot partner is created by the module and cannot be chosen.
+- **Links only to the store** -- AI replies only turn URLs of `web.base.url` and the website domains into links; other URLs stay plain text.
 - **Traditional Chinese** -- Visitor/operator texts in Traditional Chinese; full `zh_TW` translation of the interface.
 
 ---
@@ -362,7 +364,7 @@ Navigate to **Live Chat > Configuration > Channels**, select a channel, and open
 |---|---|---|
 | **System Prompt** (`ai_system_prompt`) | Persona, knowledge scope and style. The product price rule (and the operator note) are always appended. | *(empty)* |
 | **Temperature** (`ai_temperature`) | Randomness, 0.0 - 2.0. | `0.7` |
-| **Max Tokens** (`ai_max_tokens`) | Maximum tokens in the AI's answer. | `1024` |
+| **Max Tokens** (`ai_max_tokens`) | Maximum tokens in the AI's answer, 1 - 8192. | `1024` |
 | **Max History Messages** (`ai_max_history`) | Recent messages sent as context, 1 - 200. | `50` |
 
 ### Step 4: Reliability and errors
@@ -386,7 +388,7 @@ The pause is stored on the conversation (`discuss.channel.ai_paused_until`).
 
 | Field | Description | Default |
 |---|---|---|
-| **Bot Name** (`ai_bot_name`) | Display name of the AI in the chat. | `AI Assistant` |
+| **Bot Name** (`ai_bot_name`) | Display name of the AI in the chat. | `AI 客服助理` |
 | **Bot Partner** (`ai_bot_partner_id`) | Archived `res.partner` tagged "AI 機器人", created when AI is enabled. | Auto-created |
 
 ### Step 7: Test & monitor

@@ -6,7 +6,7 @@
         <field name="inherit_id" ref="im_livechat.im_livechat_channel_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
-                <page string="AI Integration" name="ai_integration">
+                <page string="AI Integration" name="ai_integration" groups="im_livechat.im_livechat_group_manager">
                     <group>
                         <group string="AI Configuration">
                             <field name="ai_enabled"/>

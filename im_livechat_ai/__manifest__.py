@@ -32,7 +32,7 @@ Features:
   so the AI does not contradict them
 * Product lookup tools (per channel, on by default, needs eCommerce): the AI
   searches published products and reads variant prices, specifications and
-  links with the ORM (OpenAI tool calling, at most 3 rounds per reply); the
+  links with the ORM (OpenAI tool calling, at most 3 tool calls per reply); the
   system prompt always forbids prices that do not come from these tools
 * API call logging with token usage tracking (Live Chat administrators only;
   conversation content is not stored unless explicitly enabled)

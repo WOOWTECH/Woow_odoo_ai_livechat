@@ -17,7 +17,7 @@ from odoo.tests.common import TransactionCase, tagged
 from odoo.tools import html2plaintext, mute_logger
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
-    LLM_MAX_TOOL_CALLS_PER_ROUND,
+    LLM_MAX_TOOL_CALLS,
     LLM_MAX_TOOL_ROUNDS,
     PRODUCT_GUARD_NO_TOOLS,
     PRODUCT_GUARD_WITH_TOOLS,
@@ -536,10 +536,7 @@ class TestToolLoop(ProductToolsCase):
         self.assertEqual(len(results), 2)
         self.assertTrue(all('error' in r for r in results.values()))
 
-    @patch(POST)
-    def test_tool_calls_beyond_per_round_limit_are_not_run(self, mock_post):
-        calls = [(TOOL_SEARCH_PRODUCTS, {'keyword': f'燈泡 {i}'}) for i in range(LLM_MAX_TOOL_CALLS_PER_ROUND + 2)]
-        mock_post.side_effect = [_tool_response(*calls), _answer('好的')]
+    def _spy_tools(self):
         real = type(self.Tools)._execute_tool
         executed = []
 
@@ -547,12 +544,46 @@ class TestToolLoop(ProductToolsCase):
             executed.append(name)
             return real(model, channel, name, arguments)
 
-        with patch.object(type(self.Tools), '_execute_tool', spy):
+        return executed, patch.object(type(self.Tools), '_execute_tool', spy)
+
+    @patch(POST)
+    def test_tool_calls_beyond_reply_limit_are_not_run(self, mock_post):
+        """Package E: at most 3 tool calls per reply, even in one round."""
+        self.assertEqual(LLM_MAX_TOOL_CALLS, 3)
+        calls = [(TOOL_SEARCH_PRODUCTS, {'keyword': f'燈泡 {i}'}) for i in range(LLM_MAX_TOOL_CALLS + 2)]
+        mock_post.side_effect = [_tool_response(*calls), _answer('好的')]
+        executed, spy = self._spy_tools()
+        with spy:
             self._run()
-        self.assertEqual(len(executed), LLM_MAX_TOOL_CALLS_PER_ROUND)
-        results = _tool_results(_payloads(mock_post)[1])
-        self.assertEqual(len(results), LLM_MAX_TOOL_CALLS_PER_ROUND + 2)
+        self.assertEqual(len(executed), LLM_MAX_TOOL_CALLS)
+        payloads = _payloads(mock_post)
+        results = _tool_results(payloads[1])
+        self.assertEqual(len(results), LLM_MAX_TOOL_CALLS + 2)
         self.assertEqual(sum(1 for r in results.values() if 'error' in r), 2)
+        # The cap is reached: the next call is the forced final answer.
+        self.assertEqual(payloads[1]['tool_choice'], 'none')
+        self.assertEqual(payloads[1]['messages'][-1], {'role': 'system', 'content': TOOL_ROUND_LIMIT_NOTE})
+
+    @patch(POST)
+    def test_tool_call_cap_counts_across_rounds(self, mock_post):
+        """2 calls in round 1 + 2 in round 2: only 3 run, then a final answer."""
+        mock_post.side_effect = [
+            _tool_response((TOOL_SEARCH_PRODUCTS, {'keyword': '崁燈'}), (TOOL_SEARCH_PRODUCTS, {'keyword': '燈泡'})),
+            _tool_response((TOOL_SEARCH_PRODUCTS, {'keyword': '開關'}), (TOOL_SEARCH_PRODUCTS, {'keyword': '感測器'})),
+            _answer('依查到的資料回覆。'),
+        ]
+        executed, spy = self._spy_tools()
+        with spy:
+            job = self._run()
+        self.assertEqual(job.state, 'done')
+        self.assertEqual(len(executed), 3)
+        self.assertEqual(mock_post.call_count, 3)
+        payloads = _payloads(mock_post)
+        self.assertEqual([p['tool_choice'] for p in payloads], ['auto', 'auto', 'none'])
+        results = _tool_results(payloads[2])
+        self.assertEqual(len(results), 4)
+        self.assertEqual(sum(1 for r in results.values() if 'error' in r), 1)
+        self.assertEqual(self._last_reply(), '依查到的資料回覆。')
 
     @patch(SLEEP)
     @patch(POST)
@@ -620,8 +651,10 @@ class TestToolLoop(ProductToolsCase):
 class TestReplyFormatting(TransactionCase):
     """Markdown links / URLs / bold in AI text become safe HTML."""
 
-    def _fmt(self, text):
-        return str(self.env['im_livechat.channel']._format_reply_line(text))
+    HOSTS = frozenset({'shop.test', 'e.test'})
+
+    def _fmt(self, text, hosts=HOSTS):
+        return str(self.env['im_livechat.channel']._format_reply_line(text, hosts))
 
     def test_markdown_link_bold_and_bare_url(self):
         html = self._fmt('售價 **NT$1,520**，[崁燈](https://shop.test/shop/a-17#attribute_values=1,2)。')
@@ -639,3 +672,39 @@ class TestReplyFormatting(TransactionCase):
         html = self._fmt('[a"><img src=x>](https://e.test/"onmouseover=1)')
         self.assertNotIn('<img', html)
         self.assertNotIn('"onmouseover', html)
+
+    def test_off_site_urls_are_not_links(self):
+        """A prompt-injected reply cannot post a clickable off-site link."""
+        html = self._fmt('請到 [官網登入](https://evil.example/login) 確認訂單')
+        self.assertEqual(html, '請到 官網登入 確認訂單')
+        html = self._fmt('網址 https://evil.example/login?x=1&y=2。')
+        self.assertEqual(html, '網址 https://evil.example/login?x=1&amp;y=2。')
+        self.assertNotIn('<a', self._fmt('[x](https://shop.test.evil.example/a)'))
+        self.assertNotIn('<a', self._fmt('https://shop.test@evil.example/a'))
+        # Host match is case-insensitive and ignores the port.
+        self.assertIn('<a href="https://SHOP.test:8443/a"', self._fmt('[a](https://SHOP.test:8443/a)'))
+
+    def test_link_hosts_are_base_url_and_website_domains(self):
+        ICP = self.env['ir.config_parameter'].sudo()
+        ICP.set_param('web.base.url', 'https://www.store.test/')
+        website = self.env['website'].search([], limit=1)
+        website.domain = 'shop.store.test'
+        hosts = self.env['im_livechat.channel']._ai_link_hosts()
+        self.assertIn('www.store.test', hosts)
+        self.assertIn('shop.store.test', hosts)
+        self.assertNotIn('evil.example', hosts)
+
+    @patch(POST)
+    def test_bot_message_drops_off_site_link(self, mock_post):
+        self.env['ir.config_parameter'].sudo().set_param('web.base.url', 'https://www.store.test')
+        channel = self.env['im_livechat.channel'].create({'name': 'Link Channel'})
+        session = self.env['discuss.channel'].create({
+            'name': 'Link Session', 'channel_type': 'livechat',
+            'livechat_operator_id': self.env.ref('base.partner_admin').id,
+            'livechat_channel_id': channel.id,
+        })
+        message = channel._create_bot_message(
+            self.env, session, '[商品](https://www.store.test/shop/a) 或 [登入](https://evil.example/login)')
+        self.assertIn('href="https://www.store.test/shop/a"', message.body)
+        self.assertNotIn('evil.example', message.body)
+        self.assertIn('登入', message.body)

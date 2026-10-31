@@ -15,15 +15,17 @@ from odoo import fields
 from odoo.exceptions import AccessError
 from odoo.sql_db import db_connect
 from odoo.tests.common import TransactionCase, new_test_user
-from odoo.tools import mute_logger
+from odoo.tools import html2plaintext, mute_logger
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     LLM_REQUEST_TIMEOUT,
 )
 from odoo.addons.im_livechat_ai.models.livechat_ai_job import (
+    CRON_TRIGGER_DELAY_SECONDS,
     DEBOUNCE_SECONDS,
     LOCK_NAMESPACE,
     MAX_JOB_RUNS,
+    STALE_PENDING_SECONDS,
 )
 
 from .common import livechat_operator, setup_litellm
@@ -152,7 +154,8 @@ class TestJobCreation(AiJobCase):
         self.assertFalse(self._jobs())
 
     @patch(THREAD)
-    def test_postcommit_starts_daemon_thread(self, mock_thread):
+    def test_postcommit_starts_non_daemon_thread(self, mock_thread):
+        """Not a daemon: a recycling prefork worker (sys.exit) finishes it."""
         self._visitor_post('hi')
         job = self._jobs()
         mock_thread.assert_not_called()
@@ -160,7 +163,7 @@ class TestJobCreation(AiJobCase):
                         if getattr(f, 'im_livechat_ai_job_ids', None) == job.ids)
         callback()
         mock_thread.assert_called_once()
-        self.assertTrue(mock_thread.call_args.kwargs['daemon'])
+        self.assertIs(mock_thread.call_args.kwargs['daemon'], False)
         self.assertEqual(mock_thread.call_args.kwargs['args'], (self.env.cr.dbname, job.id))
 
 
@@ -325,7 +328,7 @@ class TestJobRecovery(AiJobCase):
             self._make_stale(job, state='pending', attempts=0)
         self.assertEqual(self.Job._cron_recover_jobs(), 2)
         mock_thread.assert_called_once()
-        self.assertTrue(mock_thread.call_args.kwargs['daemon'])
+        self.assertIs(mock_thread.call_args.kwargs['daemon'], False)
         self.assertEqual(mock_thread.call_args.kwargs['args'], (self.env.cr.dbname, jobs.ids))
         self.assertEqual(jobs.mapped('state'), ['pending', 'pending'])
 
@@ -337,17 +340,71 @@ class TestJobRecovery(AiJobCase):
         self.assertEqual(job.state, 'pending')
         mock_post.assert_not_called()
 
+    def _answered_by(self, job, context_message, reply_body='已經回覆過了'):
+        """Mark `job` as a finished reply whose LLM context ended at
+        `context_message` (the reply itself is posted now, i.e. last)."""
+        reply = self.channel._create_bot_message(self.env, self.session, reply_body)
+        job.write({'state': 'done', 'reply_message_id': reply.id,
+                   'context_message_id': context_message.id})
+        return reply
+
     @patch(POST)
     def test_cron_does_not_double_answer(self, mock_post):
-        """The reply was committed but the job state was not (process died)."""
+        """A later job's reply had this trigger message in its context."""
         self._visitor_post('問題')
-        job = self._jobs()
-        self.channel._create_bot_message(self.env, self.session, '已經回覆過了')
-        self._make_stale(job, state='running', attempts=1)
+        second = self._visitor_post('補充')
+        job_a, job_b = self._jobs()
+        self._answered_by(job_a, second)
+        self._make_stale(job_b, state='running', attempts=1)
         self.Job._cron_recover_jobs(commit=False)
-        self.assertEqual(job.state, 'done')
+        self.assertEqual(job_b.state, 'done')
+        self.assertIn('一併回答', job_b.error)
         mock_post.assert_not_called()
         self.assertEqual(len(self._bot_messages()), 1)
+
+    @patch(POST)
+    def test_message_posted_during_reply_is_still_answered(self, mock_post):
+        """Race: B was posted while A's reply was written, so A's reply comes
+        after B but B was not in A's LLM context: B must still be answered."""
+        mock_post.return_value = _ok('回答 B')
+        message_a = self._visitor_post('問題 A')
+        job_a = self._jobs()
+        message_b = self._visitor_post('問題 B')
+        job_b = self._jobs() - job_a
+        reply_a = self._answered_by(job_a, message_a, '回答 A')
+        self.assertGreater(reply_a.id, message_b.id)
+        job_b._run_job(commit=False)
+        self.assertEqual(job_b.state, 'done')
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertIn('回答 B', job_b.reply_message_id.body)
+        self.assertEqual(job_b.context_message_id, reply_a.id)
+
+    @patch(POST)
+    def test_handoff_posted_during_reply_still_gets_notice(self, mock_post):
+        """A handoff job is never closed because a bot message came after it."""
+        message_a = self._visitor_post('問題 A')
+        job_a = self._jobs()
+        message_b = self.session.message_post(
+            body='真人', author_id=self.visitor.id, message_type='comment',
+            subtype_xmlid='mail.mt_comment')
+        job_b = self._jobs() - job_a
+        self.assertEqual(job_b.kind, 'handoff')
+        self._answered_by(job_a, message_a, '回答 A')
+        job_b._run_job(commit=False)
+        self.assertEqual(job_b.state, 'done')
+        self.assertIn(self.channel.ai_handoff_message, html2plaintext(job_b.reply_message_id.body))
+        self.assertTrue(self._odoobot_chat_messages(self.operator))
+        self.assertGreater(job_b.reply_message_id.id, message_b.id)
+        mock_post.assert_not_called()
+
+    @patch(POST)
+    def test_context_message_id_recorded(self, mock_post):
+        mock_post.return_value = _ok()
+        message = self._visitor_post('hi')
+        job = self._jobs()
+        job._run_job(commit=False)
+        self.assertEqual(job.state, 'done')
+        self.assertEqual(job.context_message_id, message.id)
 
     @patch(POST)
     def test_cron_respects_max_runs(self, mock_post):
@@ -360,6 +417,130 @@ class TestJobRecovery(AiJobCase):
         self.assertEqual(job.attempts, MAX_JOB_RUNS)
         self.assertIn(ERROR_TEXT, job.reply_message_id.body)
         self.assertTrue(self._odoobot_chat_messages(self.operator))
+
+    @patch(POST)
+    def test_max_runs_superseded_job_is_closed_quietly(self, mock_post):
+        mock_post.return_value = _ok('最新的回覆')
+        self._visitor_post('一直當機')
+        job = self._jobs()
+        self._make_stale(job, state='running', attempts=MAX_JOB_RUNS)
+        self._visitor_post('新問題')
+        newer = self._jobs() - job
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(job.state, 'skipped')
+        self.assertEqual(newer.state, 'done')
+        bodies = ' '.join(self._bot_messages().mapped('body'))
+        self.assertNotIn(ERROR_TEXT, bodies)
+        self.assertFalse(self._odoobot_chat_messages(self.operator))
+
+    @patch(POST)
+    def test_max_runs_paused_or_disabled_job_is_closed_quietly(self, mock_post):
+        self._visitor_post('一直當機')
+        job = self._jobs()
+        self._make_stale(job, state='running', attempts=MAX_JOB_RUNS)
+        self.session._ai_pause()
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(job.state, 'skipped')
+        self.assertFalse(self._bot_messages())
+
+        self.session.write({'ai_paused_until': False})
+        self._visitor_post('再一次')
+        job2 = self._jobs() - job
+        self._make_stale(job2, state='running', attempts=MAX_JOB_RUNS)
+        self.channel.write({'ai_enabled': False})
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(job2.state, 'skipped')
+        self.assertFalse(self._bot_messages())
+        self.assertFalse(self._odoobot_chat_messages(self.operator))
+        mock_post.assert_not_called()
+
+    @patch(POST)
+    def test_max_runs_handoff_posts_handoff_notice(self, mock_post):
+        message = self._visitor_post('placeholder')
+        job = self.Job._create_for_message(self.session, message, kind='handoff')
+        self._jobs().filtered(lambda j: j.kind == 'reply').write({'state': 'skipped'})
+        self._make_stale(job, state='running', attempts=MAX_JOB_RUNS)
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(job.state, 'done')
+        body = html2plaintext(job.reply_message_id.body)
+        self.assertIn(self.channel.ai_handoff_message, body)
+        self.assertNotIn(ERROR_TEXT, body)
+        self.assertTrue(self._odoobot_chat_messages(self.operator))
+        mock_post.assert_not_called()
+
+    @patch(THREAD)
+    def test_cron_skips_locked_sessions_and_reports_no_progress(self, mock_thread):
+        """A session being processed is not handed to a second thread, and the
+        cron reports no remaining work (Odoo would re-run it at once)."""
+        other_session = self.env['discuss.channel'].create({
+            'name': 'Other Session', 'channel_type': 'livechat',
+            'livechat_operator_id': self.operator.id,
+            'livechat_channel_id': self.channel.id,
+        })
+        self._visitor_post('a')
+        other_session.message_post(body='b', author_id=self.visitor.id,
+                                   message_type='comment', subtype_xmlid='mail.mt_comment')
+        for job in self._jobs() | self._jobs(other_session):
+            self._make_stale(job, state='running', attempts=1)
+        IrCron = type(self.env['ir.cron'])
+        with closing(db_connect(self.env.cr.dbname).cursor()) as other, \
+                patch.object(IrCron, '_notify_progress') as notify:
+            other.execute("SELECT pg_advisory_lock(%s, %s)", (LOCK_NAMESPACE, self.session.id))
+            try:
+                self.assertTrue(self.Job._session_lock_held(self.session.id))
+                self.assertFalse(self.Job._session_lock_held(other_session.id))
+                self.assertEqual(self.Job._cron_recover_jobs(), 1)
+            finally:
+                other.execute("SELECT pg_advisory_unlock(%s, %s)", (LOCK_NAMESPACE, self.session.id))
+        mock_thread.assert_called_once()
+        self.assertEqual(mock_thread.call_args.kwargs['args'],
+                         (self.env.cr.dbname, self._jobs(other_session).ids))
+        notify.assert_not_called()
+
+    def test_visitor_post_triggers_recovery_cron(self):
+        """If the thread's process dies, the cron process picks the job up
+        soon after it is overdue instead of waiting for the interval."""
+        cron = self.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs')
+        Trigger = self.env['ir.cron.trigger'].sudo()
+        before = Trigger.search([('cron_id', '=', cron.id)])
+        self._visitor_post('hi')
+        job = self._jobs()
+        triggers = Trigger.search([('cron_id', '=', cron.id)]) - before
+        self.assertEqual(len(triggers), 1)
+        self.assertEqual(triggers.call_at, job.run_after + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
+        self.assertGreater(CRON_TRIGGER_DELAY_SECONDS, STALE_PENDING_SECONDS)
+
+    @patch(POST)
+    def test_final_checks_run_with_session_row_locked(self, mock_post):
+        """The session row is locked after the LLM call and before the last
+        newer-job / pause checks; the lock timeout is reset afterwards."""
+        mock_post.return_value = _ok()
+        self._visitor_post('hi')
+        job = self._jobs()
+        JobModel = type(self.Job)
+        events = []
+        real_lock, real_newer = JobModel._lock_session_row, JobModel._has_newer_job
+
+        def lock(rec):
+            events.append('lock')
+            return real_lock(rec)
+
+        def newer(rec):
+            events.append('newer')
+            return real_newer(rec)
+
+        def post(*args, **kwargs):
+            events.append('http')
+            return _ok()
+
+        mock_post.side_effect = post
+        with patch.object(JobModel, '_lock_session_row', lock), \
+                patch.object(JobModel, '_has_newer_job', newer):
+            job._run_job(commit=False)
+        self.assertEqual(job.state, 'done')
+        self.assertEqual(events, ['newer', 'http', 'lock', 'newer'])
+        self.env.cr.execute("SHOW lock_timeout")
+        self.assertEqual(self.env.cr.fetchone()[0], '0')
 
     @patch(POST)
     def test_cron_gives_up_on_old_jobs(self, mock_post):

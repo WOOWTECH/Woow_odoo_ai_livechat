@@ -524,8 +524,8 @@ msgstr "作為對話上下文包含的最近訊息最大數量（1-200）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
-msgid "Maximum number of tokens in the AI response"
-msgstr "AI 回覆的最大 token 數"
+msgid "Maximum number of tokens in the AI response (1-8192)"
+msgstr "AI 回覆的最大 token 數（1-8192）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_error_message
@@ -835,8 +835,10 @@ msgstr "送給 LLM API 的訊息（JSON）。只有在「設定 → Live Chat AI
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
-msgid "The partner record used as the author for AI-generated messages"
-msgstr "用作 AI 生成訊息作者的聯絡人記錄"
+msgid ""
+"The partner record used as the author for AI-generated messages (created by "
+"the module; it cannot be chosen)"
+msgstr "用作 AI 生成訊息作者的聯絡人記錄（由模組自動建立，不能指定）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_payload
@@ -989,3 +991,15 @@ msgstr "連線失敗：%(reason)s"
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
 msgstr "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid "Last Message In Context"
+msgstr "送給 AI 的最後一則訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid ""
+"Highest message id sent to the LLM as conversation; visitor messages up to "
+"it are covered by this job's reply"
+msgstr "送給 AI 當作對話內容的最大訊息 ID；這個 ID 以前的訪客訊息都已由此工作的回覆一併回答"

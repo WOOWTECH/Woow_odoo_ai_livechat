@@ -4,12 +4,13 @@ import json
 import logging
 import re
 import time
+from urllib.parse import urlsplit
 
 import requests
 from markupsafe import Markup
 
 from odoo import api, fields, models, _
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL, sql
 
 _logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ MAX_LOG_ERROR_LENGTH = 300
 
 # --- Product lookup tools (package E, P1-8) ---
 LLM_MAX_TOOL_ROUNDS = 3  # tool-calling rounds per reply, then a forced final answer
-LLM_MAX_TOOL_CALLS_PER_ROUND = 5  # extra calls in one round get an error result
+LLM_MAX_TOOL_CALLS = 3  # tool executions per reply (all rounds); extra calls get an error result
 LLM_TOOL_DEADLINE = 90  # seconds into a reply after which no new tool round starts
 MAX_TOOL_RESULT_LENGTH = 12000  # characters of JSON per tool result sent back
 TOOL_ROUND_LIMIT_NOTE = (
@@ -77,7 +78,12 @@ DEFAULT_HANDOFF_KEYWORDS = '真人,客服,人工,真人客服,human,agent,operat
 DEFAULT_HANDOFF_MESSAGE = '已幫您通知客服，請稍候。'
 DEFAULT_HANDOFF_PAUSE_MINUTES = 30
 MAX_HANDOFF_PAUSE_MINUTES = 1440
-DEFAULT_BOT_NAME = 'AI Assistant'
+DEFAULT_BOT_NAME = 'AI 客服助理'
+LEGACY_BOT_NAME = 'AI Assistant'  # the 18.0.1.0.x default, renamed by the 18.0.1.1.0 migration
+MAX_AI_MAX_TOKENS = 8192
+# Only Live Chat managers configure the AI of a channel; the ai_* fields are
+# neither readable nor writable for operators, employees, portal or public.
+AI_CONFIG_GROUP = 'im_livechat.im_livechat_group_manager'
 BOT_CATEGORY_XMLID = 'im_livechat_ai.partner_category_ai_bot'
 
 # Light formatting of AI replies (the tools hand out markdown links, P1-8):
@@ -133,48 +139,57 @@ class ImLivechatChannel(models.Model):
     # --- AI Integration Fields ---
     ai_enabled = fields.Boolean(
         string='Enable AI Integration',
+        groups=AI_CONFIG_GROUP,
         default=False,
         help='Enable AI-powered automatic replies using an OpenAI-compatible API',
     )
     ai_model = fields.Selection(
         selection='_selection_ai_model',
         string='Model',
+        groups=AI_CONFIG_GROUP,
         default=DEFAULT_MODEL,
         help='LiteLLM model used by this channel. The list comes from the '
              'models cached by "Fetch Available Models" in Settings > Live Chat AI.',
     )
     ai_system_prompt = fields.Text(
         string='System Prompt',
+        groups=AI_CONFIG_GROUP,
         help='System prompt defining the AI assistant role and behavior',
     )
     ai_max_history = fields.Integer(
         string='Max History Messages',
+        groups=AI_CONFIG_GROUP,
         default=50,
         help='Maximum number of recent messages to include as conversation context (1-200)',
     )
     ai_temperature = fields.Float(
         string='Temperature',
+        groups=AI_CONFIG_GROUP,
         default=0.7,
         help='Controls randomness of LLM responses. Lower = more deterministic (0.0-2.0)',
     )
     ai_max_tokens = fields.Integer(
         string='Max Tokens',
+        groups=AI_CONFIG_GROUP,
         default=1024,
-        help='Maximum number of tokens in the AI response',
+        help='Maximum number of tokens in the AI response (1-8192)',
     )
     ai_max_retries = fields.Integer(
         string='Max Retries',
+        groups=AI_CONFIG_GROUP,
         default=2,
         help='Retries after a failed or timed-out LLM call (0-2). Calls time out '
              'after 45 seconds; retries wait 3 seconds, then 10 seconds.',
     )
     ai_error_message = fields.Text(
         string='Error Message',
+        groups=AI_CONFIG_GROUP,
         default=DEFAULT_ERROR_MESSAGE,
         help='Message sent to visitor when the AI API call fails after all retries',
     )
     ai_handoff_pause_minutes = fields.Integer(
         string='Pause After Human Reply (minutes)',
+        groups=AI_CONFIG_GROUP,
         default=DEFAULT_HANDOFF_PAUSE_MINUTES,
         help='When an operator posts in a conversation, or the visitor asks for a '
              'human, the AI stops answering that conversation for this many '
@@ -182,6 +197,7 @@ class ImLivechatChannel(models.Model):
     )
     ai_handoff_keywords = fields.Char(
         string='Human Handoff Keywords',
+        groups=AI_CONFIG_GROUP,
         default=DEFAULT_HANDOFF_KEYWORDS,
         help='Comma-separated words. When a visitor message contains one of them, '
              'the AI sends the handoff message once, pauses and notifies the '
@@ -189,22 +205,28 @@ class ImLivechatChannel(models.Model):
     )
     ai_handoff_message = fields.Text(
         string='Handoff Message',
+        groups=AI_CONFIG_GROUP,
         default=DEFAULT_HANDOFF_MESSAGE,
         help='Sent to the visitor when they ask for a human operator',
     )
     ai_bot_partner_id = fields.Many2one(
         comodel_name='res.partner',
         string='Bot Partner',
+        groups=AI_CONFIG_GROUP,
         ondelete='set null',
-        help='The partner record used as the author for AI-generated messages',
+        copy=False,
+        help='The partner record used as the author for AI-generated messages '
+             '(created by the module; it cannot be chosen)',
     )
     ai_bot_name = fields.Char(
         string='Bot Name',
-        default='AI Assistant',
+        groups=AI_CONFIG_GROUP,
+        default=DEFAULT_BOT_NAME,
         help='Display name for the AI bot in chat',
     )
     ai_product_lookup = fields.Boolean(
         string='Allow Product Lookup',
+        groups=AI_CONFIG_GROUP,
         default=True,
         help='Let the AI look up published products on the website (name, website '
              'price, specifications, link) while answering. Needs the eCommerce '
@@ -231,11 +253,11 @@ class ImLivechatChannel(models.Model):
 
     @api.constrains('ai_max_tokens')
     def _check_ai_max_tokens(self):
-        """Validate max tokens is a positive integer."""
+        """Validate max tokens range (bounded: cost per reply)."""
         for record in self:
             if record.ai_enabled:
-                if record.ai_max_tokens < 1:
-                    raise ValidationError(_('Max Tokens must be at least 1.'))
+                if record.ai_max_tokens < 1 or record.ai_max_tokens > MAX_AI_MAX_TOKENS:
+                    raise ValidationError(_('Max Tokens 必須介於 1 到 %s 之間。', MAX_AI_MAX_TOKENS))
 
     @api.constrains('ai_max_retries')
     def _check_ai_max_retries(self):
@@ -273,16 +295,45 @@ class ImLivechatChannel(models.Model):
 
     # --- CRUD: the bot partner exists as soon as AI is on (P2-6) ---
 
+    @api.model
+    def _check_ai_config_access(self, vals):
+        """Only Live Chat managers configure the AI, and nobody but the
+        module itself chooses the bot partner (clearing it is allowed: a new
+        bot is created when needed).
+
+        Field groups already stop reads and writes of the ai_* fields, but
+        Odoo does not check field groups on create, so create checks here.
+        """
+        if self.env.su:
+            return
+        names = {name for name in vals if name.startswith('ai_') and name in self._fields}
+        if not names:
+            return
+        if vals.get('ai_bot_partner_id'):
+            raise AccessError(_('AI 機器人的聯絡人由系統自動建立，不能指定。'))
+        if not self.env.user.has_group(AI_CONFIG_GROUP):
+            raise AccessError(_('只有 Live Chat 管理員可以設定 AI。'))
+
+    @api.model
+    def _check_ai_manager(self):
+        if not self.env.is_superuser() and not self.env.user.has_group(AI_CONFIG_GROUP):
+            raise AccessError(_('只有 Live Chat 管理員可以使用此功能。'))
+
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            self._check_ai_config_access(vals)
         channels = super().create(vals_list)
-        channels.filtered('ai_enabled')._get_or_create_bot_partner()
+        # sudo: an operator may create a channel (AI off); the ai_* fields
+        # are manager-only.
+        channels.sudo().filtered('ai_enabled')._get_or_create_bot_partner()
         return channels
 
     def write(self, vals):
+        self._check_ai_config_access(vals)
         res = super().write(vals)
         if 'ai_enabled' in vals or 'ai_bot_name' in vals:
-            self.filtered('ai_enabled')._get_or_create_bot_partner()
+            self.sudo().filtered('ai_enabled')._get_or_create_bot_partner()
         return res
 
     # --- Model Selection ---
@@ -343,12 +394,15 @@ class ImLivechatChannel(models.Model):
         return bool(base_url and api_key)
 
     @api.model
-    def _llm_request(self, method, path, json_payload=None, timeout=LLM_REQUEST_TIMEOUT):
+    def _llm_request(self, method, path, json_payload=None, timeout=LLM_REQUEST_TIMEOUT,
+                     before_call=None):
         """Send an authenticated request to the system LiteLLM gateway.
 
         The URL and the key both come from ir.config_parameter (admin-only),
         so the key is never sent to a URL a non-admin could have set.
         Upstream response bodies go to the server log only.
+        `before_call` runs after the last database read, right before the
+        HTTP request.
         """
         base_url, api_key = self._get_llm_connection()
         if not api_key:
@@ -360,6 +414,8 @@ class ImLivechatChannel(models.Model):
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}',
         }
+        if before_call:
+            before_call()
         if method == 'GET':
             response = requests.get(url, headers=headers, timeout=timeout)
         else:
@@ -481,6 +537,22 @@ class ImLivechatChannel(models.Model):
     def _ai_bot_category(self):
         return self.env.ref(BOT_CATEGORY_XMLID, raise_if_not_found=False)
 
+    def _ai_is_own_bot_partner(self, partner):
+        """True when `partner` is this channel's own AI bot: tagged "AI 機器人",
+        without any user, and not the bot of another channel. Only such a
+        partner is ever renamed or tagged through sudo."""
+        self.ensure_one()
+        partner = partner.sudo().with_context(active_test=False)
+        category = self._ai_bot_category()
+        if not category or category not in partner.category_id or partner.user_ids:
+            return False
+        if partner == self.env.ref('im_livechat_ai.partner_ai_bot', raise_if_not_found=False):
+            return False  # the module's shared fallback bot
+        others = self.sudo().with_context(active_test=False).search_count([
+            ('ai_bot_partner_id', '=', partner.id), ('id', '!=', self.id),
+        ], limit=1)
+        return not others
+
     def _get_or_create_bot_partner(self):
         """
         Ensure each channel has its bot partner (called when AI is enabled or
@@ -488,7 +560,10 @@ class ImLivechatChannel(models.Model):
 
         The partner is archived, like Odoo's chatbot partners, so it does not
         appear in the contact list, and tagged "AI 機器人" so it can be
-        recognised. An existing partner is renamed when the bot name changed.
+        recognised. An existing partner is renamed when the bot name changed;
+        a linked partner that is not this channel's own bot (a real person,
+        a user, another channel's bot) is never touched: the channel gets a
+        new bot partner instead.
 
         Returns:
             res.partner: The bot partner record(s)
@@ -498,6 +573,12 @@ class ImLivechatChannel(models.Model):
         for channel in self:
             bot_name = channel.ai_bot_name or DEFAULT_BOT_NAME
             partner = channel.ai_bot_partner_id
+            if partner and not channel._ai_is_own_bot_partner(partner):
+                _logger.warning(
+                    "Live chat channel %s: partner %s is not its own AI bot; creating a new bot partner",
+                    channel.id, partner.id,
+                )
+                partner = self.env['res.partner']
             if partner:
                 vals = {}
                 if partner.name != bot_name:
@@ -514,7 +595,7 @@ class ImLivechatChannel(models.Model):
                     'type': 'contact',
                     'category_id': [(4, category.id)] if category else [],
                 })
-                channel.write({'ai_bot_partner_id': partner.id})
+                channel.sudo().write({'ai_bot_partner_id': partner.id})
             partners |= partner
         return partners
 
@@ -606,26 +687,30 @@ class ImLivechatChannel(models.Model):
             })
         return clean
 
-    def _ai_run_tool_calls(self, tool_calls):
-        """Execute one round of tool calls; returns the 'tool' role messages.
+    def _ai_run_tool_calls(self, tool_calls, max_calls=LLM_MAX_TOOL_CALLS):
+        """Execute one round of tool calls; returns (the 'tool' role
+        messages, number of tools executed).
 
         Every tool call id gets an answer (the API requires it); calls beyond
-        LLM_MAX_TOOL_CALLS_PER_ROUND get an error result instead of running.
+        `max_calls` (what is left of the reply's LLM_MAX_TOOL_CALLS) get an
+        error result instead of running.
         """
         self.ensure_one()
         Tools = self.env['im_livechat.ai.tools']
         results = []
-        for index, call in enumerate(tool_calls):
+        executed = 0
+        for call in tool_calls:
             name = call['function']['name']
-            if index >= LLM_MAX_TOOL_CALLS_PER_ROUND:
-                result = {'error': '本次查詢的工具呼叫太多，請合併查詢條件。'}
+            if executed >= max_calls:
+                result = {'error': '本次回覆的商品查詢次數已達上限，請根據已查到的結果回答。'}
             else:
+                executed += 1
                 result = Tools._execute_tool(self, name, call['function']['arguments'])
             content = json.dumps(result, ensure_ascii=False, default=str)
             if len(content) > MAX_TOOL_RESULT_LENGTH:
                 content = content[:MAX_TOOL_RESULT_LENGTH] + '…（結果過長已截斷）'
             results.append({'role': 'tool', 'tool_call_id': call['id'], 'content': content})
-        return results
+        return results, executed
 
     # --- Response Processing ---
 
@@ -695,8 +780,9 @@ class ImLivechatChannel(models.Model):
 
         When the channel allows product lookup (package E), the model may ask
         for the product tools; their results are sent back and the model is
-        called again, for at most LLM_MAX_TOOL_ROUNDS rounds (and no new round
-        after LLM_TOOL_DEADLINE seconds). The next call is then sent with
+        called again. At most LLM_MAX_TOOL_CALLS tools run per reply (over at
+        most LLM_MAX_TOOL_ROUNDS rounds, and no new round after
+        LLM_TOOL_DEADLINE seconds); the next call is then sent with
         tool_choice "none" and a note to answer with what it has. A response
         without tool calls is the final answer.
 
@@ -724,10 +810,13 @@ class ImLivechatChannel(models.Model):
         }
         started = time.time()
         rounds = 0
+        tools_run = 0
 
         while True:
             final = bool(tools) and (
-                rounds >= LLM_MAX_TOOL_ROUNDS or time.time() - started > LLM_TOOL_DEADLINE
+                rounds >= LLM_MAX_TOOL_ROUNDS
+                or tools_run >= LLM_MAX_TOOL_CALLS
+                or time.time() - started > LLM_TOOL_DEADLINE
             )
             # Each call gets its own copy of the history (it grows per round).
             if not tools:
@@ -760,7 +849,9 @@ class ImLivechatChannel(models.Model):
                 'content': message.get('content') or None,
                 'tool_calls': tool_calls,
             })
-            conversation.extend(self._ai_run_tool_calls(tool_calls))
+            results, executed = self._ai_run_tool_calls(tool_calls, LLM_MAX_TOOL_CALLS - tools_run)
+            tools_run += executed
+            conversation.extend(results)
 
     def _llm_call_with_retries(self, discuss_channel, messages, budget, before_call=None,
                                tools=None, tool_choice=None, allow_tool_calls=False):
@@ -782,15 +873,17 @@ class ImLivechatChannel(models.Model):
         last_error = None
         while True:
             if attempts:
+                if before_call:
+                    before_call()  # no transaction stays open during the wait
                 wait = LLM_RETRY_BACKOFF[min(budget['used'] - 1, len(LLM_RETRY_BACKOFF) - 1)]
                 time.sleep(wait)
-            if before_call:
-                before_call()
             attempts += 1
             budget['calls'] += 1
             start_time = time.time()
             try:
-                response_data = self._call_llm_api(messages, tools=tools, tool_choice=tool_choice)
+                # before_call runs inside, after the last database read.
+                response_data = self._call_llm_api(
+                    messages, tools=tools, tool_choice=tool_choice, before_call=before_call)
                 response_time = time.time() - start_time
 
                 message = response_data.get('choices', [{}])[0].get('message') or {}
@@ -861,7 +954,7 @@ class ImLivechatChannel(models.Model):
                 )
                 return None, last_error
 
-    def _call_llm_api(self, messages, tools=None, tool_choice=None):
+    def _call_llm_api(self, messages, tools=None, tool_choice=None, before_call=None):
         """
         Call the system LiteLLM gateway (OpenAI-compatible chat completions).
 
@@ -872,6 +965,9 @@ class ImLivechatChannel(models.Model):
             messages (list): List of message dicts with 'role' and 'content' keys
             tools (list|None): OpenAI-style tool definitions (package E)
             tool_choice (str|None): 'auto' or 'none' (sent only with tools)
+            before_call (callable|None): called after the payload and the
+                connection were read and right before the HTTP request (the
+                job commits there, so no transaction is open during the call)
 
         Returns:
             dict: The API response JSON
@@ -897,7 +993,8 @@ class ImLivechatChannel(models.Model):
             if tool_choice:
                 payload['tool_choice'] = tool_choice
 
-        response = self._llm_request('POST', '/chat/completions', json_payload=payload)
+        response = self._llm_request('POST', '/chat/completions', json_payload=payload,
+                                     before_call=before_call)
 
         data = response.json()
         if not isinstance(data, dict) or not data.get('choices'):
@@ -926,9 +1023,11 @@ class ImLivechatChannel(models.Model):
 
         bot_partner = self._get_bot_partner()
 
-        # Escape HTML to prevent XSS, then convert newlines for display
+        # Escape HTML to prevent XSS, then convert newlines for display.
+        # Only links to the store's own hosts become clickable.
+        hosts = self._ai_link_hosts()
         safe_body = Markup('<br/>').join(
-            self._format_reply_line(line) for line in body.split('\n')
+            self._format_reply_line(line, hosts) for line in body.split('\n')
         )
 
         return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
@@ -939,21 +1038,57 @@ class ImLivechatChannel(models.Model):
         )
 
     @staticmethod
-    def _format_reply_line(line):
+    def _url_host(url):
+        try:
+            return (urlsplit(url).hostname or '').lower()
+        except ValueError:
+            return ''
+
+    @api.model
+    def _ai_link_hosts(self):
+        """Hosts AI replies may link to: web.base.url (the product tools build
+        their URLs from it) and the domains of the websites."""
+        hosts = set()
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url') or ''
+        candidates = [base_url]
+        if 'website' in self.env:
+            candidates += self.env['website'].sudo().search([]).mapped('domain')
+        for value in candidates:
+            value = (value or '').strip()
+            if not value:
+                continue
+            if '://' not in value:
+                value = 'https://' + value
+            host = self._url_host(value)
+            if host:
+                hosts.add(host)
+        return frozenset(hosts)
+
+    @classmethod
+    def _format_reply_line(cls, line, allowed_hosts=()):
         """One line of AI text -> safe Markup: escaped text, with markdown
         links / bare http(s) URLs as links and **bold**. Only http(s) URLs
-        become links; every piece of text and every URL is escaped."""
+        whose host is in `allowed_hosts` (the store's own hosts) become
+        links: an off-site markdown link keeps only its text and an off-site
+        bare URL stays plain text, so a prompt-injected reply cannot post a
+        clickable phishing link. Every piece of text and every URL is escaped."""
         parts = []
         position = 0
         for match in _REPLY_FORMAT_RE.finditer(line):
             parts.append(Markup.escape(line[position:match.start()]))
             if match.group('url'):
-                parts.append(_LINK_MARKUP % (match.group('url'), match.group('text')))
+                if cls._url_host(match.group('url')) in allowed_hosts:
+                    parts.append(_LINK_MARKUP % (match.group('url'), match.group('text')))
+                else:
+                    parts.append(Markup.escape(match.group('text')))
             elif match.group('bare'):
                 url = match.group('bare')
                 trailing = len(url) - len(url.rstrip(_URL_TRAILING_PUNCTUATION))
                 url, tail = (url[:-trailing], url[-trailing:]) if trailing else (url, '')
-                parts.append(_LINK_MARKUP % (url, url))
+                if cls._url_host(url) in allowed_hosts:
+                    parts.append(_LINK_MARKUP % (url, url))
+                else:
+                    parts.append(Markup.escape(url))
                 parts.append(Markup.escape(tail))
             else:
                 parts.append(Markup('<strong>%s</strong>') % match.group('bold'))
@@ -1025,9 +1160,11 @@ class ImLivechatChannel(models.Model):
         Test the LiteLLM connection with this channel's model.
 
         Returns a notification with the HTTP status code and a short
-        Chinese message only; details go to the server log.
+        Chinese message only; details go to the server log. Live Chat
+        managers only: the call uses the company LiteLLM key.
         """
         self.ensure_one()
+        self._check_ai_manager()
 
         if not self.ai_enabled:
             raise UserError(_('AI integration is not enabled for this channel.'))
@@ -1040,6 +1177,7 @@ class ImLivechatChannel(models.Model):
     def action_view_api_logs(self):
         """Open the API logs view filtered for this channel."""
         self.ensure_one()
+        self._check_ai_manager()
 
         return {
             'type': 'ir.actions.act_window',

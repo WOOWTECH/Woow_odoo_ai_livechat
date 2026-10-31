@@ -71,7 +71,7 @@ class TestImLivechatChannel(TransactionCase):
         self.assertAlmostEqual(channel.ai_temperature, 0.7)
         self.assertEqual(channel.ai_max_tokens, 1024)
         self.assertEqual(channel.ai_max_retries, 2)
-        self.assertEqual(channel.ai_bot_name, 'AI Assistant')
+        self.assertEqual(channel.ai_bot_name, 'AI 客服助理')
         self.assertEqual(channel.ai_model, DEFAULT_MODEL)
 
     # --- Bot Partner Tests ---
@@ -80,7 +80,7 @@ class TestImLivechatChannel(TransactionCase):
         """The partner is created when AI is enabled (P2-6), not on first reply."""
         partner = self.channel.ai_bot_partner_id
         self.assertTrue(partner.exists())
-        self.assertEqual(partner.name, 'AI Assistant')
+        self.assertEqual(partner.name, 'AI 客服助理')
         self.assertEqual(self.channel._get_or_create_bot_partner(), partner)
         channel = self.env['im_livechat.channel'].create({'name': 'Created Later'})
         self.assertFalse(channel.ai_bot_partner_id)

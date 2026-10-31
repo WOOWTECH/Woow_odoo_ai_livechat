@@ -9,10 +9,14 @@
   API logs ("Log Conversation Content" is off by default).
 - Package C: drop ai_retry_delay (fixed 3 s / 10 s backoff now) and cap
   ai_max_retries to 2 retries (it used to count total calls, 1-10).
+- Package D: channels still using the old English default error message
+  (or none) get the Traditional Chinese default (P2-7); existing AI bot
+  partners are archived and tagged "AI 機器人" (P2-6).
 """
 
 import logging
 
+from odoo import SUPERUSER_ID, api
 from odoo.tools import SQL, sql
 
 _logger = logging.getLogger(__name__)
@@ -80,6 +84,50 @@ def scrub_logs(cr):
     return cr.rowcount
 
 
+# Kept literal here (not imported) so the migration keeps working if the
+# model constants change later.
+LEGACY_ERROR_MESSAGE = (
+    'Sorry, the AI assistant is temporarily unavailable. '
+    'Please try again later or leave your contact information.'
+)
+NEW_ERROR_MESSAGE = (
+    '抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，'
+    '我們的客服人員會盡快與您聯繫。'
+)
+
+
+def translate_error_message(cr):
+    """Old English default (or empty) error message -> Chinese default."""
+    if not sql.column_exists(cr, TABLE, 'ai_error_message'):
+        return []
+    cr.execute(SQL(
+        """UPDATE %s SET ai_error_message = %s
+            WHERE ai_error_message IS NULL
+               OR btrim(ai_error_message) = ''
+               OR btrim(ai_error_message) = %s
+        RETURNING id""",
+        SQL.identifier(TABLE), NEW_ERROR_MESSAGE, LEGACY_ERROR_MESSAGE,
+    ))
+    return [row[0] for row in cr.fetchall()]
+
+
+def tag_bot_partners(cr):
+    """Archive the existing AI bot partners and tag them "AI 機器人"."""
+    env = api.Environment(cr, SUPERUSER_ID, {})
+    category = env.ref('im_livechat_ai.partner_category_ai_bot', raise_if_not_found=False)
+    partners = env['im_livechat.channel'].with_context(active_test=False).search([]).ai_bot_partner_id
+    default_bot = env.ref('im_livechat_ai.partner_ai_bot', raise_if_not_found=False)
+    if default_bot:
+        partners |= default_bot
+    if not partners:
+        return 0
+    vals = {'active': False}
+    if category:
+        vals['category_id'] = [(4, category.id)]
+    partners.with_context(active_test=False).write(vals)
+    return len(partners)
+
+
 def migrate(cr, version):
     if not version:
         return
@@ -103,3 +151,9 @@ def migrate(cr, version):
     scrubbed = scrub_logs(cr)
     if scrubbed:
         _logger.info("im_livechat_ai: removed conversation content/response bodies from %s API log(s)", scrubbed)
+    translated = translate_error_message(cr)
+    if translated:
+        _logger.info("im_livechat_ai: error message set to the Chinese default on channel(s) %s", translated)
+    tagged = tag_bot_partners(cr)
+    if tagged:
+        _logger.info("im_livechat_ai: archived and tagged %s AI bot partner(s)", tagged)

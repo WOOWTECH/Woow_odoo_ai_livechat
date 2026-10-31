@@ -33,6 +33,28 @@ LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 LLM_MODELS_TIMEOUT = 15  # seconds, GET /models
 MAX_LOG_ERROR_LENGTH = 300
 
+# --- Visitor-facing defaults (Traditional Chinese, P2-7 / P1-2) ---
+DEFAULT_ERROR_MESSAGE = (
+    '抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，'
+    '我們的客服人員會盡快與您聯繫。'
+)
+# The 18.0.1.0.x default; the 18.0.1.1.0 post-migration replaces it.
+LEGACY_ERROR_MESSAGE = (
+    'Sorry, the AI assistant is temporarily unavailable. '
+    'Please try again later or leave your contact information.'
+)
+DEFAULT_HANDOFF_KEYWORDS = '真人,客服,人工,真人客服,human,agent,operator'
+DEFAULT_HANDOFF_MESSAGE = '已幫您通知客服，請稍候。'
+DEFAULT_HANDOFF_PAUSE_MINUTES = 30
+MAX_HANDOFF_PAUSE_MINUTES = 1440
+DEFAULT_BOT_NAME = 'AI Assistant'
+BOT_CATEGORY_XMLID = 'im_livechat_ai.partner_category_ai_bot'
+
+# Keywords made only of these characters must match as a whole word
+# ("agent" does not match "reagent"); others (e.g. Chinese) match anywhere.
+_WORD_CHARS_RE = re.compile(r'^[0-9a-z_ ]+$')
+
+
 class LLMNotConfigured(Exception):
     """LiteLLM base URL or API key missing/invalid in system settings."""
 
@@ -107,8 +129,27 @@ class ImLivechatChannel(models.Model):
     )
     ai_error_message = fields.Text(
         string='Error Message',
-        default='Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information.',
+        default=DEFAULT_ERROR_MESSAGE,
         help='Message sent to visitor when the AI API call fails after all retries',
+    )
+    ai_handoff_pause_minutes = fields.Integer(
+        string='Pause After Human Reply (minutes)',
+        default=DEFAULT_HANDOFF_PAUSE_MINUTES,
+        help='When an operator posts in a conversation, or the visitor asks for a '
+             'human, the AI stops answering that conversation for this many '
+             'minutes (1-1440).',
+    )
+    ai_handoff_keywords = fields.Char(
+        string='Human Handoff Keywords',
+        default=DEFAULT_HANDOFF_KEYWORDS,
+        help='Comma-separated words. When a visitor message contains one of them, '
+             'the AI sends the handoff message once, pauses and notifies the '
+             'operators. Latin words match whole words only, case-insensitive.',
+    )
+    ai_handoff_message = fields.Text(
+        string='Handoff Message',
+        default=DEFAULT_HANDOFF_MESSAGE,
+        help='Sent to the visitor when they ask for a human operator',
     )
     ai_bot_partner_id = fields.Many2one(
         comodel_name='res.partner',
@@ -156,6 +197,14 @@ class ImLivechatChannel(models.Model):
                 if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
                     raise ValidationError(_('Max Retries must be between 0 and 2.'))
 
+    @api.constrains('ai_handoff_pause_minutes')
+    def _check_ai_handoff_pause_minutes(self):
+        for record in self:
+            if record.ai_enabled:
+                minutes = record.ai_handoff_pause_minutes
+                if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
+                    raise ValidationError(_('暫停分鐘數必須介於 1 到 1440 之間。'))
+
     @api.constrains('ai_enabled', 'ai_model')
     def _check_ai_required_fields(self):
         """Validate required configuration when AI is enabled.
@@ -173,6 +222,20 @@ class ImLivechatChannel(models.Model):
                         '尚未設定 LiteLLM 連線。請系統管理員到「設定 → Live Chat AI」'
                         '填入 LiteLLM 位址與金鑰後，再啟用 AI。'
                     ))
+
+    # --- CRUD: the bot partner exists as soon as AI is on (P2-6) ---
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        channels = super().create(vals_list)
+        channels.filtered('ai_enabled')._get_or_create_bot_partner()
+        return channels
+
+    def write(self, vals):
+        res = super().write(vals)
+        if 'ai_enabled' in vals or 'ai_bot_name' in vals:
+            self.filtered('ai_enabled')._get_or_create_bot_partner()
+        return res
 
     # --- Model Selection ---
 
@@ -366,33 +429,96 @@ class ImLivechatChannel(models.Model):
 
     # --- Bot Partner Management ---
 
+    @api.model
+    def _ai_bot_category(self):
+        return self.env.ref(BOT_CATEGORY_XMLID, raise_if_not_found=False)
+
     def _get_or_create_bot_partner(self):
         """
-        Get or create the bot partner for this channel.
+        Ensure each channel has its bot partner (called when AI is enabled or
+        the bot name changes, never while a reply is processed: P2-6).
 
-        If ai_bot_partner_id is already set, updates the name if changed.
-        Otherwise creates a new res.partner and links it to the channel.
+        The partner is archived, like Odoo's chatbot partners, so it does not
+        appear in the contact list, and tagged "AI 機器人" so it can be
+        recognised. An existing partner is renamed when the bot name changed.
 
         Returns:
-            res.partner: The bot partner record
+            res.partner: The bot partner record(s)
+        """
+        partners = self.env['res.partner']
+        category = self._ai_bot_category()
+        for channel in self:
+            bot_name = channel.ai_bot_name or DEFAULT_BOT_NAME
+            partner = channel.ai_bot_partner_id
+            if partner:
+                vals = {}
+                if partner.name != bot_name:
+                    vals['name'] = bot_name
+                if category and category not in partner.sudo().category_id:
+                    vals['category_id'] = [(4, category.id)]
+                if vals:
+                    partner.sudo().write(vals)
+            else:
+                partner = self.env['res.partner'].sudo().create({
+                    'name': bot_name,
+                    'active': False,
+                    'is_company': False,
+                    'type': 'contact',
+                    'category_id': [(4, category.id)] if category else [],
+                })
+                channel.write({'ai_bot_partner_id': partner.id})
+            partners |= partner
+        return partners
+
+    def _get_bot_partner(self):
+        """Author of AI messages, read-only (no write during reply processing).
+
+        Falls back to the module's default bot partner when the channel has
+        none (e.g. it was deleted after AI was enabled).
         """
         self.ensure_one()
-        bot_name = self.ai_bot_name or 'AI Assistant'
-
         if self.ai_bot_partner_id:
-            if self.ai_bot_partner_id.name != bot_name:
-                self.ai_bot_partner_id.sudo().write({'name': bot_name})
             return self.ai_bot_partner_id
+        _logger.warning("Live chat channel %s has no AI bot partner; using the default one", self.id)
+        return self.env.ref('im_livechat_ai.partner_ai_bot')
 
-        # Create new bot partner
-        partner = self.env['res.partner'].sudo().create({
-            'name': bot_name,
-            'active': True,
-            'is_company': False,
-            'type': 'contact',
-        })
-        self.write({'ai_bot_partner_id': partner.id})
-        return partner
+    @api.model
+    def _ai_bot_partner_ids(self, channel=None):
+        """Partners that are the AI itself: the channel bot and the default bot."""
+        ids = set()
+        if channel and channel.ai_bot_partner_id:
+            ids.add(channel.ai_bot_partner_id.id)
+        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot', raise_if_not_found=False)
+        if default_bot:
+            ids.add(default_bot.id)
+        return ids
+
+    # --- Human handoff (P1-2) ---
+
+    def _ai_handoff_keyword_list(self):
+        self.ensure_one()
+        raw = self.ai_handoff_keywords or ''
+        return [k.strip().lower() for k in re.split(r'[,，、\n]', raw) if k.strip()]
+
+    def _ai_is_handoff_request(self, text):
+        """True when the visitor text contains one of the handoff keywords."""
+        self.ensure_one()
+        text = (text or '').lower()
+        if not text:
+            return False
+        for keyword in self._ai_handoff_keyword_list():
+            if _WORD_CHARS_RE.match(keyword):
+                pattern = r'(?<![0-9a-z_])' + re.escape(keyword) + r'(?![0-9a-z_])'
+                if re.search(pattern, text):
+                    return True
+            elif keyword in text:
+                return True
+        return False
+
+    def _ai_pause_minutes(self):
+        self.ensure_one()
+        minutes = self.ai_handoff_pause_minutes or DEFAULT_HANDOFF_PAUSE_MINUTES
+        return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
 
     # --- Response Processing ---
 
@@ -421,9 +547,9 @@ class ImLivechatChannel(models.Model):
 
     # --- LLM API Call Logic ---
 
-    def _trigger_ai_response(self, discuss_channel, message):
+    def _trigger_ai_response(self, discuss_channel, message, kind='reply'):
         """
-        Queue an AI reply for a visitor message.
+        Queue an AI reply (or a human handoff notice) for a visitor message.
 
         Creates an im_livechat.ai.job in the current (visitor) transaction;
         the job is processed after commit by a background thread, or by the
@@ -432,6 +558,7 @@ class ImLivechatChannel(models.Model):
         Args:
             discuss_channel (discuss.channel): The livechat session
             message (mail.message): The visitor's message
+            kind (str): 'reply' (LLM answer) or 'handoff' (fixed notice, no LLM)
 
         Returns:
             im_livechat.ai.job: the queued job, or an empty recordset
@@ -441,6 +568,9 @@ class ImLivechatChannel(models.Model):
 
         if not self.ai_enabled:
             return Job
+
+        if kind == 'handoff':
+            return Job._create_for_message(discuss_channel, message, kind='handoff')
 
         if not self.ai_model or not self._llm_is_configured():
             _logger.warning(
@@ -602,7 +732,7 @@ class ImLivechatChannel(models.Model):
         """
         self.ensure_one()
 
-        bot_partner = self._get_or_create_bot_partner()
+        bot_partner = self._get_bot_partner()
 
         # Escape HTML to prevent XSS, then convert newlines for display
         safe_body = Markup('<br/>').join(

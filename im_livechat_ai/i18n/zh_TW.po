@@ -511,12 +511,6 @@ msgid "Short error message if the API call failed (no upstream response body)"
 msgstr "API 呼叫失敗時的簡短錯誤訊息（不含上游回應內容）"
 
 #. module: im_livechat_ai
-#. odoo-python
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-msgid "Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information."
-msgstr "抱歉，AI 助手目前暫時無法使用。請稍後再試或留下您的聯絡方式。"
-
-#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid "Sorry, the AI assistant is temporarily unavailable..."
 msgstr "抱歉，AI 助手目前暫時無法使用…"
@@ -865,3 +859,70 @@ msgid ""
 "Retries after a failed or timed-out LLM call (0-2). Calls time out after 45"
 " seconds; retries wait 3 seconds, then 10 seconds."
 msgstr "LLM 呼叫失敗或逾時後的重試次數（0-2）。每次呼叫 45 秒逾時；重試前分別等待 3 秒與 10 秒。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_paused_until
+msgid "AI Paused Until"
+msgstr "AI 暫停到"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_paused_until
+msgid "The AI does not answer this live chat conversation before this time: an operator replied or the visitor asked for a human."
+msgstr "在此時間之前，AI 不會回覆這段即時聊天對話：真人客服已回覆，或訪客要求真人客服。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
+msgid "Pause After Human Reply (minutes)"
+msgstr "真人接手後暫停（分鐘）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
+msgid "When an operator posts in a conversation, or the visitor asks for a human, the AI stops answering that conversation for this many minutes (1-1440)."
+msgstr "真人客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話的分鐘數（1-1440）。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
+msgid "Human Handoff Keywords"
+msgstr "轉真人關鍵字"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
+msgid "Comma-separated words. When a visitor message contains one of them, the AI sends the handoff message once, pauses and notifies the operators. Latin words match whole words only, case-insensitive."
+msgstr "以逗號分隔。訪客訊息包含其中任一詞時，AI 送出一次轉接訊息、暫停回覆並通知客服。英文詞須完整比對，不分大小寫。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_message
+msgid "Handoff Message"
+msgstr "轉接訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_message
+msgid "Sent to the visitor when they ask for a human operator"
+msgstr "訪客要求真人客服時送給訪客的訊息"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__handoff
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Human Handoff"
+msgstr "轉真人客服"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__reply
+msgid "AI Reply"
+msgstr "AI 回覆"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__kind
+msgid "Type"
+msgstr "類型"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__kind
+msgid "AI Reply: answer with the LLM. Human Handoff: the visitor asked for a human; send the handoff message and notify the operators."
+msgstr "AI 回覆：由 LLM 回答。轉真人客服：訪客要求真人客服，送出轉接訊息並通知客服。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "When an operator posts in a conversation, or the visitor writes one of the keywords, the AI stops answering that conversation for this many minutes. For a keyword the visitor gets the handoff message once and the operators are notified."
+msgstr "真人客服在對話中發言，或訪客寫到任一關鍵字時，AI 會在設定的分鐘數內暫停回覆這段對話。若是關鍵字，訪客會收到一次轉接訊息，並通知客服。"

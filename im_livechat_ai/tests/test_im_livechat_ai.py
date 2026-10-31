@@ -77,12 +77,16 @@ class TestImLivechatChannel(TransactionCase):
     # --- Bot Partner Tests ---
 
     def test_get_or_create_bot_partner_creates_new(self):
-        """Should create a new partner when none exists."""
-        self.assertFalse(self.channel.ai_bot_partner_id)
-        partner = self.channel._get_or_create_bot_partner()
+        """The partner is created when AI is enabled (P2-6), not on first reply."""
+        partner = self.channel.ai_bot_partner_id
         self.assertTrue(partner.exists())
         self.assertEqual(partner.name, 'AI Assistant')
-        self.assertEqual(self.channel.ai_bot_partner_id.id, partner.id)
+        self.assertEqual(self.channel._get_or_create_bot_partner(), partner)
+        channel = self.env['im_livechat.channel'].create({'name': 'Created Later'})
+        self.assertFalse(channel.ai_bot_partner_id)
+        created = channel._get_or_create_bot_partner()
+        self.assertTrue(created.exists())
+        self.assertEqual(channel.ai_bot_partner_id, created)
 
     def test_get_or_create_bot_partner_returns_existing(self):
         """Should return existing partner on subsequent calls."""

@@ -44,6 +44,18 @@
                         </group>
                     </group>
 
+                    <group string="Human Handoff" invisible="not ai_enabled">
+                        <field name="ai_handoff_pause_minutes"/>
+                        <field name="ai_handoff_keywords"/>
+                        <field name="ai_handoff_message"/>
+                        <div class="text-muted" colspan="2">
+                            When an operator posts in a conversation, or the visitor writes one of
+                            the keywords, the AI stops answering that conversation for this many minutes.
+                            For a keyword the visitor gets the handoff message once and the operators
+                            are notified.
+                        </div>
+                    </group>
+
                     <group invisible="not ai_enabled">
                         <button name="action_test_ai_connection"
                                 string="Test AI Connection"

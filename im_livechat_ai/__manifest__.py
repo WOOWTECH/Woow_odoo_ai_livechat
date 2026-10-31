@@ -23,6 +23,13 @@ Features:
   recovered by a cron after a restart
 * Bounded LLM calls (45 s timeout, at most 2 retries); on failure the visitor
   gets an error message and the operators are notified
+* Portal (logged-in) customers are answered like guests; internal users,
+  the session operator and the bots never trigger the AI
+* Human handoff: an operator's reply pauses the AI for the conversation
+  (30 minutes by default, per channel); visitor keywords such as "真人" or
+  "客服" send a handoff notice once, pause the AI and notify the operators
+* Operator replies are sent to the LLM as colleague replies ("[真人客服 name]")
+  so the AI does not contradict them
 * API call logging with token usage tracking (Live Chat administrators only;
   conversation content is not stored unless explicitly enabled)
 

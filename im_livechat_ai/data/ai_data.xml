@@ -1,10 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data noupdate="1">
+        <!-- Tag of the AI bot partners (they are archived, like Odoo chatbots) -->
+        <record id="partner_category_ai_bot" model="res.partner.category">
+            <field name="name">AI 機器人</field>
+        </record>
+
         <!-- Default AI Bot Partner: used as fallback author for AI-generated messages -->
         <record id="partner_ai_bot" model="res.partner">
             <field name="name">AI Assistant</field>
-            <field name="active" eval="True"/>
+            <field name="active" eval="False"/>
+            <field name="category_id" eval="[(4, ref('partner_category_ai_bot'))]"/>
             <field name="is_company" eval="False"/>
             <field name="type">contact</field>
         </record>

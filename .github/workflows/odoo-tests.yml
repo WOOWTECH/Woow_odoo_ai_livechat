@@ -80,10 +80,10 @@ jobs:
         shell: bash
         run: |
           set -u
-          started=$(grep -E 'odoo\.addons\.im_livechat_ai\.tests\.[a-z_]+: Starting ' "$LOG_FILE" | wc -l)
-          problems=$(grep -E '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' "$LOG_FILE" | wc -l)
-          fails=$(grep -E '(^| )(FAIL|ERROR): ' "$LOG_FILE" | wc -l)
-          summary=$(grep -E 'odoo\.tests\.result: .*failed, .*error\(s\) of [0-9]+ tests' "$LOG_FILE" | tail -1)
+          started=$(grep -cE 'odoo\.addons\.im_livechat_ai\.tests\.[a-z_]+: Starting ' "$LOG_FILE" || true)
+          problems=$(grep -cE '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' "$LOG_FILE" || true)
+          fails=$(grep -cE '(^| )(FAIL|ERROR): ' "$LOG_FILE" || true)
+          summary=$({ grep -E 'odoo\.tests\.result: .*failed, .*error\(s\) of [0-9]+ tests' "$LOG_FILE" || true; } | tail -1)
           echo "Odoo exit code: $ODOO_EXIT"
           echo "im_livechat_ai tests started: $started"
           echo "ERROR/CRITICAL log lines: $problems; FAIL:/ERROR: lines: $fails"

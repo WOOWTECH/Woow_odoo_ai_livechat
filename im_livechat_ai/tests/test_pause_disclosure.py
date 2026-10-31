@@ -538,7 +538,14 @@ class TestSettingsPrivacy(TransactionCase):
                                     groups='base.group_user,im_livechat.im_livechat_group_manager')
         cls.admin = new_test_user(cls.env, login='r2_sysadmin', groups='base.group_user,base.group_system')
 
-    def _assert_no_ai_values(self, values):
+    def _assert_no_ai_values(self, call):
+        """Run ``call``; newer Odoo 18 builds refuse res.config.settings reads
+        for non-system users outright (AccessError), older ones return values
+        that this module filters. Either way no LiteLLM value may come back."""
+        try:
+            values = call()
+        except AccessError:
+            return
         leaked = [name for name in values if name.startswith('livechat_ai_')]
         self.assertFalse(leaked)
         dumped = json.dumps(values, default=str)
@@ -548,8 +555,8 @@ class TestSettingsPrivacy(TransactionCase):
     def test_portal_and_manager_get_nothing(self):
         for user in (self.portal, self.manager):
             Settings = self.env['res.config.settings'].with_user(user)
-            self._assert_no_ai_values(Settings.default_get(self.FIELDS))
-            self._assert_no_ai_values(Settings.browse().get_values())
+            self._assert_no_ai_values(lambda: Settings.default_get(self.FIELDS))
+            self._assert_no_ai_values(lambda: Settings.browse().get_values())
             try:
                 self.assertFalse(set(Settings.fields_get(self.FIELDS)))
             except AccessError:
@@ -642,8 +649,11 @@ class TestJobMonitoring(TransactionCase):
     def test_monitoring_hidden_from_non_admins(self):
         manager = new_test_user(self.env, login='r2_monitor_manager',
                                 groups='base.group_user,im_livechat.im_livechat_group_manager')
-        values = self.env['res.config.settings'].with_user(manager).default_get(
-            ['livechat_ai_cron_lastcall', 'livechat_ai_job_warning'])
+        try:
+            values = self.env['res.config.settings'].with_user(manager).default_get(
+                ['livechat_ai_cron_lastcall', 'livechat_ai_job_warning'])
+        except AccessError:
+            return  # newer Odoo 18 builds refuse the read outright
         self.assertFalse([k for k in values if k.startswith('livechat_ai_')])
 
 

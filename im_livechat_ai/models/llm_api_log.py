@@ -3,18 +3,22 @@
 import logging
 from datetime import timedelta
 
-from odoo import fields, models
+from odoo import api, fields, models
+
+from .im_livechat_channel import DEFAULT_LOG_RETENTION_DAYS, ICP_LOG_RETENTION_DAYS
 
 _logger = logging.getLogger(__name__)
 
 
 class LLMApiLog(models.Model):
     """
-    Log all LLM API call activity for monitoring and debugging.
+    Log LLM API call activity for monitoring and debugging.
 
-    Tracks each API call with request/response payloads, token usage,
-    response times, and error information. Includes automatic cleanup
-    of old logs via scheduled action.
+    Readable by Live Chat administrators only. By default a log keeps only
+    timestamp, model, token usage, timing, status and a short error; the
+    request/response payloads (conversation content) are stored only while
+    the system setting "Log Conversation Content" is on. Logs older than the
+    configured retention (default 14 days) are removed by a daily cron.
     """
     _name = 'llm.api.log'
     _description = 'LLM API Log'
@@ -68,11 +72,13 @@ class LLMApiLog(models.Model):
     # Payload Data
     request_payload = fields.Text(
         string='Request Payload',
-        help='The messages array sent to the LLM API (JSON)',
+        help='The messages array sent to the LLM API (JSON). Only stored while '
+             '"Log Conversation Content" is enabled in Settings > Live Chat AI.',
     )
     response_payload = fields.Text(
         string='Response Payload',
-        help='The response received from the LLM API (JSON)',
+        help='The response received from the LLM API (JSON). Only stored while '
+             '"Log Conversation Content" is enabled in Settings > Live Chat AI.',
     )
 
     # Token Usage
@@ -101,7 +107,7 @@ class LLMApiLog(models.Model):
     # Error Info
     error_message = fields.Text(
         string='Error Message',
-        help='Error message if the API call failed',
+        help='Short error message if the API call failed (no upstream response body)',
     )
     retry_count = fields.Integer(
         string='Retry Count',
@@ -109,9 +115,29 @@ class LLMApiLog(models.Model):
         help='Number of retry attempts made',
     )
 
+    @api.model
+    def _get_retention_days(self):
+        value = self.env['ir.config_parameter'].sudo().get_param(ICP_LOG_RETENTION_DAYS)
+        try:
+            days = int(value) if value else DEFAULT_LOG_RETENTION_DAYS
+        except (TypeError, ValueError):
+            _logger.warning("Invalid %s value %r, using %s days",
+                            ICP_LOG_RETENTION_DAYS, value, DEFAULT_LOG_RETENTION_DAYS)
+            days = DEFAULT_LOG_RETENTION_DAYS
+        return max(1, days)
+
+    @api.model
+    def _erase_payloads(self):
+        """Remove stored conversation content from all logs."""
+        logs = self.search(['|', ('request_payload', '!=', False), ('response_payload', '!=', False)])
+        if logs:
+            logs.write({'request_payload': False, 'response_payload': False})
+            _logger.info("Erased conversation content from %s LLM API logs", len(logs))
+        return len(logs)
+
     def _cleanup_old_logs(self):
         """
-        Cleanup API logs older than 30 days.
+        Delete API logs older than the configured retention (default 14 days).
 
         Called by a scheduled action to prevent the log table
         from growing indefinitely.
@@ -119,13 +145,14 @@ class LLMApiLog(models.Model):
         Returns:
             int: Number of records deleted
         """
-        cutoff_date = fields.Datetime.now() - timedelta(days=30)
+        days = self._get_retention_days()
+        cutoff_date = fields.Datetime.now() - timedelta(days=days)
         old_logs = self.search([('timestamp', '<', cutoff_date)])
         count = len(old_logs)
 
         if count > 0:
             old_logs.unlink()
-            _logger.info("Cleaned up %s LLM API logs older than 30 days", count)
+            _logger.info("Cleaned up %s LLM API logs older than %s days", count, days)
         else:
             _logger.debug("No LLM API logs to clean up")
 

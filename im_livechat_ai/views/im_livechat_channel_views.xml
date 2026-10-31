@@ -10,15 +10,13 @@
                     <group>
                         <group string="AI Configuration">
                             <field name="ai_enabled"/>
-                            <field name="ai_api_base_url"
-                                   placeholder="https://api.openai.com/v1"
-                                   invisible="not ai_enabled"/>
-                            <field name="ai_api_key"
-                                   password="True"
-                                   invisible="not ai_enabled"/>
                             <field name="ai_model"
-                                   placeholder="gpt-4o"
-                                   invisible="not ai_enabled"/>
+                                   invisible="not ai_enabled"
+                                   required="ai_enabled"/>
+                            <div class="text-muted" colspan="2" invisible="not ai_enabled">
+                                The LiteLLM URL and API key are managed by system administrators
+                                in Settings &gt; Live Chat AI, where the model list is refreshed.
+                            </div>
                         </group>
                         <group string="Bot Settings" invisible="not ai_enabled">
                             <field name="ai_bot_name"/>
@@ -51,11 +49,13 @@
                         <button name="action_test_ai_connection"
                                 string="Test AI Connection"
                                 type="object"
-                                class="btn-primary"/>
+                                class="btn-primary"
+                                groups="im_livechat.im_livechat_group_manager"/>
                         <button name="action_view_api_logs"
                                 string="View API Logs"
                                 type="object"
-                                class="btn-link"/>
+                                class="btn-link"
+                                groups="im_livechat.im_livechat_group_manager"/>
                     </group>
                 </page>
             </xpath>

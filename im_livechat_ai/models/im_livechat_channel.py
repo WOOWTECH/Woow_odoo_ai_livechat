@@ -12,8 +12,49 @@ from markupsafe import Markup
 
 from odoo import api, fields, models, _, SUPERUSER_ID
 from odoo.exceptions import UserError, ValidationError
+from odoo.tools import SQL, sql
 
 _logger = logging.getLogger(__name__)
+
+# --- System-level LiteLLM connection (ir.config_parameter keys) ---
+# Only base.group_system can read or write ir.config_parameter, so a URL a
+# non-admin could set is never combined with the API key.
+ICP_BASE_URL = 'im_livechat_ai.base_url'
+ICP_API_KEY = 'im_livechat_ai.api_key'
+ICP_MODEL_CACHE = 'im_livechat_ai.model_cache'
+ICP_LOG_PAYLOAD = 'im_livechat_ai.log_payload'
+ICP_LOG_RETENTION_DAYS = 'im_livechat_ai.log_retention_days'
+
+DEFAULT_BASE_URL = 'https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1'
+DEFAULT_MODEL = 'chatgpt-pool/gpt-6-sol'
+DEFAULT_LOG_RETENTION_DAYS = 14
+
+LLM_REQUEST_TIMEOUT = 180  # seconds, chat completions
+LLM_MODELS_TIMEOUT = 15  # seconds, GET /models
+MAX_LOG_ERROR_LENGTH = 300
+
+class LLMNotConfigured(Exception):
+    """LiteLLM base URL or API key missing/invalid in system settings."""
+
+
+class LLMInvalidResponse(ValueError):
+    """The gateway answered 200 but not with the expected JSON shape."""
+
+
+class LLMEmptyResponse(ValueError):
+    """The model answered with no visible content."""
+
+
+# Short operator-facing explanation per HTTP status (Traditional Chinese).
+_HTTP_STATUS_MESSAGES = {
+    400: '請求格式或模型名稱有誤',
+    401: '金鑰無效或已撤銷',
+    403: '金鑰沒有使用此模型的權限',
+    404: '網址或模型不存在',
+    408: '上游服務逾時',
+    413: '對話內容太長',
+    429: '呼叫太頻繁或額度已用完',
+}
 
 
 class ImLivechatChannel(models.Model):
@@ -32,19 +73,12 @@ class ImLivechatChannel(models.Model):
         default=False,
         help='Enable AI-powered automatic replies using an OpenAI-compatible API',
     )
-    ai_api_base_url = fields.Char(
-        string='API Base URL',
-        help='Base URL of the OpenAI-compatible API (e.g., https://api.openai.com/v1)',
-    )
-    ai_api_key = fields.Char(
-        string='API Key',
-        help='API key for authenticating with the LLM service',
-        groups='base.group_system',
-        copy=False,
-    )
-    ai_model = fields.Char(
+    ai_model = fields.Selection(
+        selection='_selection_ai_model',
         string='Model',
-        help='Model name to use (e.g., gpt-4o, deepseek-chat, MiniMax-Text-01)',
+        default=DEFAULT_MODEL,
+        help='LiteLLM model used by this channel. The list comes from the '
+             'models cached by "Fetch Available Models" in Settings > Live Chat AI.',
     )
     ai_system_prompt = fields.Text(
         string='System Prompt',
@@ -94,22 +128,13 @@ class ImLivechatChannel(models.Model):
 
     # --- Constraints ---
 
-    @api.constrains('ai_api_base_url')
-    def _check_ai_api_base_url(self):
-        """Validate API base URL format."""
-        for record in self:
-            if record.ai_api_base_url:
-                url = record.ai_api_base_url.strip()
-                if not url.startswith(('http://', 'https://')):
-                    raise UserError(_('API Base URL must start with http:// or https://'))
-
     @api.constrains('ai_max_history')
     def _check_ai_max_history(self):
         """Validate max history range."""
         for record in self:
             if record.ai_enabled:
-                if record.ai_max_history < 0 or record.ai_max_history > 200:
-                    raise ValidationError(_('Max History Messages must be between 0 and 200.'))
+                if record.ai_max_history < 1 or record.ai_max_history > 200:
+                    raise ValidationError(_('Max History Messages must be between 1 and 200.'))
 
     @api.constrains('ai_temperature')
     def _check_ai_temperature(self):
@@ -143,17 +168,213 @@ class ImLivechatChannel(models.Model):
                 if record.ai_retry_delay < 1 or record.ai_retry_delay > 30:
                     raise ValidationError(_('Retry Delay must be between 1 and 30 seconds.'))
 
-    @api.constrains('ai_enabled', 'ai_api_base_url', 'ai_api_key', 'ai_model')
+    @api.constrains('ai_enabled', 'ai_model')
     def _check_ai_required_fields(self):
-        """Validate required fields when AI is enabled."""
+        """Validate required configuration when AI is enabled.
+
+        Runs as the saving user (e.g. a Live Chat manager), so the system
+        settings are only probed through sudo and only for presence; their
+        values never reach the error message.
+        """
         for record in self:
             if record.ai_enabled:
-                if not record.ai_api_base_url:
-                    raise UserError(_('API Base URL is required when AI integration is enabled.'))
-                if not record.ai_api_key:
-                    raise UserError(_('API Key is required when AI integration is enabled.'))
                 if not record.ai_model:
                     raise UserError(_('Model is required when AI integration is enabled.'))
+                if not self._llm_is_configured():
+                    raise UserError(_(
+                        '尚未設定 LiteLLM 連線。請系統管理員到「設定 → Live Chat AI」'
+                        '填入 LiteLLM 位址與金鑰後，再啟用 AI。'
+                    ))
+
+    # --- Model Selection ---
+
+    @api.model
+    def _get_cached_llm_models(self):
+        """Return the model ids cached by the settings button (list of str)."""
+        raw = self.env['ir.config_parameter'].sudo().get_param(ICP_MODEL_CACHE)
+        if not raw:
+            return []
+        try:
+            values = json.loads(raw)
+        except (TypeError, ValueError):
+            _logger.warning("Ignoring invalid %s value", ICP_MODEL_CACHE)
+            return []
+        if not isinstance(values, list):
+            return []
+        return [v for v in values if isinstance(v, str) and v]
+
+    @api.model
+    def _selection_ai_model(self):
+        """Selection options: cached LiteLLM models + default + values in use.
+
+        Values already stored on channels are always included so existing
+        data (e.g. a model chosen before the cache changed) stays valid.
+        """
+        values = set(self._get_cached_llm_models())
+        values.add(DEFAULT_MODEL)
+        if sql.column_exists(self.env.cr, self._table, 'ai_model'):
+            self.env.cr.execute(SQL(
+                "SELECT DISTINCT ai_model FROM %s WHERE ai_model IS NOT NULL AND ai_model != ''",
+                SQL.identifier(self._table),
+            ))
+            values.update(row[0] for row in self.env.cr.fetchall())
+        ordered = [DEFAULT_MODEL] + sorted(values - {DEFAULT_MODEL})
+        return [(value, value) for value in ordered]
+
+    # --- System-level LiteLLM connection ---
+
+    @api.model
+    def _get_llm_connection(self):
+        """Return (base_url, api_key) from the system settings.
+
+        Read through sudo because ir.config_parameter is restricted to
+        base.group_system; callers must never expose the key.
+        The base URL is normalized: no trailing slash, no /chat/completions.
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        base_url = (ICP.get_param(ICP_BASE_URL) or DEFAULT_BASE_URL).strip().rstrip('/')
+        if base_url.endswith('/chat/completions'):
+            base_url = base_url[:-len('/chat/completions')]
+        api_key = (ICP.get_param(ICP_API_KEY) or '').strip()
+        return base_url, api_key
+
+    @api.model
+    def _llm_is_configured(self):
+        base_url, api_key = self._get_llm_connection()
+        return bool(base_url and api_key)
+
+    @api.model
+    def _llm_request(self, method, path, json_payload=None, timeout=LLM_REQUEST_TIMEOUT):
+        """Send an authenticated request to the system LiteLLM gateway.
+
+        The URL and the key both come from ir.config_parameter (admin-only),
+        so the key is never sent to a URL a non-admin could have set.
+        Upstream response bodies go to the server log only.
+        """
+        base_url, api_key = self._get_llm_connection()
+        if not api_key:
+            raise LLMNotConfigured('LiteLLM API key is not configured')
+        if not base_url.startswith(('http://', 'https://')):
+            raise LLMNotConfigured('LiteLLM base URL must start with http:// or https://')
+        url = base_url + path
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}',
+        }
+        if method == 'GET':
+            response = requests.get(url, headers=headers, timeout=timeout)
+        else:
+            response = requests.post(url, json=json_payload, headers=headers, timeout=timeout)
+        if response.status_code != 200:
+            _logger.warning(
+                "LLM API error response (HTTP %s) for %s %s: %s",
+                response.status_code, method, url, (response.text or '')[:1000],
+            )
+        response.raise_for_status()
+        return response
+
+    @api.model
+    def _fetch_llm_models(self):
+        """GET {base}/models and cache the model ids in ir.config_parameter.
+
+        Returns:
+            list: sorted model ids
+        """
+        response = self._llm_request('GET', '/models', timeout=LLM_MODELS_TIMEOUT)
+        try:
+            data = response.json()
+        except ValueError:
+            _logger.warning("LiteLLM /models returned non-JSON: %s", (response.text or '')[:1000])
+            raise LLMInvalidResponse('Invalid /models response: not JSON')
+        items = data.get('data') if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            _logger.warning("LiteLLM /models returned unexpected payload: %s", (response.text or '')[:1000])
+            raise LLMInvalidResponse("Invalid /models response: no 'data' list")
+        model_ids = sorted({
+            item['id'] for item in items
+            if isinstance(item, dict) and isinstance(item.get('id'), str) and item['id']
+        })
+        self.env['ir.config_parameter'].sudo().set_param(
+            ICP_MODEL_CACHE, json.dumps(model_ids, ensure_ascii=False),
+        )
+        return model_ids
+
+    @api.model
+    def _describe_llm_error(self, error):
+        """Map an exception to (status_code or None, short Chinese message).
+
+        Never includes upstream response bodies, headers or the key.
+        """
+        if isinstance(error, requests.HTTPError):
+            status = error.response.status_code if error.response is not None else None
+            if status in _HTTP_STATUS_MESSAGES:
+                return status, _HTTP_STATUS_MESSAGES[status]
+            if status and status >= 500:
+                return status, 'LiteLLM 或上游服務暫時故障'
+            return status, '上游服務回應錯誤'
+        if isinstance(error, requests.Timeout):
+            return None, '連線逾時'
+        if isinstance(error, requests.ConnectionError):
+            return None, '無法連線到 LiteLLM'
+        if isinstance(error, LLMNotConfigured):
+            return None, '尚未設定 LiteLLM 位址或金鑰'
+        if isinstance(error, LLMInvalidResponse):
+            return None, '回應格式不正確'
+        if isinstance(error, LLMEmptyResponse):
+            return None, 'AI 回覆是空的'
+        return None, '未預期的錯誤'
+
+    @api.model
+    def _short_llm_error(self, error):
+        """Short error text stored in llm.api.log (no upstream body)."""
+        status, message = self._describe_llm_error(error)
+        prefix = f'HTTP {status}: ' if status else ''
+        text = f'{prefix}{message} ({type(error).__name__})'
+        return text[:MAX_LOG_ERROR_LENGTH]
+
+    @api.model
+    def _llm_log_payload_enabled(self):
+        value = self.env['ir.config_parameter'].sudo().get_param(ICP_LOG_PAYLOAD)
+        return str(value).lower() in ('true', '1')
+
+    @api.model
+    def _llm_test_notification(self, model_name):
+        """Send a tiny chat completion and return a display_notification action.
+
+        Shows only the HTTP status code and a short Chinese message; the full
+        error goes to the server log.
+        """
+        payload = {
+            'model': model_name,
+            'messages': [{'role': 'user', 'content': 'Connection test. Reply with "OK".'}],
+            'max_tokens': 16,
+        }
+        try:
+            response = self._llm_request('POST', '/chat/completions', json_payload=payload)
+            data = response.json()
+            if not isinstance(data, dict) or not data.get('choices'):
+                raise LLMInvalidResponse("Invalid API response: no 'choices' field")
+            status, ok = response.status_code, True
+            message = _('連線成功（HTTP %(status)s），模型 %(model)s 有回應。',
+                        status=status, model=model_name)
+        except Exception as e:  # noqa: BLE001 - every failure becomes a short notice
+            _logger.warning("LiteLLM connection test failed (model %s): %s", model_name, e, exc_info=True)
+            status, short = self._describe_llm_error(e)
+            ok = False
+            if status:
+                message = _('連線失敗（HTTP %(status)s）：%(reason)s', status=status, reason=short)
+            else:
+                message = _('連線失敗：%(reason)s', reason=short)
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('LiteLLM 連線測試'),
+                'message': message,
+                'type': 'success' if ok else 'danger',
+                'sticky': not ok,
+            },
+        }
 
     # --- Bot Partner Management ---
 
@@ -227,9 +448,10 @@ class ImLivechatChannel(models.Model):
         if not self.ai_enabled:
             return
 
-        if not self.ai_api_base_url or not self.ai_api_key or not self.ai_model:
+        if not self.ai_model or not self._llm_is_configured():
             _logger.warning(
-                "AI integration incomplete for channel %s: missing API URL, key, or model",
+                "AI integration incomplete for channel %s: missing model or "
+                "LiteLLM base URL/API key in Settings > Live Chat AI",
                 self.name,
             )
             return
@@ -348,7 +570,7 @@ class ImLivechatChannel(models.Model):
                 raw_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
                 ai_reply = self._strip_think_tags(raw_reply)
                 if not ai_reply:
-                    raise ValueError("Empty response from LLM API")
+                    raise LLMEmptyResponse("Empty response from LLM API")
 
                 # Extract token usage
                 usage = response_data.get('usage', {})
@@ -375,13 +597,12 @@ class ImLivechatChannel(models.Model):
 
             except Exception as e:
                 response_time = time.time() - start_time
-                last_error = str(e)
-                # For HTTP errors, include response body for debugging
-                if isinstance(e, requests.HTTPError) and e.response is not None:
-                    last_error = f"{e} | Response: {e.response.text[:500]}"
+                # Full detail goes to the server log only; the stored log
+                # keeps a short message without the upstream response body.
+                last_error = channel._short_llm_error(e)
                 _logger.warning(
                     "AI API call failed for channel %s (attempt %s/%s): %s",
-                    channel_id, attempt + 1, max_retries, last_error,
+                    channel_id, attempt + 1, max_retries, e,
                 )
 
                 # Log retry attempt
@@ -417,13 +638,16 @@ class ImLivechatChannel(models.Model):
             request_payload=messages,
             response_payload=None,
             response_time=None,
-            error_message=f'All {max_retries} retries exhausted. Last error: {last_error}',
+            error_message=f'All {max_retries} retries exhausted. Last error: {last_error}'[:MAX_LOG_ERROR_LENGTH],
             retry_count=max_retries,
         )
 
     def _call_llm_api(self, messages):
         """
-        Call an OpenAI-compatible chat completions API.
+        Call the system LiteLLM gateway (OpenAI-compatible chat completions).
+
+        The base URL and API key come from Settings > Live Chat AI
+        (ir.config_parameter, admin-only); the channel only chooses the model.
 
         Args:
             messages (list): List of message dicts with 'role' and 'content' keys
@@ -433,18 +657,10 @@ class ImLivechatChannel(models.Model):
 
         Raises:
             requests.RequestException: On HTTP errors
+            LLMNotConfigured: When the system settings are incomplete
             ValueError: On invalid response format
         """
         self.ensure_one()
-
-        url = self.ai_api_base_url.strip().rstrip('/')
-        if '/chat/completions' not in url:
-            url = url + '/chat/completions'
-
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.ai_api_key}',
-        }
 
         payload = {
             'model': self.ai_model,
@@ -456,22 +672,12 @@ class ImLivechatChannel(models.Model):
         if self.ai_max_tokens:
             payload['max_tokens'] = self.ai_max_tokens
 
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=180,
-        )
-        if response.status_code != 200:
-            _logger.warning(
-                "LLM API error response (HTTP %s): %s",
-                response.status_code, response.text[:1000],
-            )
-        response.raise_for_status()
+        response = self._llm_request('POST', '/chat/completions', json_payload=payload)
 
         data = response.json()
-        if not data.get('choices'):
-            raise ValueError(f"Invalid API response: no 'choices' field. Response: {response.text[:500]}")
+        if not isinstance(data, dict) or not data.get('choices'):
+            _logger.warning("LLM API response without 'choices': %s", (response.text or '')[:1000])
+            raise LLMInvalidResponse("Invalid API response: no 'choices' field")
 
         return data
 
@@ -534,7 +740,7 @@ class ImLivechatChannel(models.Model):
                 'model': model_name,
                 'status': status,
                 'response_time': response_time,
-                'error_message': error_message,
+                'error_message': (error_message or '')[:MAX_LOG_ERROR_LENGTH] or False,
                 'retry_count': retry_count,
                 'prompt_tokens': prompt_tokens or 0,
                 'completion_tokens': completion_tokens or 0,
@@ -545,10 +751,13 @@ class ImLivechatChannel(models.Model):
             if discuss_channel_id and env['discuss.channel'].browse(discuss_channel_id).exists():
                 vals['discuss_channel_id'] = discuss_channel_id
 
-            if request_payload:
-                vals['request_payload'] = json.dumps(request_payload, ensure_ascii=False, default=str)
-            if response_payload:
-                vals['response_payload'] = json.dumps(response_payload, ensure_ascii=False, default=str)
+            # Conversation content is only kept when the admin turned on
+            # "Log Conversation Content" (default off, P2-1).
+            if self._llm_log_payload_enabled():
+                if request_payload:
+                    vals['request_payload'] = json.dumps(request_payload, ensure_ascii=False, default=str)
+                if response_payload:
+                    vals['response_payload'] = json.dumps(response_payload, ensure_ascii=False, default=str)
 
             env['llm.api.log'].create(vals)
         except Exception as log_error:
@@ -558,49 +767,20 @@ class ImLivechatChannel(models.Model):
 
     def action_test_ai_connection(self):
         """
-        Test the AI API connection by sending a simple request.
+        Test the LiteLLM connection with this channel's model.
 
-        Returns a user notification indicating success or failure.
+        Returns a notification with the HTTP status code and a short
+        Chinese message only; details go to the server log.
         """
         self.ensure_one()
 
         if not self.ai_enabled:
             raise UserError(_('AI integration is not enabled for this channel.'))
 
-        if not self.ai_api_base_url or not self.ai_api_key or not self.ai_model:
-            raise UserError(_('Please configure API Base URL, API Key, and Model before testing.'))
+        if not self.ai_model:
+            raise UserError(_('Please choose a model before testing.'))
 
-        test_messages = [
-            {'role': 'user', 'content': 'Hello, this is a connection test. Reply with "OK".'}
-        ]
-
-        try:
-            response_data = self._call_llm_api(test_messages)
-            raw_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
-            reply = self._strip_think_tags(raw_reply)
-            usage = response_data.get('usage', {})
-
-            return {
-                'type': 'ir.actions.client',
-                'tag': 'display_notification',
-                'params': {
-                    'title': _('AI Connection Test Successful'),
-                    'message': _('Model: %s | Reply: %s | Tokens: %s') % (
-                        self.ai_model,
-                        reply[:100],
-                        usage.get('total_tokens', 'N/A'),
-                    ),
-                    'type': 'success',
-                    'sticky': False,
-                },
-            }
-
-        except requests.exceptions.Timeout:
-            raise UserError(_('API request timed out. Please check the URL and try again.'))
-        except requests.exceptions.ConnectionError:
-            raise UserError(_('Could not connect to API. Please check the URL and network connection.'))
-        except Exception as e:
-            raise UserError(_('AI connection test failed: %s') % str(e))
+        return self._llm_test_notification(self.ai_model)
 
     def action_view_api_logs(self):
         """Open the API logs view filtered for this channel."""

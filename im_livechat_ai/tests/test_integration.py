@@ -4,6 +4,10 @@ from unittest.mock import patch, MagicMock
 
 from odoo.tests.common import TransactionCase
 
+from odoo.addons.im_livechat_ai.models.im_livechat_channel import ICP_API_KEY
+
+from .common import TEST_BASE_URL, livechat_operator, setup_litellm
+
 
 class TestAIIntegration(TransactionCase):
     """Integration tests for the full AI livechat flow."""
@@ -11,12 +15,11 @@ class TestAIIntegration(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
 
         cls.livechat_channel = cls.env['im_livechat.channel'].create({
             'name': 'Integration Test Channel',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-integration-test',
             'ai_model': 'gpt-4o',
             'ai_system_prompt': 'You are a test bot.',
             'ai_max_retries': 3,
@@ -33,7 +36,21 @@ class TestAIIntegration(TransactionCase):
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Integration Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.livechat_channel.id,
+        })
+        # A visitor message must exist, otherwise the processor waits for a
+        # commit (cr.rollback), which is forbidden inside a test.
+        cls._add_visitor_msg(cls.session, cls.visitor_partner)
+
+    @classmethod
+    def _add_visitor_msg(cls, session, partner, body='Hello, I need help'):
+        return cls.env['mail.message'].create({
+            'body': body,
+            'model': 'discuss.channel',
+            'res_id': session.id,
+            'message_type': 'comment',
+            'author_id': partner.id,
         })
 
     # --- Full Flow Tests ---
@@ -152,13 +169,11 @@ class TestAIIntegration(TransactionCase):
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_multi_channel_isolation(self, mock_post):
-        """Each channel should use its own API config."""
+        """Channels share the system LiteLLM gateway but use their own model."""
         channel_b = self.env['im_livechat.channel'].create({
             'name': 'Channel B',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.minimax.com/v1',
-            'ai_api_key': 'sk-minimax-key',
-            'ai_model': 'MiniMax-Text-01',
+            'ai_model': 'other-pool/other-model',
             'ai_system_prompt': 'You are MiniMax bot.',
         })
 
@@ -173,8 +188,10 @@ class TestAIIntegration(TransactionCase):
         session_b = self.env['discuss.channel'].create({
             'name': 'Session B',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(self.env).id,
             'livechat_channel_id': channel_b.id,
         })
+        self._add_visitor_msg(session_b, self.visitor_partner)
 
         channel_b._process_ai_response(
             self.env.cr.dbname,
@@ -183,13 +200,13 @@ class TestAIIntegration(TransactionCase):
             test_env=self.env,
         )
 
-        # Verify correct URL was called
+        # Same system gateway for every channel
         called_url = mock_post.call_args[0][0]
-        self.assertIn('minimax', called_url)
+        self.assertEqual(called_url, TEST_BASE_URL + '/chat/completions')
 
-        # Verify correct model was sent
+        # Channel-specific model was sent
         sent_payload = mock_post.call_args[1]['json']
-        self.assertEqual(sent_payload['model'], 'MiniMax-Text-01')
+        self.assertEqual(sent_payload['model'], 'other-pool/other-model')
 
     def test_disabled_channel_no_trigger(self):
         """Disabled channel should not trigger AI response."""
@@ -202,10 +219,11 @@ class TestAIIntegration(TransactionCase):
         self.livechat_channel.write({'ai_enabled': True})
 
     def test_missing_config_constraint(self):
-        """Enabling AI without required config should raise constraint error."""
+        """Saving an AI-enabled channel without a system API key raises an error."""
         from odoo.exceptions import UserError
+        self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
         with self.assertRaises(UserError):
-            self.livechat_channel.write({'ai_api_key': False})
+            self.livechat_channel.write({'ai_model': 'gpt-4o'})
 
     # --- Bot Partner Isolation ---
 

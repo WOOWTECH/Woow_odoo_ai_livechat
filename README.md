@@ -275,6 +275,21 @@ A ready-to-use container setup is provided in the `odoo-ailivechat/` directory.
 
 ## Configuration
 
+### Step 0: System-wide LiteLLM connection (system administrators only)
+
+Since 18.0.1.1.0 the LLM connection is one system-wide setting in **Settings > Live Chat AI**
+(also reachable from **Live Chat > Configuration > AI Settings**). Only `base.group_system`
+can see or change it; values are stored in `ir.config_parameter`.
+
+| Setting | Description | Default |
+|---|---|---|
+| **LiteLLM Base URL** (`im_livechat_ai.base_url`) | OpenAI-compatible base URL of the company LiteLLM gateway. | `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` |
+| **LiteLLM API Key** (`im_livechat_ai.api_key`) | Dedicated `odoo-livechat` key. Write-only: never shown again after saving. | -- |
+| **Fetch Available Models** | Calls `GET {base}/models` and caches the list used by the channel model selector. | -- |
+| **Test Connection** | Sends a tiny request; shows only the HTTP status and a short message (details go to the server log). | -- |
+| **Log Conversation Content** (`im_livechat_ai.log_payload`) | Store request/response payloads in the API logs. Turning it off erases stored content. | Off |
+| **Log Retention (days)** (`im_livechat_ai.log_retention_days`) | The daily cleanup deletes older API logs. | `14` |
+
 After installation, configure AI for each livechat channel:
 
 ### Step 1: Open Livechat Channel Settings
@@ -291,9 +306,9 @@ Navigate to **Live Chat > Channels**, select a channel, and click the **AI Integ
 
 | Field | Description | Example |
 |---|---|---|
-| **API Base URL** (`ai_api_base_url`) | Base URL of your LLM API provider. Must be a valid URL. | `https://api.openai.com/v1` |
-| **API Key** (`ai_api_key`) | Authentication key for the LLM service. | `sk-proj-...` |
-| **Model** (`ai_model`) | Model identifier to use for completions. | `gpt-4o`, `deepseek-chat`, `MiniMax-Text-01` |
+| **Model** (`ai_model`) | Model chosen from the cached LiteLLM model list (the current value always stays selectable). | `chatgpt-pool/gpt-6-sol` (default) |
+
+The channel no longer has an API URL or API key field; the system-wide LiteLLM setting is used.
 
 ### Step 4: Define AI Behavior
 
@@ -321,8 +336,8 @@ Navigate to **Live Chat > Channels**, select a channel, and click the **AI Integ
 
 ### Step 7: Test & Verify
 
-- Click **Test AI Connection** to send a test request to the configured API and verify connectivity.
-- Click **View API Logs** to inspect request/response history and token usage for this channel.
+- Click **Test AI Connection** (Live Chat managers) to check the channel's model; the result shows the HTTP status and a short message only.
+- Click **View API Logs** (Live Chat managers) to inspect token usage and status for this channel. Conversation content is only present while **Log Conversation Content** is on.
 
 ---
 
@@ -392,13 +407,16 @@ This guarantees that only genuine visitor messages trigger AI responses.
 
 ### Input Validation
 
-- **URL format**: `ai_api_base_url` is validated to ensure it is a properly formatted URL.
+- **URL format**: the LiteLLM base URL must start with `http://` or `https://`.
 - **Numeric ranges**: Temperature (0.0-2.0), max history (1-200), max retries (1-10), retry delay (1-30), and max tokens are all constrained.
-- **Required fields**: Enabling AI requires that the API base URL, API key, and model fields are populated.
+- **Required fields**: Enabling AI requires a model and a configured system LiteLLM key.
 
 ### API Key Storage
 
-API keys are stored as standard Odoo `Char` fields with access controlled by Odoo's built-in record-level and field-level security model. For production deployments, ensure that only authorized administrators have write access to livechat channel records.
+The LiteLLM URL and key live in `ir.config_parameter`, which only `base.group_system` can read or write.
+Channels only choose a model, so a Live Chat user or manager cannot point the key at another URL.
+The key is write-only in the settings form and is not kept in the transient settings table.
+Stored API logs never contain upstream response bodies; only Live Chat administrators can read them.
 
 ---
 
@@ -506,6 +524,13 @@ No additional `pip install` is required beyond a standard Odoo 18 environment.
 ---
 
 ## Changelog
+
+### v18.0.1.1.0
+
+- LLM connection moved to the system-wide LiteLLM setting (Settings > Live Chat AI, administrators only); per-channel API URL/key removed.
+- Channel model is a selection fed by "Fetch Available Models"; default `chatgpt-pool/gpt-6-sol`.
+- Upgrade wipes and drops the old per-channel key/URL columns and turns AI off on every channel until an administrator configures LiteLLM and re-enables it.
+- API logs: Live Chat administrators only, no conversation content unless "Log Conversation Content" is on, short errors without upstream bodies, 14-day retention (configurable).
 
 ### v18.0.1.0.0 (Initial Release)
 

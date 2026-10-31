@@ -16,6 +16,16 @@ from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
+from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
+    ICP_API_KEY,
+    ICP_BASE_URL,
+    ICP_LOG_PAYLOAD,
+    LLM_REQUEST_TIMEOUT,
+    MAX_LOG_ERROR_LENGTH,
+)
+
+from .common import TEST_API_KEY, livechat_operator, setup_litellm
+
 
 class TestStripThinkTags(TransactionCase):
     """Exhaustive tests for _strip_think_tags static method."""
@@ -161,39 +171,12 @@ class TestConstraintEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Constraint Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test-key',
             'ai_model': 'gpt-4o',
         })
-
-    # --- URL constraints ---
-
-    def test_url_with_leading_trailing_whitespace(self):
-        """Whitespace around valid URL should be accepted (stripped by constraint)."""
-        self.channel.write({'ai_api_base_url': '  https://api.example.com/v1  '})
-        # Should not raise
-
-    def test_url_with_port(self):
-        self.channel.write({'ai_api_base_url': 'http://localhost:11434/v1'})
-
-    def test_url_with_query_params(self):
-        self.channel.write({'ai_api_base_url': 'https://api.example.com/v1?api_version=2024'})
-
-    def test_url_missing_protocol(self):
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_api_base_url': 'api.openai.com/v1'})
-
-    def test_url_relative_path(self):
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_api_base_url': '/v1/chat/completions'})
-
-    def test_url_empty_string_when_enabled(self):
-        """Empty URL when AI enabled should fail on required fields check."""
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_api_base_url': ''})
 
     # --- Boundary values ---
 
@@ -268,34 +251,29 @@ class TestConstraintEdgeCases(TransactionCase):
 
     # --- Required fields when enabling AI ---
 
-    def test_enable_ai_without_url_fails(self):
-        channel = self.env['im_livechat.channel'].create({'name': 'No URL'})
-        with self.assertRaises(UserError):
-            channel.write({
-                'ai_enabled': True,
-                'ai_api_key': 'sk-test',
-                'ai_model': 'gpt-4o',
-                # ai_api_base_url missing
-            })
-
-    def test_enable_ai_without_key_fails(self):
+    def test_enable_ai_without_system_key_fails(self):
+        """Enabling AI needs the system-level LiteLLM key."""
+        self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
         channel = self.env['im_livechat.channel'].create({'name': 'No Key'})
         with self.assertRaises(UserError):
             channel.write({
                 'ai_enabled': True,
-                'ai_api_base_url': 'https://api.openai.com/v1',
                 'ai_model': 'gpt-4o',
-                # ai_api_key missing
             })
+
+    def test_enable_ai_with_default_url_only_key_needed(self):
+        """Without a stored base URL the default LiteLLM URL is used."""
+        self.env['ir.config_parameter'].set_param(ICP_BASE_URL, False)
+        channel = self.env['im_livechat.channel'].create({'name': 'Default URL'})
+        channel.write({'ai_enabled': True, 'ai_model': 'gpt-4o'})
+        self.assertTrue(channel.ai_enabled)
 
     def test_enable_ai_without_model_fails(self):
         channel = self.env['im_livechat.channel'].create({'name': 'No Model'})
         with self.assertRaises(UserError):
             channel.write({
                 'ai_enabled': True,
-                'ai_api_base_url': 'https://api.openai.com/v1',
-                'ai_api_key': 'sk-test',
-                # ai_model missing
+                'ai_model': False,
             })
 
 
@@ -305,11 +283,10 @@ class TestCallLlmApiEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'API Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test-key',
             'ai_model': 'gpt-4o',
         })
 
@@ -318,7 +295,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_url_with_trailing_slash(self, mock_post):
         """Trailing slash should be stripped before appending path."""
-        self.channel.write({'ai_api_base_url': 'https://api.openai.com/v1/'})
+        self.env['ir.config_parameter'].set_param(ICP_BASE_URL, 'https://api.openai.com/v1/')
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'choices': [{'message': {'content': 'OK'}}]}
@@ -333,7 +310,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_url_with_whitespace(self, mock_post):
         """Leading/trailing whitespace in URL should be stripped."""
-        self.channel.write({'ai_api_base_url': '  https://api.openai.com/v1  '})
+        self.env['ir.config_parameter'].set_param(ICP_BASE_URL, '  https://api.openai.com/v1  ')
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'choices': [{'message': {'content': 'OK'}}]}
@@ -454,7 +431,8 @@ class TestCallLlmApiEdgeCases(TransactionCase):
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_max_tokens_zero_excluded(self, mock_post):
         """Max tokens 0 should NOT be included in payload."""
-        self.channel.write({'ai_max_tokens': 0})
+        # 0 is rejected by the constraint while AI is on; disable to store it.
+        self.channel.write({'ai_enabled': False, 'ai_max_tokens': 0})
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'choices': [{'message': {'content': 'OK'}}]}
@@ -466,7 +444,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         self.assertNotIn('max_tokens', payload)
 
         # Restore
-        self.channel.write({'ai_max_tokens': 1024})
+        self.channel.write({'ai_max_tokens': 1024, 'ai_enabled': True})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_authorization_header_format(self, mock_post):
@@ -483,8 +461,8 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         self.assertIn('sk-test-key', headers['Authorization'])
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_timeout_is_60_seconds(self, mock_post):
-        """Request timeout should be 60 seconds."""
+    def test_request_timeout_constant(self, mock_post):
+        """Request timeout should be the module's LLM_REQUEST_TIMEOUT."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'choices': [{'message': {'content': 'OK'}}]}
@@ -492,7 +470,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         mock_post.return_value = mock_response
 
         self.channel._call_llm_api([{'role': 'user', 'content': 'test'}])
-        self.assertEqual(mock_post.call_args[1]['timeout'], 60)
+        self.assertEqual(mock_post.call_args[1]['timeout'], LLM_REQUEST_TIMEOUT)
 
 
 class TestCreateBotMessageEdgeCases(TransactionCase):
@@ -501,16 +479,16 @@ class TestCreateBotMessageEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Bot Msg Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
         })
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Bot Msg Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
@@ -563,7 +541,8 @@ class TestCreateBotMessageEdgeCases(TransactionCase):
             'Line 1\nLine 2\nLine 3',
         )
         msg = self._get_latest_bot_message()
-        self.assertIn('<br/>', msg.body)
+        # message_post sanitizes <br/> to <br>
+        self.assertEqual(msg.body.count('<br'), 2)
 
     def test_multiple_consecutive_newlines(self):
         """Multiple newlines should produce multiple <br/>."""
@@ -572,8 +551,8 @@ class TestCreateBotMessageEdgeCases(TransactionCase):
             'Para 1\n\nPara 2',
         )
         msg = self._get_latest_bot_message()
-        # Should have two <br/> tags
-        br_count = msg.body.count('<br/>')
+        # Should have two line breaks (sanitized to <br>)
+        br_count = msg.body.count('<br')
         self.assertEqual(br_count, 2)
 
     # --- Unicode content ---
@@ -614,11 +593,10 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Build Msg Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
             'ai_system_prompt': 'Test system prompt.',
             'ai_max_history': 50,
@@ -628,6 +606,7 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Build Msg Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
@@ -637,6 +616,9 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
             'model': 'discuss.channel',
             'res_id': self.session.id,
             'message_type': 'comment',
+            # mail.message defaults the author to the current user's partner;
+            # anonymous/guest visitors have none.
+            'author_id': False,
         }
         if author_id:
             vals['author_id'] = author_id
@@ -651,6 +633,7 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
         session2 = self.env['discuss.channel'].create({
             'name': 'Empty Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(self.env).id,
             'livechat_channel_id': self.channel.id,
         })
         messages = session2._build_llm_messages(self.channel)
@@ -702,18 +685,16 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
     # --- Max history clamping ---
 
     def test_max_history_none_defaults_to_50(self):
-        """ai_max_history=None should default to 50 internally."""
+        """ai_max_history=0 (only storable with AI off) falls back to 50 internally."""
         self.channel.write({'ai_enabled': False})
         self.channel.write({'ai_max_history': 0})
-        # _build_llm_messages clamps: max(1, min(0 or 50, 200)) = max(1, min(50, 200)) = 50
-        # Actually with 0: max(1, min(0, 200)) = max(1, 0) = 1
-        # So it effectively limits to 1 message
+        # _build_llm_messages clamps: max(1, min(0 or 50, 200)) = 50
         self._post_msg('Msg 1', author_id=self.visitor.id)
         self._post_msg('Msg 2', author_id=self.visitor.id)
         messages = self.session._build_llm_messages(self.channel)
         non_system = [m for m in messages if m['role'] != 'system']
-        # With max_history clamped to 1, only 1 message
-        self.assertEqual(len(non_system), 1)
+        # Both messages fit in the 50-message fallback window
+        self.assertEqual(len(non_system), 2)
         # Restore
         self.channel.write({'ai_enabled': True, 'ai_max_history': 50})
 
@@ -750,11 +731,10 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Process Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
             'ai_max_retries': 2,
             'ai_retry_delay': 1,
@@ -765,6 +745,7 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Process Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
@@ -874,12 +855,12 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
         ])
         self.assertTrue(len(error_logs) >= 1)
 
-    # --- HTTPError includes response body in log ---
+    # --- HTTPError: status kept, upstream body NOT stored in the log ---
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep')
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_http_error_body_captured(self, mock_post, mock_sleep):
-        """HTTPError response body should be captured in log."""
+    def test_http_error_body_not_stored(self, mock_post, mock_sleep):
+        """HTTPError log keeps the status code but not the upstream response body."""
         self._add_visitor_msg()
 
         mock_response = MagicMock()
@@ -900,7 +881,14 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
             ('status', '=', 'error'),
         ], order='id desc', limit=1)
         self.assertTrue(error_logs)
-        self.assertIn('invalid_model', error_logs[0].error_message or '')
+        self.assertIn('HTTP 400', error_logs[0].error_message or '')
+        self.assertNotIn('invalid_model', error_logs[0].error_message or '')
+        retry_logs = self.env['llm.api.log'].search([
+            ('livechat_channel_id', '=', self.channel.id),
+            ('status', '=', 'retry'),
+        ])
+        for log in retry_logs:
+            self.assertNotIn('invalid_model', log.error_message or '')
 
 
 class TestApiLogEdgeCases(TransactionCase):
@@ -909,21 +897,22 @@ class TestApiLogEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Log Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
         })
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Log Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
     def test_log_with_unicode_payload(self):
-        """Unicode in request/response payload should be preserved."""
+        """Unicode in request/response payload should be preserved (content logging on)."""
+        self.env['ir.config_parameter'].set_param(ICP_LOG_PAYLOAD, True)
         self.channel._create_api_log(
             self.env,
             channel_id=self.channel.id,
@@ -944,6 +933,7 @@ class TestApiLogEdgeCases(TransactionCase):
         temp_session = self.env['discuss.channel'].create({
             'name': 'Temp Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(self.env).id,
             'livechat_channel_id': self.channel.id,
         })
         temp_id = temp_session.id
@@ -989,7 +979,7 @@ class TestApiLogEdgeCases(TransactionCase):
         self.assertEqual(log.total_tokens, 0)
 
     def test_log_large_error_message(self):
-        """Very large error messages should be stored."""
+        """Very large error messages are cut to MAX_LOG_ERROR_LENGTH."""
         large_error = 'E' * 5000
         self.channel._create_api_log(
             self.env,
@@ -1005,22 +995,22 @@ class TestApiLogEdgeCases(TransactionCase):
             ('livechat_channel_id', '=', self.channel.id),
             ('status', '=', 'error'),
         ], order='id desc', limit=1)
-        self.assertEqual(len(log.error_message), 5000)
+        self.assertEqual(len(log.error_message), MAX_LOG_ERROR_LENGTH)
 
-    def test_cleanup_boundary_29_days(self):
-        """Log 29 days old should NOT be deleted."""
+    def test_cleanup_boundary_13_days(self):
+        """Log 13 days old should NOT be deleted (default retention 14 days)."""
         log = self.env['llm.api.log'].create({
             'status': 'success',
-            'timestamp': fields.Datetime.now() - timedelta(days=29),
+            'timestamp': fields.Datetime.now() - timedelta(days=13),
         })
         self.env['llm.api.log']._cleanup_old_logs()
         self.assertTrue(log.exists())
 
-    def test_cleanup_31_days(self):
-        """Log 31 days old should be deleted."""
+    def test_cleanup_15_days(self):
+        """Log 15 days old should be deleted (default retention 14 days)."""
         log = self.env['llm.api.log'].create({
             'status': 'success',
-            'timestamp': fields.Datetime.now() - timedelta(days=31),
+            'timestamp': fields.Datetime.now() - timedelta(days=15),
         })
         self.env['llm.api.log']._cleanup_old_logs()
         self.assertFalse(log.exists())
@@ -1032,11 +1022,10 @@ class TestActionTestConnectionEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Connection Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
         })
 
@@ -1047,26 +1036,46 @@ class TestActionTestConnectionEdgeCases(TransactionCase):
         self.channel.write({'ai_enabled': True})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_timeout_raises_user_error(self, mock_post):
-        mock_post.side_effect = requests.Timeout('timed out')
-        with self.assertRaises(UserError) as ctx:
-            self.channel.action_test_ai_connection()
-        self.assertIn('timed out', str(ctx.exception).lower())
+    def test_timeout_short_message(self, mock_post):
+        mock_post.side_effect = requests.Timeout('timed out after 180s')
+        result = self.channel.action_test_ai_connection()
+        self.assertEqual(result['params']['type'], 'danger')
+        self.assertIn('逾時', result['params']['message'])
+        self.assertNotIn('180s', result['params']['message'])
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_connection_error_raises_user_error(self, mock_post):
-        mock_post.side_effect = requests.ConnectionError('refused')
-        with self.assertRaises(UserError) as ctx:
-            self.channel.action_test_ai_connection()
-        self.assertIn('connect', str(ctx.exception).lower())
+    def test_connection_error_short_message(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError('refused by 10.0.0.1')
+        result = self.channel.action_test_ai_connection()
+        self.assertEqual(result['params']['type'], 'danger')
+        self.assertIn('無法連線', result['params']['message'])
+        self.assertNotIn('10.0.0.1', result['params']['message'])
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_think_tags_stripped_in_test(self, mock_post):
-        """Test connection should strip think tags from reply."""
+    def test_http_error_shows_status_only(self, mock_post):
+        """Failure shows the status code + short Chinese text, never the upstream body."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = '{"error": "upstream-secret-detail"}'
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            '401 Unauthorized', response=mock_response,
+        )
+        mock_post.return_value = mock_response
+        result = self.channel.action_test_ai_connection()
+        msg = result['params']['message']
+        self.assertEqual(result['params']['type'], 'danger')
+        self.assertIn('HTTP 401', msg)
+        self.assertIn('金鑰無效', msg)
+        self.assertNotIn('upstream-secret-detail', msg)
+        self.assertNotIn(TEST_API_KEY, msg)
+
+    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
+    def test_success_shows_status_not_reply(self, mock_post):
+        """Success shows HTTP 200 and the model, not the model's reply text."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            'choices': [{'message': {'content': '<think>reasoning</think>OK'}}],
+            'choices': [{'message': {'content': '<think>reasoning</think>UNIQUE-REPLY'}}],
             'usage': {'total_tokens': 10},
         }
         mock_response.raise_for_status = MagicMock()
@@ -1074,42 +1083,23 @@ class TestActionTestConnectionEdgeCases(TransactionCase):
 
         result = self.channel.action_test_ai_connection()
         msg = result['params']['message']
+        self.assertEqual(result['params']['type'], 'success')
+        self.assertIn('HTTP 200', msg)
+        self.assertIn('gpt-4o', msg)
+        self.assertNotIn('UNIQUE-REPLY', msg)
         self.assertNotIn('<think>', msg)
-        self.assertIn('OK', msg)
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_very_long_reply_truncated(self, mock_post):
-        """Reply in notification should be truncated to 100 chars."""
-        long_reply = 'A' * 500
+    def test_invalid_response_short_message(self, mock_post):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': long_reply}}],
-            'usage': {'total_tokens': 10},
-        }
+        mock_response.json.return_value = {'error': 'no choices here'}
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
-
         result = self.channel.action_test_ai_connection()
-        msg = result['params']['message']
-        # The reply portion is truncated to 100 chars
-        self.assertNotIn('A' * 101, msg)
-
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_missing_usage_shows_na(self, mock_post):
-        """Missing usage info should show N/A."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'OK'}}],
-            # No 'usage' key
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        result = self.channel.action_test_ai_connection()
-        msg = result['params']['message']
-        self.assertIn('N/A', msg)
+        self.assertEqual(result['params']['type'], 'danger')
+        self.assertIn('回應格式不正確', result['params']['message'])
+        self.assertNotIn('no choices here', result['params']['message'])
 
 
 class TestBotPartnerEdgeCases(TransactionCase):
@@ -1158,16 +1148,16 @@ class TestTriggerAiResponseEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Trigger Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
         })
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Trigger Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
@@ -1180,20 +1170,11 @@ class TestTriggerAiResponseEdgeCases(TransactionCase):
         self.channel.write({'ai_enabled': True})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.threading.Thread')
-    def test_missing_url_no_thread(self, mock_thread):
-        """Missing URL should not create thread."""
-        original_url = self.channel.ai_api_base_url
-        self.channel.write({'ai_enabled': False})
-        self.channel.write({'ai_api_base_url': False})
-        self.channel.write({'ai_enabled': False})  # keep disabled to avoid constraint
-        # Directly call with the channel state
-        self.channel.ai_enabled = True  # bypass constraint temporarily
+    def test_missing_system_key_no_thread(self, mock_thread):
+        """Missing system LiteLLM key should not create thread."""
+        self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
         self.channel._trigger_ai_response(self.session, MagicMock())
         mock_thread.assert_not_called()
-        # Restore
-        self.channel.write({'ai_enabled': False})
-        self.channel.write({'ai_api_base_url': original_url})
-        self.channel.write({'ai_enabled': True})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.threading.Thread')
     def test_thread_is_daemon(self, mock_thread):
@@ -1209,16 +1190,16 @@ class TestIsVisitorMessageEdgeCases(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Visitor Edge Test',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test',
             'ai_model': 'gpt-4o',
         })
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Visitor Edge Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.channel.id,
         })
 
@@ -1228,6 +1209,9 @@ class TestIsVisitorMessageEdgeCases(TransactionCase):
             'model': 'discuss.channel',
             'res_id': self.session.id,
             'message_type': 'comment',
+            # mail.message defaults the author to the current user's partner;
+            # anonymous/guest visitors have none.
+            'author_id': False,
         }
         if author_id:
             vals['author_id'] = author_id

@@ -284,6 +284,19 @@ odoo-ailivechat/
 
 ## 設定
 
+### 系統層級 LiteLLM 連線（只有系統管理員）
+
+18.0.1.1.0 起，LLM 連線改成全站共用的設定，在 **設定 → Live Chat AI**（也可從 **即時聊天 → 設定 → AI 設定** 進入）。只有系統管理員（`base.group_system`）看得到、改得到，值存在 `ir.config_parameter`。
+
+| 設定 | 說明 | 預設值 |
+|------|------|--------|
+| **LiteLLM 位址**（`im_livechat_ai.base_url`） | 公司 LiteLLM 閘道的 OpenAI 相容位址 | `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` |
+| **LiteLLM API 金鑰**（`im_livechat_ai.api_key`） | 專用的 `odoo-livechat` 金鑰；儲存後不再顯示 | -- |
+| **讀取可用模型** | 呼叫 `GET {位址}/models`，更新頻道「模型」下拉選單 | -- |
+| **測試連線** | 送出一個小請求，只顯示狀態碼和一句說明，完整錯誤只寫伺服器日誌 | -- |
+| **記錄對話內容**（`im_livechat_ai.log_payload`） | 在 API 日誌保存對話內容；關閉時會清除已保存的內容 | 關閉 |
+| **日誌保留天數**（`im_livechat_ai.log_retention_days`） | 每日清理排程刪除超過天數的日誌 | `14` |
+
 ### 步驟說明
 
 1. 前往 **網站 > 即時聊天 > 頻道**（Website > Live Chat > Channels）。
@@ -298,9 +311,7 @@ odoo-ailivechat/
 | 欄位 | 類型 | 預設值 | 說明 |
 |------|------|--------|------|
 | `ai_enabled` | Boolean | `False` | 啟用/停用 AI 整合 |
-| `ai_api_base_url` | Char | -- | API 基礎 URL（例如 `https://api.openai.com/v1`） |
-| `ai_api_key` | Char | -- | LLM 服務的 API 金鑰 |
-| `ai_model` | Char | -- | 模型名稱（例如 `gpt-4o`、`deepseek-chat`、`MiniMax-Text-01`） |
+| `ai_model` | Selection | `chatgpt-pool/gpt-6-sol` | 從 LiteLLM 模型清單選擇（目前的值一定保留可選） |
 | `ai_system_prompt` | Text | -- | 系統提示詞，定義 AI 助理的角色與行為 |
 | `ai_max_history` | Integer | `50` | 最大歷史訊息數，用於建構對話上下文（1-200） |
 | `ai_temperature` | Float | `0.7` | 溫度參數，控制回覆的隨機性（0.0-2.0） |
@@ -398,18 +409,18 @@ im_livechat_ai/
 
 ### API 金鑰安全
 
-API 金鑰作為 `Bearer` token 透過 `Authorization` 標頭傳送至 LLM 供應商。金鑰儲存在 Odoo 的 `im_livechat.channel` 記錄中，受 Odoo 標準存取控制保護。
+LiteLLM 位址與金鑰存在 `ir.config_parameter`，只有系統管理員能讀寫。頻道只選模型，所以即時聊天使用者或管理者沒辦法把金鑰送到別的網址。金鑰在設定頁只能寫入、不會再顯示，也不會留在暫存的設定資料表。API 日誌不保存上游回應內容，只有即時聊天管理員看得到。
 
 ### 輸入驗證
 
 | 驗證項目 | 詳細說明 |
 |----------|----------|
-| API URL 格式 | 必須以 `http://` 或 `https://` 開頭 |
+| LiteLLM 位址格式 | 必須以 `http://` 或 `https://` 開頭 |
 | 歷史訊息數 | 必須介於 1-200 之間 |
 | 溫度參數 | 必須介於 0.0-2.0 之間 |
 | 最大重試次數 | 必須介於 1-10 之間 |
 | 重試延遲 | 必須介於 1-30 秒之間 |
-| 必填欄位 | 啟用 AI 時，API URL、API Key、Model 為必填 |
+| 必填欄位 | 啟用 AI 時，必須選模型，且系統管理員已設定 LiteLLM 金鑰 |
 
 ### 最佳實踐
 
@@ -545,6 +556,13 @@ odoo.addons.im_livechat_ai
 ---
 
 ## 更新日誌
+
+### v18.0.1.1.0
+
+- LLM 連線改為全站共用的 LiteLLM 設定（設定 → Live Chat AI，只有系統管理員），拿掉頻道上的 API 網址與金鑰。
+- 頻道的模型改成下拉選單，選項來自「讀取可用模型」；預設 `chatgpt-pool/gpt-6-sol`。
+- 升級時清空並移除舊的頻道金鑰／網址欄位，並把所有頻道的 AI 關閉，等系統管理員設定 LiteLLM 後再逐一打開。
+- API 日誌：只有即時聊天管理員看得到；預設不存對話內容（「記錄對話內容」開關）；錯誤只存簡短訊息、不含上游回應；保留 14 天（可調）。
 
 ### v18.0.1.0.0（2026-04-11）
 

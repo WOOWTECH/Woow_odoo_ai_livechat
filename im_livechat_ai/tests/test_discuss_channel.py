@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
 
+from .common import livechat_operator, setup_litellm
+
 
 class TestDiscussChannel(TransactionCase):
     """Tests for discuss.channel AI response triggering and message building."""
@@ -11,13 +13,12 @@ class TestDiscussChannel(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
 
         # Create livechat channel with AI enabled
         cls.livechat_channel = cls.env['im_livechat.channel'].create({
             'name': 'AI Test Channel',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test-key',
             'ai_model': 'gpt-4o',
             'ai_system_prompt': 'You are a helpful assistant.',
             'ai_max_history': 10,
@@ -45,6 +46,7 @@ class TestDiscussChannel(TransactionCase):
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Test Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.livechat_channel.id,
         })
 
@@ -56,6 +58,9 @@ class TestDiscussChannel(TransactionCase):
             'body': body,
             'model': 'discuss.channel',
             'res_id': self.session.id,
+            # mail.message defaults the author to the current user's partner;
+            # anonymous/guest visitors have none.
+            'author_id': False,
             'message_type': 'comment',
         }
         if author_id:

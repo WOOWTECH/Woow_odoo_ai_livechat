@@ -17,9 +17,165 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 
 #. module: im_livechat_ai
-#: model:ir.model,name:im_livechat_ai.model_im_livechat_channel
-msgid "Live Chat Channel"
-msgstr "即時聊天頻道"
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "A key is configured (it is never displayed)."
+msgstr "已設定金鑰（不會顯示）。"
+
+#. module: im_livechat_ai
+#: model:ir.ui.menu,name:im_livechat_ai.llm_api_log_menu
+msgid "AI API Logs"
+msgstr "AI API 日誌"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "AI Configuration"
+msgstr "AI 設定"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "AI Integration"
+msgstr "AI 整合"
+
+#. module: im_livechat_ai
+#: model:ir.ui.menu,name:im_livechat_ai.livechat_ai_settings_menu
+msgid "AI Settings"
+msgstr "AI 設定"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "AI integration is not enabled for this channel."
+msgstr "此頻道尚未啟用 AI 整合。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_api_key_set
+msgid "API Key Configured"
+msgstr "已設定 API 金鑰"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "API Log"
+msgstr "API 日誌"
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.llm_api_log_action
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_tree
+msgid "API Logs"
+msgstr "API 日誌"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "API Logs & Privacy"
+msgstr "API 日誌與隱私"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "API Logs - %s"
+msgstr "API 日誌 - %s"
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.llm_api_log_action
+msgid ""
+"API logs are automatically created when the AI assistant\n"
+"                processes livechat messages."
+msgstr "AI 助手處理即時聊天訊息時會自動建立 API 日誌。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_log_retention_days
+msgid "API logs older than this are deleted by the daily cleanup job."
+msgstr "超過此天數的 API 日誌會由每日清理排程刪除。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "API logs older than this are deleted every day"
+msgstr "超過此天數的 API 日誌每天會被刪除"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "Advanced Settings"
+msgstr "進階設定"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_model_list
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Available Models"
+msgstr "可用模型"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Basic Information"
+msgstr "基本資訊"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_bot_name
+msgid "Bot Name"
+msgstr "Bot 名稱"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
+msgid "Bot Partner"
+msgstr "Bot 聯絡人"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "Bot Settings"
+msgstr "Bot 設定"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Channel"
+msgstr "頻道"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__discuss_channel_id
+msgid "Chat Session"
+msgstr "聊天對話"
+
+#. module: im_livechat_ai
+#: model:ir.actions.server,name:im_livechat_ai.ir_cron_cleanup_llm_api_logs_ir_actions_server
+msgid "Cleanup LLM API Logs"
+msgstr "清理 LLM API 日誌"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Company LiteLLM gateway shared by every Live Chat channel"
+msgstr "所有即時聊天頻道共用的公司 LiteLLM 閘道"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__completion_tokens
+msgid "Completion Tokens"
+msgstr "Completion Token 數"
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_res_config_settings
+msgid "Config Settings"
+msgstr "設定"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_temperature
+msgid "Controls randomness of LLM responses. Lower = more deterministic (0.0-2.0)"
+msgstr "控制 LLM 回覆的隨機性。越低越確定（0.0-2.0）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_uid
+msgid "Created by"
+msgstr "建立者"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_date
+msgid "Created on"
+msgstr "建立時間"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Date"
+msgstr "日期"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
+msgid "Delay between retry attempts in seconds (1-30)"
+msgstr "重試之間的延遲秒數（1-30）"
 
 #. module: im_livechat_ai
 #: model:ir.model,name:im_livechat_ai.model_discuss_channel
@@ -27,9 +183,14 @@ msgid "Discussion Channel"
 msgstr "討論頻道"
 
 #. module: im_livechat_ai
-#: model:ir.model,name:im_livechat_ai.model_llm_api_log
-msgid "LLM API Log"
-msgstr "LLM API 日誌"
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__display_name
+msgid "Display Name"
+msgstr "顯示名稱"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_name
+msgid "Display name for the AI bot in chat"
+msgstr "AI Bot 在聊天中的顯示名稱"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_enabled
@@ -42,37 +203,364 @@ msgid "Enable AI-powered automatic replies using an OpenAI-compatible API"
 msgstr "啟用使用 OpenAI 相容 API 的 AI 自動回覆"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_api_base_url
-msgid "API Base URL"
-msgstr "API 基礎網址"
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__error
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Error"
+msgstr "錯誤"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_api_base_url
-msgid "Base URL of the OpenAI-compatible API (e.g., https://api.openai.com/v1)"
-msgstr "OpenAI 相容 API 的基礎網址（例如 https://api.openai.com/v1）"
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "Error Handling"
+msgstr "錯誤處理"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_api_key
-msgid "API Key"
-msgstr "API 金鑰"
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_error_message
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__error_message
+msgid "Error Message"
+msgstr "錯誤訊息"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_api_key
-msgid "API key for authenticating with the LLM service"
-msgstr "用於 LLM 服務驗證的 API 金鑰"
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Fetch Available Models"
+msgstr "讀取可用模型"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Group By"
+msgstr "分組依據"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__id
+msgid "ID"
+msgstr "ID"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Keep the messages exchanged with the LLM in the API logs. Turn on only while debugging; turning it off erases stored content."
+msgstr "在 API 日誌中保存與 LLM 往來的對話內容。只在除錯時暫時開啟；關閉時會清除已保存的內容。"
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_llm_api_log
+msgid "LLM API Log"
+msgstr "LLM API 日誌"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Last 30 Days"
+msgstr "最近 30 天"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Last 7 Days"
+msgstr "最近 7 天"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_uid
+msgid "Last Updated by"
+msgstr "最後更新者"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_date
+msgid "Last Updated on"
+msgstr "最後更新時間"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_api_key
+msgid "Leave empty to keep the current key. The saved key is never shown again."
+msgstr "留空表示沿用目前的金鑰。儲存後的金鑰不會再顯示。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_api_key
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "LiteLLM API Key"
+msgstr "LiteLLM API 金鑰"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_base_url
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "LiteLLM Base URL"
+msgstr "LiteLLM 位址"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "LiteLLM Base URL must start with http:// or https://"
+msgstr "LiteLLM 位址必須以 http:// 或 https:// 開頭"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "LiteLLM Connection"
+msgstr "LiteLLM 連線"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_model
+msgid "LiteLLM model used by this channel. The list comes from the models cached by \"Fetch Available Models\" in Settings > Live Chat AI."
+msgstr "此頻道使用的 LiteLLM 模型。清單來自「設定 → Live Chat AI」中「讀取可用模型」所讀到的模型。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "LiteLLM 連線測試"
+msgstr "LiteLLM 連線測試"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Live Chat AI"
+msgstr "Live Chat AI"
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.res_config_settings_action_livechat_ai
+msgid "Live Chat AI Settings"
+msgstr "Live Chat AI 設定"
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_channel
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__livechat_channel_id
+msgid "Livechat Channel"
+msgstr "即時聊天頻道"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_log_payload
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Log Conversation Content"
+msgstr "記錄對話內容"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_res_config_settings__livechat_ai_log_retention_days
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Log Retention (days)"
+msgstr "日誌保留天數"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "Log retention must be at least 1 day."
+msgstr "日誌保留天數至少要 1 天。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_history
+msgid "Max History Messages"
+msgstr "最大歷史訊息數"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Max History Messages must be between 1 and 200."
+msgstr "最大歷史訊息數必須介於 1 到 200 之間。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_retries
+msgid "Max Retries"
+msgstr "最大重試次數"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Max Retries must be between 1 and 10."
+msgstr "最大重試次數必須介於 1 到 10 之間。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
+msgid "Max Tokens"
+msgstr "最大 Token 數"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Max Tokens must be at least 1."
+msgstr "最大 Token 數至少要 1。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_history
+msgid "Maximum number of recent messages to include as conversation context (1-200)"
+msgstr "作為對話上下文包含的最近訊息最大數量（1-200）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
+msgid "Maximum number of retry attempts for failed API calls (1-10)"
+msgstr "API 呼叫失敗時的最大重試次數（1-10）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
+msgid "Maximum number of tokens in the AI response"
+msgstr "AI 回覆的最大 token 數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_error_message
+msgid "Message sent to visitor when the AI API call fails after all retries"
+msgstr "AI API 呼叫在所有重試後仍然失敗時，發送給訪客的訊息"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_model
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__model
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
 msgid "Model"
 msgstr "模型"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_model
-msgid "Model name to use (e.g., gpt-4o, deepseek-chat, MiniMax-Text-01)"
-msgstr "要使用的模型名稱（例如 gpt-4o、deepseek-chat、MiniMax-Text-01）"
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Model is required when AI integration is enabled."
+msgstr "啟用 AI 整合時必須設定模型。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Models offered in the channel model selector"
+msgstr "頻道「模型」下拉選單中可選的模型"
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.llm_api_log_action
+msgid "No API logs found"
+msgstr "沒有 API 日誌"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "No key configured yet: AI replies stay off."
+msgstr "尚未設定金鑰：AI 回覆不會啟動。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Not fetched yet"
+msgstr "尚未讀取"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__retry_count
+msgid "Number of retry attempts made"
+msgstr "已重試次數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__completion_tokens
+msgid "Number of tokens in the completion"
+msgstr "回覆的 token 數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__prompt_tokens
+msgid "Number of tokens in the prompt"
+msgstr "提示的 token 數"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "Only system administrators can change the Live Chat AI connection."
+msgstr "只有系統管理員可以變更 Live Chat AI 連線設定。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_base_url
+msgid "OpenAI-compatible base URL of the company LiteLLM gateway, ending in /v1."
+msgstr "公司 LiteLLM 閘道的 OpenAI 相容位址，結尾為 /v1。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Performance & Usage"
+msgstr "效能與用量"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Please choose a model before testing."
+msgstr "請先選擇模型再測試。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__prompt_tokens
+msgid "Prompt Tokens"
+msgstr "Prompt Token 數"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Request"
+msgstr "請求"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__request_payload
+msgid "Request Payload"
+msgstr "請求內容"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Response"
+msgstr "回應"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_payload
+msgid "Response Payload"
+msgstr "回應內容"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_time
+msgid "Response Time (s)"
+msgstr "回應時間（秒）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__retry
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Retry"
+msgstr "重試"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__retry_count
+msgid "Retry Count"
+msgstr "重試次數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
+msgid "Retry Delay (seconds)"
+msgstr "重試間隔（秒）"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Retry Delay must be between 1 and 30 seconds."
+msgstr "重試間隔必須介於 1 到 30 秒之間。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Search API Logs"
+msgstr "搜尋 API 日誌"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__error_message
+msgid "Short error message if the API call failed (no upstream response body)"
+msgstr "API 呼叫失敗時的簡短錯誤訊息（不含上游回應內容）"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information."
+msgstr "抱歉，AI 助手目前暫時無法使用。請稍後再試或留下您的聯絡方式。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "Sorry, the AI assistant is temporarily unavailable..."
+msgstr "抱歉，AI 助手目前暫時無法使用…"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__status
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Status"
+msgstr "狀態"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__status
+msgid "Status of the API call"
+msgstr "API 呼叫狀態"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_res_config_settings__livechat_ai_log_payload
+msgid "Store the messages sent to and received from the LLM in the API logs. Keep off unless debugging; when turned off, stored content is erased."
+msgstr "在 API 日誌中保存送給 LLM 與 LLM 回覆的內容。除錯以外請保持關閉；關閉時會清除已保存的內容。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__success
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Success"
+msgstr "成功"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_system_prompt
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid "System Prompt"
 msgstr "系統提示詞"
 
@@ -82,214 +570,15 @@ msgid "System prompt defining the AI assistant role and behavior"
 msgstr "定義 AI 助手角色和行為的系統提示詞"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_history
-msgid "Max History Messages"
-msgstr "最大歷史訊息數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_history
-msgid "Maximum number of recent messages to include as conversation context (1-200)"
-msgstr "作為對話上下文包含的最近訊息最大數量（1-200）"
-
-#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_temperature
 msgid "Temperature"
 msgstr "Temperature"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_temperature
-msgid "Controls randomness of LLM responses. Lower = more deterministic (0.0-2.0)"
-msgstr "控制 LLM 回覆的隨機性。越低越確定（0.0-2.0）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
-msgid "Max Tokens"
-msgstr "最大 Token 數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
-msgid "Maximum number of tokens in the AI response"
-msgstr "AI 回覆的最大 token 數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_retries
-msgid "Max Retries"
-msgstr "最大重試次數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
-msgid "Maximum number of retry attempts for failed API calls (1-10)"
-msgstr "API 呼叫失敗時的最大重試次數（1-10）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
-msgid "Retry Delay (seconds)"
-msgstr "重試間隔（秒）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
-msgid "Delay between retry attempts in seconds (1-30)"
-msgstr "重試之間的延遲秒數（1-30）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_error_message
-msgid "Error Message"
-msgstr "錯誤提示訊息"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_error_message
-msgid "Message sent to visitor when the AI API call fails after all retries"
-msgstr "AI API 呼叫在所有重試後仍然失敗時，發送給訪客的訊息"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
-msgid "Bot Partner"
-msgstr "Bot 聯絡人"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
-msgid "The partner record used as the author for AI-generated messages"
-msgstr "用作 AI 生成訊息作者的聯絡人記錄"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_bot_name
-msgid "Bot Name"
-msgstr "Bot 名稱"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_name
-msgid "Display name for the AI bot in chat"
-msgstr "AI Bot 在聊天中的顯示名稱"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__timestamp
-msgid "Timestamp"
-msgstr "時間戳記"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__livechat_channel_id
-msgid "Livechat Channel"
-msgstr "即時聊天頻道"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__discuss_channel_id
-msgid "Chat Session"
-msgstr "聊天對話"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__model
-msgid "Model"
-msgstr "模型"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__status
-msgid "Status"
-msgstr "狀態"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields.selection,name:im_livechat_ai.field_llm_api_log__status__success
-msgid "Success"
-msgstr "成功"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields.selection,name:im_livechat_ai.field_llm_api_log__status__error
-msgid "Error"
-msgstr "錯誤"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields.selection,name:im_livechat_ai.field_llm_api_log__status__retry
-msgid "Retry"
-msgstr "重試"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__request_payload
-msgid "Request Payload"
-msgstr "請求內容"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_payload
-msgid "Response Payload"
-msgstr "回應內容"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__prompt_tokens
-msgid "Prompt Tokens"
-msgstr "Prompt Token 數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__completion_tokens
-msgid "Completion Tokens"
-msgstr "Completion Token 數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__total_tokens
-msgid "Total Tokens"
-msgstr "總 Token 數"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_time
-msgid "Response Time (s)"
-msgstr "回應時間（秒）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__error_message
-msgid "Error Message"
-msgstr "錯誤訊息"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__retry_count
-msgid "Retry Count"
-msgstr "重試次數"
-
-#. module: im_livechat_ai
-#: model:ir.actions.act_window,name:im_livechat_ai.llm_api_log_action
-msgid "API Logs"
-msgstr "API 日誌"
-
-#. module: im_livechat_ai
-#: model:ir.ui.menu,name:im_livechat_ai.llm_api_log_menu
-msgid "AI API Logs"
-msgstr "AI API 日誌"
-
-#. module: im_livechat_ai
-#: model:ir.cron,name:im_livechat_ai.ir_cron_cleanup_llm_api_logs
-msgid "Cleanup LLM API Logs"
-msgstr "清理 LLM API 日誌"
-
-#. module: im_livechat_ai
-#: model:res.partner,name:im_livechat_ai.partner_ai_bot
-msgid "AI Assistant"
-msgstr "AI 助手"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "AI Integration"
-msgstr "AI 整合"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "AI Configuration"
-msgstr "AI 設定"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "Bot Settings"
-msgstr "Bot 設定"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "System Prompt"
-msgstr "系統提示詞"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "Advanced Settings"
-msgstr "進階設定"
-
-#. module: im_livechat_ai
-#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
-msgid "Error Handling"
-msgstr "錯誤處理"
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Temperature must be between 0.0 and 2.0."
+msgstr "Temperature 必須介於 0.0 到 2.0 之間。"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
@@ -297,118 +586,140 @@ msgid "Test AI Connection"
 msgstr "測試 AI 連線"
 
 #. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Test Connection"
+msgstr "測試連線"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__model
+msgid "The LLM model name used for this call"
+msgstr "此次呼叫使用的 LLM 模型名稱"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"The LiteLLM URL and API key are managed by system administrators\n"
+"                                in Settings &gt; Live Chat AI, where the model list is refreshed."
+msgstr "LiteLLM 位址與 API 金鑰由系統管理員在「設定 → Live Chat AI」管理，模型清單也在那裡更新。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__discuss_channel_id
+msgid "The chat session associated with this API call"
+msgstr "此次 API 呼叫所屬的聊天對話"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__livechat_channel_id
+msgid "The livechat channel associated with this API call"
+msgstr "此次 API 呼叫所屬的即時聊天頻道"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__request_payload
+msgid "The messages array sent to the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
+msgstr "送給 LLM API 的訊息（JSON）。只有在「設定 → Live Chat AI」開啟「記錄對話內容」時才會保存。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_bot_partner_id
+msgid "The partner record used as the author for AI-generated messages"
+msgstr "用作 AI 生成訊息作者的聯絡人記錄"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_payload
+msgid "The response received from the LLM API (JSON). Only stored while \"Log Conversation Content\" is enabled in Settings > Live Chat AI."
+msgstr "LLM API 的回應（JSON）。只有在「設定 → Live Chat AI」開啟「記錄對話內容」時才會保存。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_time
+msgid "Time taken to receive response in seconds"
+msgstr "取得回應所花的秒數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__timestamp
+msgid "Timestamp"
+msgstr "時間戳記"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Today"
+msgstr "今天"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__total_tokens
+msgid "Total Tokens"
+msgstr "總 Token 數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__total_tokens
+msgid "Total number of tokens used"
+msgstr "使用的 token 總數"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "Use the dedicated odoo-livechat key. Leave empty to keep the current key."
+msgstr "請使用專用的 odoo-livechat 金鑰。留空表示沿用目前的金鑰。"
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid "View API Logs"
 msgstr "查看 API 日誌"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__timestamp
+msgid "When the API call was made"
+msgstr "API 呼叫的時間"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "You are a helpful customer service assistant. Please answer in the user's language..."
+msgstr "你是一位親切的客服助理，請用使用者的語言回答…"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1"
+msgstr "https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.res_config_settings_view_form_livechat_ai
+msgid "sk-..."
+msgstr "sk-..."
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "已讀取 %(count)s 個模型。"
+msgstr "已讀取 %(count)s 個模型。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "已讀取 %(count)s 個模型（注意：清單中沒有預設模型 %(model)s）。"
+msgstr "已讀取 %(count)s 個模型（注意：清單中沒有預設模型 %(model)s）。"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "讀取模型失敗（HTTP %(status)s）：%(reason)s"
+msgstr "讀取模型失敗（HTTP %(status)s）：%(reason)s"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/res_config_settings.py:0
+msgid "讀取模型失敗：%(reason)s"
+msgstr "讀取模型失敗：%(reason)s"
+
+#. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "API Base URL must start with http:// or https://"
-msgstr "API 基礎網址必須以 http:// 或 https:// 開頭"
+msgid "連線失敗（HTTP %(status)s）：%(reason)s"
+msgstr "連線失敗（HTTP %(status)s）：%(reason)s"
 
 #. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Max History Messages must be between 1 and 200."
-msgstr "最大歷史訊息數必須介於 1 到 200 之間。"
+msgid "連線失敗：%(reason)s"
+msgstr "連線失敗：%(reason)s"
 
 #. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Temperature must be between 0.0 and 2.0."
-msgstr "Temperature 必須介於 0.0 到 2.0 之間。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Max Retries must be between 1 and 10."
-msgstr "最大重試次數必須介於 1 到 10 之間。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Retry Delay must be between 1 and 30 seconds."
-msgstr "重試間隔必須介於 1 到 30 秒之間。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "API Base URL is required when AI integration is enabled."
-msgstr "啟用 AI 整合時必須設定 API 基礎網址。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "API Key is required when AI integration is enabled."
-msgstr "啟用 AI 整合時必須設定 API 金鑰。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Model is required when AI integration is enabled."
-msgstr "啟用 AI 整合時必須設定模型。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Model: %s | Reply: %s | Tokens: %s"
-msgstr "模型：%s | 回覆：%s | Token 數：%s"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "AI integration is not enabled for this channel."
-msgstr "此頻道尚未啟用 AI 整合。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Please configure API Base URL, API Key, and Model before testing."
-msgstr "請先設定 API 基礎網址、API 金鑰和模型，再進行測試。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "AI Connection Test Successful"
-msgstr "AI 連線測試成功"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "API request timed out. Please check the URL and try again."
-msgstr "API 請求逾時。請檢查網址後重試。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Could not connect to API. Please check the URL and network connection."
-msgstr "無法連線至 API。請檢查網址和網路連線。"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "AI connection test failed: %s"
-msgstr "AI 連線測試失敗：%s"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "API Logs - %s"
-msgstr "API 日誌 - %s"
-
-#. module: im_livechat_ai
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-#, python-format
-msgid "Sorry, the AI assistant is temporarily unavailable. Please try again later or leave your contact information."
-msgstr "抱歉，AI 助手目前暫時無法使用。請稍後再試或留下您的聯絡方式。"
-
-#. module: im_livechat_ai
-#: model:ir.model.access,name:im_livechat_ai.access_llm_api_log_user
-msgid "llm.api.log.user"
-msgstr "LLM API 日誌使用者"
-
-#. module: im_livechat_ai
-#: model:ir.model.access,name:im_livechat_ai.access_llm_api_log_manager
-msgid "llm.api.log.manager"
-msgstr "LLM API 日誌管理者"
+msgid "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
+msgstr "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"

@@ -18,7 +18,11 @@ Features:
 * Per-channel AI configuration (model from the LiteLLM model list, system prompt)
 * Conversation history context for multi-turn dialogue
 * Per-channel bot partner with custom name
-* Configurable retry logic with error fallback messages
+* Durable reply jobs: queued in the visitor's transaction, processed after
+  commit, one at a time per conversation (rapid messages get one reply),
+  recovered by a cron after a restart
+* Bounded LLM calls (45 s timeout, at most 2 retries); on failure the visitor
+  gets an error message and the operators are notified
 * API call logging with token usage tracking (Live Chat administrators only;
   conversation content is not stored unless explicitly enabled)
 
@@ -50,6 +54,7 @@ Configuration:
         # Views
         'views/im_livechat_channel_views.xml',
         'views/llm_api_log_views.xml',
+        'views/livechat_ai_job_views.xml',
         'views/res_config_settings_views.xml',
 
         # Data

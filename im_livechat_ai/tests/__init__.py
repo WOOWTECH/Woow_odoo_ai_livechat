@@ -5,3 +5,4 @@ from . import test_discuss_channel
 from . import test_integration
 from . import test_edge_cases
 from . import test_litellm_settings
+from . import test_ai_job

@@ -156,4 +156,7 @@ class LLMApiLog(models.Model):
         else:
             _logger.debug("No LLM API logs to clean up")
 
+        # Finished AI reply jobs follow the same retention.
+        self.env['im_livechat.ai.job']._cleanup_old_jobs(days)
+
         return count

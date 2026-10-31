@@ -24,7 +24,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     MAX_LOG_ERROR_LENGTH,
 )
 
-from .common import TEST_API_KEY, livechat_operator, setup_litellm
+from .common import TEST_API_KEY, livechat_operator, run_ai_job, setup_litellm
 
 
 class TestStripThinkTags(TransactionCase):
@@ -204,32 +204,23 @@ class TestConstraintEdgeCases(TransactionCase):
         self.assertAlmostEqual(self.channel.ai_temperature, 1.0)
 
     def test_max_retries_exact_boundaries(self):
-        self.channel.write({'ai_max_retries': 1})
-        self.assertEqual(self.channel.ai_max_retries, 1)
-        self.channel.write({'ai_max_retries': 10})
-        self.assertEqual(self.channel.ai_max_retries, 10)
+        self.channel.write({'ai_max_retries': 0})
+        self.assertEqual(self.channel.ai_max_retries, 0)
+        self.channel.write({'ai_max_retries': 2})
+        self.assertEqual(self.channel.ai_max_retries, 2)
 
-    def test_max_retries_zero(self):
+    def test_max_retries_negative(self):
         with self.assertRaises(UserError):
-            self.channel.write({'ai_max_retries': 0})
+            self.channel.write({'ai_max_retries': -1})
 
-    def test_max_retries_eleven(self):
+    def test_max_retries_three(self):
+        """At most 2 retries (P1-7)."""
         with self.assertRaises(UserError):
-            self.channel.write({'ai_max_retries': 11})
+            self.channel.write({'ai_max_retries': 3})
 
-    def test_retry_delay_exact_boundaries(self):
-        self.channel.write({'ai_retry_delay': 1})
-        self.assertEqual(self.channel.ai_retry_delay, 1)
-        self.channel.write({'ai_retry_delay': 30})
-        self.assertEqual(self.channel.ai_retry_delay, 30)
-
-    def test_retry_delay_zero(self):
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_retry_delay': 0})
-
-    def test_retry_delay_thirtyone(self):
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_retry_delay': 31})
+    def test_retry_delay_field_removed(self):
+        """The backoff is fixed (3 s, 10 s); the per-channel delay is gone."""
+        self.assertNotIn('ai_retry_delay', self.channel._fields)
 
     # --- Disabled AI bypasses range checks ---
 
@@ -726,7 +717,7 @@ class TestBuildLlmMessagesEdgeCases(TransactionCase):
 
 
 class TestDoProcessAiResponseEdgeCases(TransactionCase):
-    """Edge cases for _do_process_ai_response — record deletion, empty responses."""
+    """Edge cases for AI reply jobs — record deletion, empty responses."""
 
     @classmethod
     def setUpClass(cls):
@@ -737,7 +728,6 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
             'ai_enabled': True,
             'ai_model': 'gpt-4o',
             'ai_max_retries': 2,
-            'ai_retry_delay': 1,
             'ai_error_message': 'AI unavailable.',
         })
         cls.bot_partner = cls.channel._get_or_create_bot_partner()
@@ -761,24 +751,33 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
     # --- Channel/session not found ---
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_channel_not_found(self, mock_post):
-        """Should return early if channel ID doesn't exist."""
-        self.channel._do_process_ai_response(
-            self.env,
-            channel_id=99999,  # non-existent
-            discuss_channel_id=self.session.id,
-        )
-        # Should not have called API
+    def test_channel_disabled_job_skipped(self, mock_post):
+        """A job whose channel had AI turned off is skipped without an API call."""
+        self._add_visitor_msg()
+        self.channel.write({'ai_enabled': False})
+        job = run_ai_job(self.env, self.session)
         mock_post.assert_not_called()
+        self.assertEqual(job.state, 'skipped')
+        self.channel.write({'ai_enabled': True})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_session_not_found(self, mock_post):
-        """Should return early if session ID doesn't exist."""
-        self.channel._do_process_ai_response(
-            self.env,
-            channel_id=self.channel.id,
-            discuss_channel_id=99999,  # non-existent
-        )
+    def test_session_deleted_job_gone(self, mock_post):
+        """Deleting the session deletes its jobs; running a deleted job is a no-op."""
+        session = self.env['discuss.channel'].create({
+            'name': 'Doomed Session',
+            'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(self.env).id,
+            'livechat_channel_id': self.channel.id,
+        })
+        msg = self.env['mail.message'].create({
+            'body': 'hi', 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': self.visitor.id,
+        })
+        job = self.env['im_livechat.ai.job']._create_for_message(session, msg)
+        job_id = job.id
+        session.unlink()
+        self.assertFalse(self.env['im_livechat.ai.job'].browse(job_id).exists())
+        self.assertEqual(self.env['im_livechat.ai.job'].browse(job_id)._run_job(commit=False), (None, False))
         mock_post.assert_not_called()
 
     # --- Empty AI response (only think tags) ---
@@ -808,12 +807,7 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
 
         mock_post.side_effect = [response_think_only, response_real]
 
-        self.channel._process_ai_response(
-            self.env.cr.dbname,
-            self.channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         # Verify the real answer was posted (not empty)
         bot_msgs = self.env['mail.message'].search([
@@ -833,12 +827,7 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
         self._add_visitor_msg()
         mock_post.side_effect = Exception('API down')
 
-        self.channel._process_ai_response(
-            self.env.cr.dbname,
-            self.channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         bot_msgs = self.env['mail.message'].search([
             ('res_id', '=', self.session.id),
@@ -869,12 +858,7 @@ class TestDoProcessAiResponseEdgeCases(TransactionCase):
         http_error = requests.HTTPError('400 Bad Request', response=mock_response)
         mock_post.side_effect = http_error
 
-        self.channel._process_ai_response(
-            self.env.cr.dbname,
-            self.channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         error_logs = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.channel.id),
@@ -1161,27 +1145,47 @@ class TestTriggerAiResponseEdgeCases(TransactionCase):
             'livechat_channel_id': cls.channel.id,
         })
 
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.threading.Thread')
-    def test_disabled_no_thread(self, mock_thread):
-        """Disabled AI should not create thread."""
+    def _jobs(self):
+        return self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', self.session.id)])
+
+    def _msg(self):
+        return self.env['mail.message'].create({
+            'body': 'hi', 'model': 'discuss.channel', 'res_id': self.session.id,
+            'message_type': 'comment', 'author_id': False,
+        })
+
+    @patch('odoo.addons.im_livechat_ai.models.livechat_ai_job.threading.Thread')
+    def test_disabled_no_job(self, mock_thread):
+        """Disabled AI should not queue a job."""
         self.channel.write({'ai_enabled': False})
-        self.channel._trigger_ai_response(self.session, MagicMock())
+        self.channel._trigger_ai_response(self.session, self._msg())
+        self.assertFalse(self._jobs())
         mock_thread.assert_not_called()
         self.channel.write({'ai_enabled': True})
 
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.threading.Thread')
-    def test_missing_system_key_no_thread(self, mock_thread):
-        """Missing system LiteLLM key should not create thread."""
+    @patch('odoo.addons.im_livechat_ai.models.livechat_ai_job.threading.Thread')
+    def test_missing_system_key_no_job(self, mock_thread):
+        """Missing system LiteLLM key should not queue a job."""
         self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
-        self.channel._trigger_ai_response(self.session, MagicMock())
+        self.channel._trigger_ai_response(self.session, self._msg())
+        self.assertFalse(self._jobs())
         mock_thread.assert_not_called()
 
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.threading.Thread')
-    def test_thread_is_daemon(self, mock_thread):
-        """Thread should be daemon."""
-        self.channel._trigger_ai_response(self.session, MagicMock())
+    @patch('odoo.addons.im_livechat_ai.models.livechat_ai_job.threading.Thread')
+    def test_job_queued_thread_only_after_commit(self, mock_thread):
+        """The job is queued now; its daemon thread starts only after commit."""
+        msg = self._msg()
+        job = self.channel._trigger_ai_response(self.session, msg)
+        self.assertEqual(job.state, 'pending')
+        self.assertEqual(job.message_id, msg)
+        mock_thread.assert_not_called()
+        callbacks = [f for f in self.env.cr.postcommit._funcs
+                     if getattr(f, 'im_livechat_ai_job_ids', None) == job.ids]
+        self.assertEqual(len(callbacks), 1)
+        callbacks[0]()  # what cr.commit() runs
         mock_thread.assert_called_once()
         self.assertTrue(mock_thread.call_args[1].get('daemon', False))
+        self.assertEqual(mock_thread.call_args[1]['args'], (self.env.cr.dbname, job.id))
 
 
 class TestIsVisitorMessageEdgeCases(TransactionCase):

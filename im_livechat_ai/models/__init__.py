@@ -2,5 +2,6 @@
 
 from . import im_livechat_channel
 from . import discuss_channel
+from . import livechat_ai_job
 from . import llm_api_log
 from . import res_config_settings

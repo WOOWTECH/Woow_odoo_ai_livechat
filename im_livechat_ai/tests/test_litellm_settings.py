@@ -29,7 +29,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     LLMNotConfigured,
 )
 
-from .common import TEST_API_KEY, TEST_BASE_URL, livechat_operator, setup_litellm
+from .common import TEST_API_KEY, TEST_BASE_URL, livechat_operator, run_ai_job, setup_litellm
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 GET = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.get'
@@ -425,8 +425,7 @@ class TestApiLogPrivacy(LivechatAiUsersCase):
     def test_payload_not_logged_by_default(self, mock_post):
         self._add_visitor_msg()
         mock_post.return_value = _ok_chat_response('價格是 NT$1,520')
-        self.channel._process_ai_response(self.env.cr.dbname, self.channel.id, self.session.id,
-                                          test_env=self.env)
+        run_ai_job(self.env, self.session)
         log = self._last_log()
         self.assertTrue(log)
         self.assertFalse(log.request_payload)
@@ -442,8 +441,7 @@ class TestApiLogPrivacy(LivechatAiUsersCase):
         self.env['ir.config_parameter'].set_param(ICP_LOG_PAYLOAD, True)
         self._add_visitor_msg('請問保固多久')
         mock_post.return_value = _ok_chat_response('保固一年')
-        self.channel._process_ai_response(self.env.cr.dbname, self.channel.id, self.session.id,
-                                          test_env=self.env)
+        run_ai_job(self.env, self.session)
         log = self._last_log()
         self.assertIn('請問保固多久', log.request_payload)
         self.assertIn('保固一年', log.response_payload)
@@ -453,8 +451,7 @@ class TestApiLogPrivacy(LivechatAiUsersCase):
     def test_error_log_has_no_payload_and_no_body(self, mock_post, mock_sleep):
         self._add_visitor_msg('我的地址是台北市')
         mock_post.return_value = _http_error_response(500, 'stacktrace with internal hostnames')
-        self.channel._process_ai_response(self.env.cr.dbname, self.channel.id, self.session.id,
-                                          test_env=self.env)
+        run_ai_job(self.env, self.session)
         logs = self.env['llm.api.log'].search([('livechat_channel_id', '=', self.channel.id)])
         self.assertTrue(logs)
         for log in logs:

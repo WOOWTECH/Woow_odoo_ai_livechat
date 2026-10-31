@@ -19,5 +19,16 @@
             <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Scheduled Action: run AI reply jobs left behind by a restart/crash -->
+        <record id="ir_cron_recover_ai_jobs" model="ir.cron">
+            <field name="name">Live Chat AI: Recover Reply Jobs</field>
+            <field name="model_id" ref="model_im_livechat_ai_job"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_recover_jobs()</field>
+            <field name="interval_number">2</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

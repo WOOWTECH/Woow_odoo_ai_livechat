@@ -124,11 +124,13 @@ msgstr "Bot 設定"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
 msgid "Channel"
 msgstr "頻道"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__discuss_channel_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__discuss_channel_id
 msgid "Chat Session"
 msgstr "聊天對話"
 
@@ -159,23 +161,21 @@ msgstr "控制 LLM 回覆的隨機性。越低越確定（0.0-2.0）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__create_uid
 msgid "Created by"
 msgstr "建立者"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__create_date
 msgid "Created on"
 msgstr "建立時間"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
 msgid "Date"
 msgstr "日期"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
-msgid "Delay between retry attempts in seconds (1-30)"
-msgstr "重試之間的延遲秒數（1-30）"
 
 #. module: im_livechat_ai
 #: model:ir.model,name:im_livechat_ai.model_discuss_channel
@@ -184,6 +184,7 @@ msgstr "討論頻道"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__display_name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__display_name
 msgid "Display Name"
 msgstr "顯示名稱"
 
@@ -206,6 +207,7 @@ msgstr "啟用使用 OpenAI 相容 API 的 AI 自動回覆"
 #: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__error
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__error
 msgid "Error"
 msgstr "錯誤"
 
@@ -227,11 +229,13 @@ msgstr "讀取可用模型"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
 msgid "Group By"
 msgstr "分組依據"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__id
 msgid "ID"
 msgstr "ID"
 
@@ -257,11 +261,13 @@ msgstr "最近 7 天"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_uid
 msgid "Last Updated by"
 msgstr "最後更新者"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_date
 msgid "Last Updated on"
 msgstr "最後更新時間"
 
@@ -319,6 +325,7 @@ msgstr "Live Chat AI 設定"
 #. module: im_livechat_ai
 #: model:ir.model,name:im_livechat_ai.model_im_livechat_channel
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__livechat_channel_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__livechat_channel_id
 msgid "Livechat Channel"
 msgstr "即時聊天頻道"
 
@@ -357,12 +364,6 @@ msgid "Max Retries"
 msgstr "最大重試次數"
 
 #. module: im_livechat_ai
-#. odoo-python
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-msgid "Max Retries must be between 1 and 10."
-msgstr "最大重試次數必須介於 1 到 10 之間。"
-
-#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
 msgid "Max Tokens"
 msgstr "最大 Token 數"
@@ -377,11 +378,6 @@ msgstr "最大 Token 數至少要 1。"
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_history
 msgid "Maximum number of recent messages to include as conversation context (1-200)"
 msgstr "作為對話上下文包含的最近訊息最大數量（1-200）"
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
-msgid "Maximum number of retry attempts for failed API calls (1-10)"
-msgstr "API 呼叫失敗時的最大重試次數（1-10）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_tokens
@@ -505,17 +501,6 @@ msgid "Retry Count"
 msgstr "重試次數"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_retry_delay
-msgid "Retry Delay (seconds)"
-msgstr "重試間隔（秒）"
-
-#. module: im_livechat_ai
-#. odoo-python
-#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
-msgid "Retry Delay must be between 1 and 30 seconds."
-msgstr "重試間隔必須介於 1 到 30 秒之間。"
-
-#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
 msgid "Search API Logs"
 msgstr "搜尋 API 日誌"
@@ -539,6 +524,8 @@ msgstr "抱歉，AI 助手目前暫時無法使用…"
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__status
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__state
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
 msgid "Status"
 msgstr "狀態"
 
@@ -723,3 +710,158 @@ msgstr "連線失敗：%(reason)s"
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
 msgstr "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.im_livechat_ai_job_action
+msgid ""
+"A job is queued for every visitor message in an AI-enabled\n"
+"                channel; it shows whether the message was answered."
+msgstr "每則 AI 頻道的訪客訊息都會排入一個回覆工作，可在這裡看出訊息是否已回覆。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "AI Reply Job"
+msgstr "AI 回覆工作"
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.im_livechat_ai_job_action
+#: model:ir.ui.menu,name:im_livechat_ai.im_livechat_ai_job_menu
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_list
+msgid "AI Reply Jobs"
+msgstr "AI 回覆工作"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Conversation"
+msgstr "對話"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__done
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Done"
+msgstr "完成"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__run_after
+msgid "Earliest processing time (debounce of rapid messages)"
+msgstr "最早處理時間（等待合併連續送出的訊息）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__failed
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Failed"
+msgstr "失敗"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__finished_at
+msgid "Finished"
+msgstr "完成時間"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__attempts
+msgid "How many times processing of this job started (at most 3)"
+msgstr "此工作開始處理的次數（最多 3 次）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__llm_calls
+msgid "LLM API calls made in the last run (1 call + at most 2 retries)"
+msgstr "最近一次處理呼叫 LLM API 的次數（1 次，加上最多重試 2 次）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__llm_calls
+msgid "LLM Calls"
+msgstr "LLM 呼叫次數"
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_job
+msgid "Live Chat AI Reply Job"
+msgstr "Live Chat AI 回覆工作"
+
+#. module: im_livechat_ai
+#: model:ir.actions.server,name:im_livechat_ai.ir_cron_recover_ai_jobs_ir_actions_server
+msgid "Live Chat AI: Recover Reply Jobs"
+msgstr "Live Chat AI：補救未完成的回覆工作"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Max Retries must be between 0 and 2."
+msgstr "最大重試次數必須介於 0 到 2 之間。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.im_livechat_ai_job_action
+msgid "No AI reply jobs yet"
+msgstr "還沒有 AI 回覆工作"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__pending
+msgid "Pending"
+msgstr "待處理"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Pending or Running"
+msgstr "待處理或處理中"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Processing"
+msgstr "處理狀況"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__reply_message_id
+msgid "Reply Message"
+msgstr "回覆訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__run_after
+msgid "Run After"
+msgstr "預定處理時間"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__running
+msgid "Running"
+msgstr "處理中"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__attempts
+msgid "Runs"
+msgstr "處理次數"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Search AI Reply Jobs"
+msgstr "搜尋 AI 回覆工作"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__skipped
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Skipped"
+msgstr "略過"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__started_at
+msgid "Started"
+msgstr "開始時間"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__reply_message_id
+msgid "The AI reply (or error message) posted for this job"
+msgstr "此工作送出的 AI 回覆（或錯誤訊息）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__message_id
+msgid "The visitor message that created this job"
+msgstr "建立此工作的訪客訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__message_id
+msgid "Trigger Message"
+msgstr "觸發訊息"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
+msgid ""
+"Retries after a failed or timed-out LLM call (0-2). Calls time out after 45"
+" seconds; retries wait 3 seconds, then 10 seconds."
+msgstr "LLM 呼叫失敗或逾時後的重試次數（0-2）。每次呼叫 45 秒逾時；重試前分別等待 3 秒與 10 秒。"

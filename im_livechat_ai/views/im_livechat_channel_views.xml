@@ -37,7 +37,6 @@
                             <field name="ai_temperature"/>
                             <field name="ai_max_tokens"/>
                             <field name="ai_max_retries"/>
-                            <field name="ai_retry_delay"/>
                         </group>
                         <group string="Error Handling">
                             <field name="ai_error_message"

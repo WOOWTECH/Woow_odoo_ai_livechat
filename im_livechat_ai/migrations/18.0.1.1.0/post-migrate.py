@@ -7,6 +7,8 @@
   Settings > Live Chat AI and re-enable each channel.
 - Remove conversation content and upstream response bodies from existing
   API logs ("Log Conversation Content" is off by default).
+- Package C: drop ai_retry_delay (fixed 3 s / 10 s backoff now) and cap
+  ai_max_retries to 2 retries (it used to count total calls, 1-10).
 """
 
 import logging
@@ -17,6 +19,8 @@ _logger = logging.getLogger(__name__)
 
 TABLE = 'im_livechat_channel'
 LEGACY_COLUMNS = ('ai_api_key', 'ai_api_base_url')
+UNUSED_COLUMNS = ('ai_retry_delay',)
+MAX_RETRIES = 2
 LOG_TABLE = 'llm_api_log'
 MAX_LOG_ERROR_LENGTH = 300
 
@@ -30,6 +34,25 @@ def drop_legacy_columns(cr):
             cr.execute(SQL("ALTER TABLE %s DROP COLUMN %s", SQL.identifier(TABLE), SQL.identifier(column)))
             dropped.append(column)
     return dropped
+
+
+def drop_unused_columns(cr):
+    dropped = []
+    for column in UNUSED_COLUMNS:
+        if sql.column_exists(cr, TABLE, column):
+            cr.execute(SQL("ALTER TABLE %s DROP COLUMN %s", SQL.identifier(TABLE), SQL.identifier(column)))
+            dropped.append(column)
+    return dropped
+
+
+def cap_max_retries(cr):
+    if not sql.column_exists(cr, TABLE, 'ai_max_retries'):
+        return 0
+    cr.execute(SQL(
+        "UPDATE %s SET ai_max_retries = %s WHERE ai_max_retries IS NULL OR ai_max_retries > %s",
+        SQL.identifier(TABLE), MAX_RETRIES, MAX_RETRIES,
+    ))
+    return cr.rowcount
 
 
 def disable_all_channels(cr):
@@ -71,6 +94,12 @@ def migrate(cr, version):
         "click 'Fetch Available Models', then re-enable AI on each channel.",
         len(disabled), disabled,
     )
+    unused = drop_unused_columns(cr)
+    if unused:
+        _logger.info("im_livechat_ai: dropped unused columns %s.%s", TABLE, unused)
+    capped = cap_max_retries(cr)
+    if capped:
+        _logger.info("im_livechat_ai: capped ai_max_retries to %s on %s channel(s)", MAX_RETRIES, capped)
     scrubbed = scrub_logs(cr)
     if scrubbed:
         _logger.info("im_livechat_ai: removed conversation content/response bodies from %s API log(s)", scrubbed)

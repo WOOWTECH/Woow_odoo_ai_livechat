@@ -3,14 +3,12 @@
 import json
 import logging
 import re
-import threading
 import time
 
-import psycopg2
 import requests
 from markupsafe import Markup
 
-from odoo import api, fields, models, _, SUPERUSER_ID
+from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 from odoo.tools import SQL, sql
 
@@ -29,7 +27,9 @@ DEFAULT_BASE_URL = 'https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1'
 DEFAULT_MODEL = 'chatgpt-pool/gpt-6-sol'
 DEFAULT_LOG_RETENTION_DAYS = 14
 
-LLM_REQUEST_TIMEOUT = 180  # seconds, chat completions
+LLM_REQUEST_TIMEOUT = 45  # seconds, chat completions (P1-7)
+LLM_MAX_RETRIES = 2  # retries after the first call
+LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 LLM_MODELS_TIMEOUT = 15  # seconds, GET /models
 MAX_LOG_ERROR_LENGTH = 300
 
@@ -101,13 +101,9 @@ class ImLivechatChannel(models.Model):
     )
     ai_max_retries = fields.Integer(
         string='Max Retries',
-        default=3,
-        help='Maximum number of retry attempts for failed API calls (1-10)',
-    )
-    ai_retry_delay = fields.Integer(
-        string='Retry Delay (seconds)',
         default=2,
-        help='Delay between retry attempts in seconds (1-30)',
+        help='Retries after a failed or timed-out LLM call (0-2). Calls time out '
+             'after 45 seconds; retries wait 3 seconds, then 10 seconds.',
     )
     ai_error_message = fields.Text(
         string='Error Message',
@@ -157,16 +153,8 @@ class ImLivechatChannel(models.Model):
         """Validate max retries range."""
         for record in self:
             if record.ai_enabled:
-                if record.ai_max_retries < 1 or record.ai_max_retries > 10:
-                    raise ValidationError(_('Max Retries must be between 1 and 10.'))
-
-    @api.constrains('ai_retry_delay')
-    def _check_ai_retry_delay(self):
-        """Validate retry delay range."""
-        for record in self:
-            if record.ai_enabled:
-                if record.ai_retry_delay < 1 or record.ai_retry_delay > 30:
-                    raise ValidationError(_('Retry Delay must be between 1 and 30 seconds.'))
+                if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
+                    raise ValidationError(_('Max Retries must be between 0 and 2.'))
 
     @api.constrains('ai_enabled', 'ai_model')
     def _check_ai_required_fields(self):
@@ -435,18 +423,24 @@ class ImLivechatChannel(models.Model):
 
     def _trigger_ai_response(self, discuss_channel, message):
         """
-        Trigger AI response asynchronously in a separate thread.
+        Queue an AI reply for a visitor message.
 
-        This method is non-blocking to avoid slowing down chat operations.
+        Creates an im_livechat.ai.job in the current (visitor) transaction;
+        the job is processed after commit by a background thread, or by the
+        recovery cron if that thread is lost.
 
         Args:
             discuss_channel (discuss.channel): The livechat session
             message (mail.message): The visitor's message
+
+        Returns:
+            im_livechat.ai.job: the queued job, or an empty recordset
         """
         self.ensure_one()
+        Job = self.env['im_livechat.ai.job']
 
         if not self.ai_enabled:
-            return
+            return Job
 
         if not self.ai_model or not self._llm_is_configured():
             _logger.warning(
@@ -454,116 +448,42 @@ class ImLivechatChannel(models.Model):
                 "LiteLLM base URL/API key in Settings > Live Chat AI",
                 self.name,
             )
-            return
+            return Job
 
-        # Capture IDs and config for thread context
-        channel_id = self.id
-        discuss_channel_id = discuss_channel.id
-        db_name = self.env.cr.dbname
+        return Job._create_for_message(discuss_channel, message)
 
-        thread = threading.Thread(
-            target=self._process_ai_response,
-            args=(db_name, channel_id, discuss_channel_id),
-            daemon=True,
-        )
-        thread.start()
-
-    def _process_ai_response(self, db_name, channel_id, discuss_channel_id, test_env=None):
+    def _generate_ai_reply(self, discuss_channel, messages, before_call=None):
         """
-        Process AI response in a background thread.
+        Call the LLM with bounded retries and log every attempt.
 
-        Opens a new database cursor, builds conversation context,
-        calls the LLM API with retry logic, and posts the response.
+        One call plus at most LLM_MAX_RETRIES retries (ai_max_retries, 0-2),
+        waiting LLM_RETRY_BACKOFF seconds (3 s, then 10 s) between calls;
+        each call times out after LLM_REQUEST_TIMEOUT (45 s), so the worst
+        case is about 2.5 minutes.
 
         Args:
-            db_name (str): Database name
-            channel_id (int): ID of the im_livechat.channel
-            discuss_channel_id (int): ID of the discuss.channel session
-            test_env (api.Environment|None): If provided, use this environment
-                instead of creating a new cursor. Used for testing only.
+            discuss_channel (discuss.channel): The chat session (for logs)
+            messages (list): Chat completion messages
+            before_call (callable|None): Called before each HTTP call
+                (the job commits there so no transaction stays open)
+
+        Returns:
+            dict: reply (str or None), error (short str or None), calls (int)
         """
-        if test_env is not None:
-            self._do_process_ai_response(test_env, channel_id, discuss_channel_id)
-            return
-
-        max_commit_retries = 5
-        for commit_attempt in range(max_commit_retries):
-            try:
-                with self.pool.cursor() as cr:
-                    # Use READ COMMITTED to avoid serialization conflicts with
-                    # the main thread's message_post updating last_interest_dt
-                    cr.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                    env = api.Environment(cr, SUPERUSER_ID, {})
-                    self._do_process_ai_response(env, channel_id, discuss_channel_id)
-                    cr.commit()
-                return  # Success
-            except psycopg2.errors.SerializationFailure:
-                if commit_attempt < max_commit_retries - 1:
-                    backoff = 1.0 * (2 ** commit_attempt)  # 1s, 2s, 4s, 8s
-                    _logger.warning(
-                        "Serialization failure in AI thread (attempt %d/%d), "
-                        "retrying in %.1fs...",
-                        commit_attempt + 1, max_commit_retries, backoff,
-                    )
-                    time.sleep(backoff)
-                else:
-                    _logger.error("Serialization failure in AI thread after %d attempts", max_commit_retries)
-            except Exception as e:
-                _logger.error("Unexpected error in AI response thread: %s", e, exc_info=True)
-                return
-
-    def _do_process_ai_response(self, env, channel_id, discuss_channel_id):
-        """
-        Core logic for processing an AI response.
-
-        Separated from _process_ai_response to allow testing without
-        a separate database cursor.
-
-        Args:
-            env (api.Environment): Environment to use
-            channel_id (int): ID of the im_livechat.channel
-            discuss_channel_id (int): ID of the discuss.channel session
-        """
-        channel = env['im_livechat.channel'].browse(channel_id)
-        if not channel.exists():
-            _logger.warning("AI response: channel %s no longer exists", channel_id)
-            return
-
-        discuss_channel = env['discuss.channel'].browse(discuss_channel_id)
-        if not discuss_channel.exists():
-            _logger.warning("AI response: session %s no longer exists", discuss_channel_id)
-            return
-
-        # Build conversation messages (with retry if visitor msg not yet committed)
-        messages = discuss_channel._build_llm_messages(channel)
-        user_messages = [m for m in messages if m.get('role') == 'user']
-        if not user_messages:
-            # Visitor message may not be committed yet — wait and retry
-            for wait_attempt in range(5):
-                time.sleep(0.5 * (wait_attempt + 1))
-                env.cr.rollback()  # Reset transaction to see new commits
-                discuss_channel = env['discuss.channel'].browse(discuss_channel_id)
-                messages = discuss_channel._build_llm_messages(channel)
-                user_messages = [m for m in messages if m.get('role') == 'user']
-                if user_messages:
-                    break
-            if not user_messages:
-                _logger.warning(
-                    "AI response: no user messages found in channel %s after retries",
-                    discuss_channel_id,
-                )
-                return
-
-        # Read config values
-        max_retries = max(1, min(channel.ai_max_retries or 3, 10))
-        retry_delay = max(1, min(channel.ai_retry_delay or 2, 30))
-
+        self.ensure_one()
+        env = self.env
+        retries = max(0, min(self.ai_max_retries, LLM_MAX_RETRIES))
+        total_calls = retries + 1
         last_error = None
 
-        for attempt in range(max_retries):
+        for attempt in range(total_calls):
+            if attempt:
+                time.sleep(LLM_RETRY_BACKOFF[min(attempt - 1, len(LLM_RETRY_BACKOFF) - 1)])
+            if before_call:
+                before_call()
             start_time = time.time()
             try:
-                response_data = channel._call_llm_api(messages)
+                response_data = self._call_llm_api(messages)
                 response_time = time.time() - start_time
 
                 # Extract response content and strip reasoning tags
@@ -572,18 +492,12 @@ class ImLivechatChannel(models.Model):
                 if not ai_reply:
                     raise LLMEmptyResponse("Empty response from LLM API")
 
-                # Extract token usage
                 usage = response_data.get('usage', {})
-
-                # Post AI reply to chat
-                channel._create_bot_message(env, discuss_channel, ai_reply)
-
-                # Log success
-                channel._create_api_log(
+                self._create_api_log(
                     env,
-                    channel_id=channel_id,
-                    discuss_channel_id=discuss_channel_id,
-                    model_name=channel.ai_model,
+                    channel_id=self.id,
+                    discuss_channel_id=discuss_channel.id,
+                    model_name=self.ai_model,
                     status='success',
                     request_payload=messages,
                     response_payload=response_data,
@@ -593,25 +507,23 @@ class ImLivechatChannel(models.Model):
                     response_time=response_time,
                     retry_count=attempt,
                 )
-                return
+                return {'reply': ai_reply, 'error': None, 'calls': attempt + 1}
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - every failure is retried or reported
                 response_time = time.time() - start_time
                 # Full detail goes to the server log only; the stored log
                 # keeps a short message without the upstream response body.
-                last_error = channel._short_llm_error(e)
+                last_error = self._short_llm_error(e)
                 _logger.warning(
-                    "AI API call failed for channel %s (attempt %s/%s): %s",
-                    channel_id, attempt + 1, max_retries, e,
+                    "AI API call failed for channel %s (call %s/%s): %s",
+                    self.id, attempt + 1, total_calls, e,
                 )
-
-                # Log retry attempt
-                if attempt < max_retries - 1:
-                    channel._create_api_log(
+                if attempt < total_calls - 1:
+                    self._create_api_log(
                         env,
-                        channel_id=channel_id,
-                        discuss_channel_id=discuss_channel_id,
-                        model_name=channel.ai_model,
+                        channel_id=self.id,
+                        discuss_channel_id=discuss_channel.id,
+                        model_name=self.ai_model,
                         status='retry',
                         request_payload=messages,
                         response_payload=None,
@@ -619,28 +531,20 @@ class ImLivechatChannel(models.Model):
                         error_message=last_error,
                         retry_count=attempt + 1,
                     )
-                    time.sleep(retry_delay)
 
-        # All retries exhausted — send error message to visitor
-        error_msg = channel.ai_error_message or _(
-            'Sorry, the AI assistant is temporarily unavailable. '
-            'Please try again later or leave your contact information.'
-        )
-        channel._create_bot_message(env, discuss_channel, error_msg)
-
-        # Log final failure
-        channel._create_api_log(
+        self._create_api_log(
             env,
-            channel_id=channel_id,
-            discuss_channel_id=discuss_channel_id,
-            model_name=channel.ai_model,
+            channel_id=self.id,
+            discuss_channel_id=discuss_channel.id,
+            model_name=self.ai_model,
             status='error',
             request_payload=messages,
             response_payload=None,
             response_time=None,
-            error_message=f'All {max_retries} retries exhausted. Last error: {last_error}'[:MAX_LOG_ERROR_LENGTH],
-            retry_count=max_retries,
+            error_message=f'All {total_calls} calls failed. Last error: {last_error}'[:MAX_LOG_ERROR_LENGTH],
+            retry_count=retries,
         )
+        return {'reply': None, 'error': last_error, 'calls': total_calls}
 
     def _call_llm_api(self, messages):
         """
@@ -692,6 +596,9 @@ class ImLivechatChannel(models.Model):
             env (api.Environment): Environment with new cursor
             discuss_channel (discuss.channel): The chat session
             body (str): Message body text
+
+        Returns:
+            mail.message: the posted message
         """
         self.ensure_one()
 
@@ -702,7 +609,7 @@ class ImLivechatChannel(models.Model):
             Markup.escape(line) for line in body.split('\n')
         )
 
-        discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
+        return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
             body=safe_body,
             message_type='comment',
             subtype_xmlid='mail.mt_comment',

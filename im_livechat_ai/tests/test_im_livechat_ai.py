@@ -70,8 +70,7 @@ class TestImLivechatChannel(TransactionCase):
         self.assertEqual(channel.ai_max_history, 50)
         self.assertAlmostEqual(channel.ai_temperature, 0.7)
         self.assertEqual(channel.ai_max_tokens, 1024)
-        self.assertEqual(channel.ai_max_retries, 3)
-        self.assertEqual(channel.ai_retry_delay, 2)
+        self.assertEqual(channel.ai_max_retries, 2)
         self.assertEqual(channel.ai_bot_name, 'AI Assistant')
         self.assertEqual(channel.ai_model, DEFAULT_MODEL)
 

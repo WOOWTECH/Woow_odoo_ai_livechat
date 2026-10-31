@@ -25,17 +25,22 @@ class DiscussChannel(models.Model):
         """
         Override _notify_thread to trigger AI responses for visitor messages.
 
-        Called after each message is posted to the channel. We hook into it
-        to trigger LLM API calls for visitor messages in AI-enabled channels.
+        Called after each message is posted to the channel, inside the
+        visitor's transaction. For visitor messages in AI-enabled channels it
+        queues an im_livechat.ai.job in that same transaction (so the job
+        exists exactly when the message is committed); processing starts
+        after commit.
         """
         rdata = super()._notify_thread(message, msg_vals=msg_vals, **kwargs)
 
         try:
             if self._should_trigger_ai_response(message):
-                self.livechat_channel_id._trigger_ai_response(
-                    discuss_channel=self,
-                    message=message,
-                )
+                # Savepoint: a failure here must not abort the visitor's post.
+                with self.env.cr.savepoint():
+                    self.livechat_channel_id._trigger_ai_response(
+                        discuss_channel=self,
+                        message=message,
+                    )
         except Exception as e:
             _logger.warning(
                 "Failed to trigger AI response for channel %s: %s",

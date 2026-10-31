@@ -6,7 +6,7 @@ from odoo.tests.common import TransactionCase
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import ICP_API_KEY
 
-from .common import TEST_BASE_URL, livechat_operator, setup_litellm
+from .common import TEST_BASE_URL, livechat_operator, run_ai_job, setup_litellm
 
 
 class TestAIIntegration(TransactionCase):
@@ -22,8 +22,7 @@ class TestAIIntegration(TransactionCase):
             'ai_enabled': True,
             'ai_model': 'gpt-4o',
             'ai_system_prompt': 'You are a test bot.',
-            'ai_max_retries': 3,
-            'ai_retry_delay': 1,
+            'ai_max_retries': 2,
             'ai_error_message': 'AI is unavailable.',
         })
 
@@ -68,12 +67,7 @@ class TestAIIntegration(TransactionCase):
         mock_post.return_value = mock_response
 
         # Use test_env to avoid dual-cursor issue in TransactionCase
-        self.livechat_channel._process_ai_response(
-            self.env.cr.dbname,
-            self.livechat_channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         # Verify bot message was posted
         bot_messages = self.env['mail.message'].search([
@@ -92,17 +86,13 @@ class TestAIIntegration(TransactionCase):
         self.assertTrue(len(logs) >= 1)
         self.assertEqual(logs[0].total_tokens, 60)
 
+    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep')
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_full_flow_api_failure_sends_error_message(self, mock_post):
+    def test_full_flow_api_failure_sends_error_message(self, mock_post, mock_sleep):
         """When API fails all retries, error message should be sent to visitor."""
         mock_post.side_effect = Exception("API connection failed")
 
-        self.livechat_channel._process_ai_response(
-            self.env.cr.dbname,
-            self.livechat_channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         # Verify error message was posted
         bot_messages = self.env['mail.message'].search([
@@ -139,12 +129,7 @@ class TestAIIntegration(TransactionCase):
             success_response,
         ]
 
-        self.livechat_channel._process_ai_response(
-            self.env.cr.dbname,
-            self.livechat_channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         # Verify success message was posted
         bot_messages = self.env['mail.message'].search([
@@ -162,8 +147,8 @@ class TestAIIntegration(TransactionCase):
         ])
         self.assertTrue(len(retry_logs) >= 2)
 
-        # Verify sleep was called between retries
-        self.assertEqual(mock_sleep.call_count, 2)
+        # Verify the 3 s / 10 s backoff between retries
+        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3, 10])
 
     # --- Multi-Channel Isolation Tests ---
 
@@ -193,12 +178,7 @@ class TestAIIntegration(TransactionCase):
         })
         self._add_visitor_msg(session_b, self.visitor_partner)
 
-        channel_b._process_ai_response(
-            self.env.cr.dbname,
-            channel_b.id,
-            session_b.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, session_b)
 
         # Same system gateway for every channel
         called_url = mock_post.call_args[0][0]
@@ -212,8 +192,9 @@ class TestAIIntegration(TransactionCase):
         """Disabled channel should not trigger AI response."""
         self.livechat_channel.write({'ai_enabled': False})
 
-        # _trigger_ai_response should return early
-        self.livechat_channel._trigger_ai_response(self.session, MagicMock())
+        # _trigger_ai_response should return early without queuing a job
+        job = self.livechat_channel._trigger_ai_response(self.session, MagicMock())
+        self.assertFalse(job)
 
         # Restore
         self.livechat_channel.write({'ai_enabled': True})
@@ -258,12 +239,7 @@ class TestAIIntegration(TransactionCase):
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
-        self.livechat_channel._process_ai_response(
-            self.env.cr.dbname,
-            self.livechat_channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         log = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.livechat_channel.id),
@@ -285,12 +261,7 @@ class TestAIIntegration(TransactionCase):
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
-        self.livechat_channel._process_ai_response(
-            self.env.cr.dbname,
-            self.livechat_channel.id,
-            self.session.id,
-            test_env=self.env,
-        )
+        run_ai_job(self.env, self.session)
 
         log = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.livechat_channel.id),

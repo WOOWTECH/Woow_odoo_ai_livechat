@@ -6,23 +6,27 @@
         <field name="inherit_id" ref="im_livechat.im_livechat_channel_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
-                <page string="AI Integration" name="ai_integration">
+                <page string="AI Integration" name="ai_integration" groups="im_livechat.im_livechat_group_manager">
                     <group>
                         <group string="AI Configuration">
                             <field name="ai_enabled"/>
-                            <field name="ai_api_base_url"
-                                   placeholder="https://api.openai.com/v1"
-                                   invisible="not ai_enabled"/>
-                            <field name="ai_api_key"
-                                   password="True"
-                                   invisible="not ai_enabled"/>
                             <field name="ai_model"
-                                   placeholder="gpt-4o"
-                                   invisible="not ai_enabled"/>
+                                   invisible="not ai_enabled"
+                                   required="ai_enabled"/>
+                            <field name="ai_product_lookup" invisible="not ai_enabled"/>
+                            <div class="text-muted" colspan="2" invisible="not ai_enabled">
+                                The LiteLLM URL and API key are managed by system administrators
+                                in Settings &gt; Live Chat AI, where the model list is refreshed.
+                            </div>
                         </group>
                         <group string="Bot Settings" invisible="not ai_enabled">
                             <field name="ai_bot_name"/>
                             <field name="ai_bot_partner_id" readonly="1"/>
+                            <field name="ai_welcome_message"/>
+                            <div class="text-muted" colspan="2">
+                                While AI is enabled, visitors see this welcome message instead of the
+                                channel welcome message, so they know they are talking to an AI.
+                            </div>
                         </group>
                     </group>
 
@@ -39,7 +43,6 @@
                             <field name="ai_temperature"/>
                             <field name="ai_max_tokens"/>
                             <field name="ai_max_retries"/>
-                            <field name="ai_retry_delay"/>
                         </group>
                         <group string="Error Handling">
                             <field name="ai_error_message"
@@ -47,15 +50,33 @@
                         </group>
                     </group>
 
+                    <group string="Human Handoff" invisible="not ai_enabled">
+                        <field name="ai_handoff_pause_minutes"/>
+                        <field name="ai_handoff_wait_minutes"/>
+                        <field name="ai_handoff_keywords"/>
+                        <field name="ai_handoff_message"/>
+                        <field name="ai_pause_notice"/>
+                        <div class="text-muted" colspan="2">
+                            When an operator posts in a conversation, the AI stays silent for the pause
+                            minutes (every operator message extends it). When the visitor writes one of
+                            the keywords, the visitor gets the handoff message, the operators are notified
+                            and the AI waits for an operator; the first visitor message during the wait
+                            gets the waiting notice once. If no operator replies before the wait ends, the
+                            AI answers the messages the visitor wrote meanwhile.
+                        </div>
+                    </group>
+
                     <group invisible="not ai_enabled">
                         <button name="action_test_ai_connection"
                                 string="Test AI Connection"
                                 type="object"
-                                class="btn-primary"/>
+                                class="btn-primary"
+                                groups="im_livechat.im_livechat_group_manager"/>
                         <button name="action_view_api_logs"
                                 string="View API Logs"
                                 type="object"
-                                class="btn-link"/>
+                                class="btn-link"
+                                groups="im_livechat.im_livechat_group_manager"/>
                     </group>
                 </page>
             </xpath>

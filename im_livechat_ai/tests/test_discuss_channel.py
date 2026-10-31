@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
 
+from .common import livechat_operator, setup_litellm
+
 
 class TestDiscussChannel(TransactionCase):
     """Tests for discuss.channel AI response triggering and message building."""
@@ -11,13 +13,12 @@ class TestDiscussChannel(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        setup_litellm(cls.env)
 
         # Create livechat channel with AI enabled
         cls.livechat_channel = cls.env['im_livechat.channel'].create({
             'name': 'AI Test Channel',
             'ai_enabled': True,
-            'ai_api_base_url': 'https://api.openai.com/v1',
-            'ai_api_key': 'sk-test-key',
             'ai_model': 'gpt-4o',
             'ai_system_prompt': 'You are a helpful assistant.',
             'ai_max_history': 10,
@@ -45,6 +46,7 @@ class TestDiscussChannel(TransactionCase):
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Test Session',
             'channel_type': 'livechat',
+            'livechat_operator_id': livechat_operator(cls.env).id,
             'livechat_channel_id': cls.livechat_channel.id,
         })
 
@@ -56,6 +58,9 @@ class TestDiscussChannel(TransactionCase):
             'body': body,
             'model': 'discuss.channel',
             'res_id': self.session.id,
+            # mail.message defaults the author to the current user's partner;
+            # anonymous/guest visitors have none.
+            'author_id': False,
             'message_type': 'comment',
         }
         if author_id:
@@ -133,7 +138,11 @@ class TestDiscussChannel(TransactionCase):
 
         self.assertTrue(len(messages) >= 2)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertEqual(messages[0]['content'], 'You are a helpful assistant.')
+        self.assertEqual(
+            messages[0]['content'],
+            self.livechat_channel._ai_identity_block() + '\n\nYou are a helpful assistant.\n\n'
+            + self.livechat_channel._ai_product_guard(),
+        )
 
     def test_build_llm_messages_visitor_role(self):
         """Visitor messages should have role 'user'."""
@@ -222,13 +231,18 @@ class TestDiscussChannel(TransactionCase):
             self.assertLess(resp_idx, second_idx)
 
     def test_build_llm_messages_no_system_prompt(self):
-        """Without system prompt, messages should start with user/assistant."""
+        """Without a channel prompt the system message holds only the product rules."""
         self.livechat_channel.write({'ai_system_prompt': False})
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
-        self.assertTrue(len(messages) >= 1)
-        self.assertNotEqual(messages[0]['role'], 'system')
+        self.assertTrue(len(messages) >= 2)
+        self.assertEqual(messages[0], {
+            'role': 'system',
+            'content': self.livechat_channel._ai_identity_block() + '\n\n'
+            + self.livechat_channel._ai_product_guard(),
+        })
+        self.assertEqual(messages[1]['role'], 'user')
 
         # Restore
         self.livechat_channel.write({'ai_system_prompt': 'You are a helpful assistant.'})

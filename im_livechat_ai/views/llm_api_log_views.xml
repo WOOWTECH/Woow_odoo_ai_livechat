@@ -17,6 +17,7 @@
                 <field name="total_tokens"/>
                 <field name="response_time" widget="float" digits="[10,2]"/>
                 <field name="retry_count"/>
+                <field name="tool_names" optional="show"/>
             </list>
         </field>
     </record>
@@ -42,6 +43,7 @@
                             <field name="prompt_tokens"/>
                             <field name="completion_tokens"/>
                             <field name="total_tokens"/>
+                            <field name="tool_names"/>
                         </group>
                     </group>
 
@@ -103,6 +105,7 @@
         <field name="res_model">llm.api.log</field>
         <field name="view_mode">list,form</field>
         <field name="context">{'search_default_filter_last_7_days': 1}</field>
+        <field name="groups_id" eval="[(4, ref('im_livechat.im_livechat_group_manager'))]"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_empty_folder">
                 No API logs found
@@ -119,5 +122,6 @@
               name="AI API Logs"
               parent="im_livechat.livechat_config"
               action="llm_api_log_action"
+              groups="im_livechat.im_livechat_group_manager"
               sequence="50"/>
 </odoo>

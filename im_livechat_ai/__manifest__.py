@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Live Chat AI Integration',
-    'version': '18.0.1.0.1',
+    'version': '18.0.1.1.0',
     'category': 'Website/Live Chat',
     'summary': 'Integrate Odoo livechat with OpenAI-compatible LLM APIs',
     'description': """
@@ -13,23 +13,49 @@ for automated AI-powered customer support.
 
 Features:
 ---------
-* Direct LLM API calls (OpenAI, MiniMax, DeepSeek, Ollama, etc.)
-* Per-channel AI configuration (API key, model, system prompt)
+* Calls the company LiteLLM gateway (OpenAI-compatible /v1/chat/completions)
+* System-wide LiteLLM URL and API key, managed by administrators only
+* Per-channel AI configuration (model from the LiteLLM model list, system prompt)
 * Conversation history context for multi-turn dialogue
 * Per-channel bot partner with custom name
-* Configurable retry logic with error fallback messages
-* API call logging with token usage tracking
+* Durable reply jobs: queued in the visitor's transaction, processed after
+  commit, one at a time per conversation (rapid messages get one reply),
+  recovered by a cron after a restart
+* Bounded LLM calls (45 s timeout, at most 2 retries); on failure the visitor
+  gets an error message and the operators are notified
+* Portal (logged-in) customers are answered like guests; internal users,
+  the session operator and the bots never trigger the AI
+* Human handoff: an operator's reply pauses the AI for the conversation
+  (30 minutes by default, per channel, extended by every operator reply);
+  explicit visitor requests such as "找真人" or "talk to a human" send a
+  handoff notice once, notify the operators and wait for an operator
+  (10 minutes by default); the first visitor message during the wait gets
+  one waiting notice, and if no operator replies the AI answers what the
+  visitor wrote meanwhile when the wait ends (recovery cron)
+* AI disclosure: robot avatar on the AI bot, an AI welcome message in the
+  chat window and a fixed identity block at the start of the system prompt
+* Settings show the last run of the reply recovery cron and stuck jobs
+* Operator replies are sent to the LLM as colleague replies ("[真人客服 name]")
+  so the AI does not contradict them
+* Product lookup tools (per channel, on by default, needs eCommerce): the AI
+  searches published products and reads variant prices, specifications and
+  links with the ORM (OpenAI tool calling, at most 3 tool calls per reply); the
+  system prompt always forbids prices that do not come from these tools
+* API call logging with token usage tracking (Live Chat administrators only;
+  conversation content is not stored unless explicitly enabled)
 
 Requirements:
 -------------
 * Odoo 18.0+
 * im_livechat module
-* An OpenAI-compatible API endpoint
+* A LiteLLM (or other OpenAI-compatible) gateway and API key
 
 Configuration:
 --------------
-After installation, configure AI settings in:
-Settings > Live Chat > Channels > AI Integration tab
+1. A system administrator sets the LiteLLM URL and API key in
+   Settings > Live Chat AI and clicks "Fetch Available Models".
+2. Live Chat managers enable AI and choose a model per channel in
+   Live Chat > Configuration > Channels > AI Integration tab.
     """,
     'author': 'WOOWTECH',
     'website': 'https://github.com/WOOWTECH/Woow_odoo_ai_livechat',
@@ -46,6 +72,8 @@ Settings > Live Chat > Channels > AI Integration tab
         # Views
         'views/im_livechat_channel_views.xml',
         'views/llm_api_log_views.xml',
+        'views/livechat_ai_job_views.xml',
+        'views/res_config_settings_views.xml',
 
         # Data
         'data/ai_data.xml',

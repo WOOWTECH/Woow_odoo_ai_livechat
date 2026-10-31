@@ -33,6 +33,36 @@ LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 LLM_MODELS_TIMEOUT = 15  # seconds, GET /models
 MAX_LOG_ERROR_LENGTH = 300
 
+# --- Product lookup tools (package E, P1-8) ---
+LLM_MAX_TOOL_ROUNDS = 3  # tool-calling rounds per reply, then a forced final answer
+LLM_MAX_TOOL_CALLS_PER_ROUND = 5  # extra calls in one round get an error result
+LLM_TOOL_DEADLINE = 90  # seconds into a reply after which no new tool round starts
+MAX_TOOL_RESULT_LENGTH = 12000  # characters of JSON per tool result sent back
+TOOL_ROUND_LIMIT_NOTE = (
+    '已達本次回覆的商品查詢上限。請不要再呼叫工具，直接根據上面已查到的工具結果回答訪客；'
+    '資料不足時請說明，並請訪客留下聯絡方式由客服人員回覆。'
+)
+# Always appended to the system prompt (wording from the smart home advisor
+# prompt of 2026-10-30): prices, specs and stock only come from the tools.
+PRODUCT_GUARD_WITH_TOOLS = (
+    '【商品資料規則】\n'
+    '1. 價格、規格、庫存只能使用 search_products、get_product_details 工具查到的官網資料，'
+    '只引用工具回傳的數字、品名與連結；不可憑記憶、推測或自行估算，絕對不可編造價格。\n'
+    '2. 訪客問到商品、價格或規格時先用工具查詢。多規格商品先說明起價，'
+    '訪客選定規格後，再用 get_product_details 帶入規格值查詢該組合的實際價格。\n'
+    '3. 只推薦工具查得到的已上架商品。工具回傳的品名可能是英文，'
+    '回覆時先用繁體中文說明這是什麼產品，再附上工具給的 markdown 連結 [品名](網址)；'
+    '只使用工具回傳的連結，不可自行組網址。\n'
+    '4. 工具查不到的商品、規格或價格，以及工具沒有提供的庫存與交期，請直接說明查不到，'
+    '並請訪客留下聯絡方式（姓名、電話或 Email），由客服人員報價或回覆。'
+)
+PRODUCT_GUARD_NO_TOOLS = (
+    '【商品資料規則】\n'
+    '你目前無法查詢官網的商品資料。不要回答任何價格、規格或庫存的具體內容，'
+    '不可憑記憶、推測或自行估算，絕對不可編造價格；'
+    '請訪客留下聯絡方式（姓名、電話或 Email），由客服人員報價或回覆。'
+)
+
 # --- Visitor-facing defaults (Traditional Chinese, P2-7 / P1-2) ---
 DEFAULT_ERROR_MESSAGE = (
     '抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，'
@@ -49,6 +79,17 @@ DEFAULT_HANDOFF_PAUSE_MINUTES = 30
 MAX_HANDOFF_PAUSE_MINUTES = 1440
 DEFAULT_BOT_NAME = 'AI Assistant'
 BOT_CATEGORY_XMLID = 'im_livechat_ai.partner_category_ai_bot'
+
+# Light formatting of AI replies (the tools hand out markdown links, P1-8):
+# [text](https://...) and bare http(s) URLs become links, **text** bold.
+# Everything else stays escaped text.
+_REPLY_FORMAT_RE = re.compile(
+    r'\[(?P<text>[^\]\n]{1,300})\]\((?P<url>https?://[^\s()<>"]{1,2000})\)'
+    r"|(?P<bare>https?://[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]{1,2000})"
+    r'|\*\*(?P<bold>[^*\n]{1,300})\*\*'
+)
+_URL_TRAILING_PUNCTUATION = '.,;:!?\''
+_LINK_MARKUP = Markup('<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>')
 
 # Keywords made only of these characters must match as a whole word
 # ("agent" does not match "reagent"); others (e.g. Chinese) match anywhere.
@@ -161,6 +202,13 @@ class ImLivechatChannel(models.Model):
         string='Bot Name',
         default='AI Assistant',
         help='Display name for the AI bot in chat',
+    )
+    ai_product_lookup = fields.Boolean(
+        string='Allow Product Lookup',
+        default=True,
+        help='Let the AI look up published products on the website (name, website '
+             'price, specifications, link) while answering. Needs the eCommerce '
+             'module. Prices are never quoted from anything else.',
     )
 
     # --- Constraints ---
@@ -520,6 +568,65 @@ class ImLivechatChannel(models.Model):
         minutes = self.ai_handoff_pause_minutes or DEFAULT_HANDOFF_PAUSE_MINUTES
         return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
 
+    # --- Product lookup tools (package E, P1-8) ---
+
+    def _ai_product_tools_enabled(self):
+        """True when this channel lets the AI call the product tools."""
+        self.ensure_one()
+        return bool(self.ai_product_lookup and self.env['im_livechat.ai.tools']._tools_supported())
+
+    def _ai_product_guard(self):
+        """Fixed product rules appended to every system prompt."""
+        self.ensure_one()
+        return PRODUCT_GUARD_WITH_TOOLS if self._ai_product_tools_enabled() else PRODUCT_GUARD_NO_TOOLS
+
+    def _ai_tool_definitions(self):
+        """OpenAI-style tool definitions offered to the model ([] = no tools)."""
+        self.ensure_one()
+        if not self._ai_product_tools_enabled():
+            return []
+        return self.env['im_livechat.ai.tools']._tool_definitions()
+
+    @staticmethod
+    def _ai_sanitize_tool_calls(tool_calls):
+        """Keep only the fields the chat completions API accepts back."""
+        clean = []
+        for index, call in enumerate(tool_calls or []):
+            if not isinstance(call, dict):
+                continue
+            function = call.get('function') if isinstance(call.get('function'), dict) else {}
+            clean.append({
+                'id': str(call.get('id') or f'call_{index}'),
+                'type': 'function',
+                'function': {
+                    'name': str(function.get('name') or ''),
+                    'arguments': function.get('arguments') if isinstance(function.get('arguments'), str)
+                    else json.dumps(function.get('arguments') or {}, ensure_ascii=False),
+                },
+            })
+        return clean
+
+    def _ai_run_tool_calls(self, tool_calls):
+        """Execute one round of tool calls; returns the 'tool' role messages.
+
+        Every tool call id gets an answer (the API requires it); calls beyond
+        LLM_MAX_TOOL_CALLS_PER_ROUND get an error result instead of running.
+        """
+        self.ensure_one()
+        Tools = self.env['im_livechat.ai.tools']
+        results = []
+        for index, call in enumerate(tool_calls):
+            name = call['function']['name']
+            if index >= LLM_MAX_TOOL_CALLS_PER_ROUND:
+                result = {'error': '本次查詢的工具呼叫太多，請合併查詢條件。'}
+            else:
+                result = Tools._execute_tool(self, name, call['function']['arguments'])
+            content = json.dumps(result, ensure_ascii=False, default=str)
+            if len(content) > MAX_TOOL_RESULT_LENGTH:
+                content = content[:MAX_TOOL_RESULT_LENGTH] + '…（結果過長已截斷）'
+            results.append({'role': 'tool', 'tool_call_id': call['id'], 'content': content})
+        return results
+
     # --- Response Processing ---
 
     @staticmethod
@@ -584,12 +691,18 @@ class ImLivechatChannel(models.Model):
 
     def _generate_ai_reply(self, discuss_channel, messages, before_call=None):
         """
-        Call the LLM with bounded retries and log every attempt.
+        Produce one AI reply: tool rounds, bounded retries, a log per call.
 
-        One call plus at most LLM_MAX_RETRIES retries (ai_max_retries, 0-2),
-        waiting LLM_RETRY_BACKOFF seconds (3 s, then 10 s) between calls;
-        each call times out after LLM_REQUEST_TIMEOUT (45 s), so the worst
-        case is about 2.5 minutes.
+        When the channel allows product lookup (package E), the model may ask
+        for the product tools; their results are sent back and the model is
+        called again, for at most LLM_MAX_TOOL_ROUNDS rounds (and no new round
+        after LLM_TOOL_DEADLINE seconds). The next call is then sent with
+        tool_choice "none" and a note to answer with what it has. A response
+        without tool calls is the final answer.
+
+        Failed calls are retried at most ai_max_retries times (0-2) per reply,
+        waiting LLM_RETRY_BACKOFF seconds (3 s, then 10 s); each call times out
+        after LLM_REQUEST_TIMEOUT (45 s).
 
         Args:
             discuss_channel (discuss.channel): The chat session (for logs)
@@ -598,31 +711,99 @@ class ImLivechatChannel(models.Model):
                 (the job commits there so no transaction stays open)
 
         Returns:
-            dict: reply (str or None), error (short str or None), calls (int)
+            dict: reply (str or None), error (short str or None), calls (int),
+                tool_rounds (int)
+        """
+        self.ensure_one()
+        tools = self._ai_tool_definitions()
+        conversation = list(messages)
+        budget = {
+            'retries': max(0, min(self.ai_max_retries, LLM_MAX_RETRIES)),
+            'used': 0,
+            'calls': 0,
+        }
+        started = time.time()
+        rounds = 0
+
+        while True:
+            final = bool(tools) and (
+                rounds >= LLM_MAX_TOOL_ROUNDS or time.time() - started > LLM_TOOL_DEADLINE
+            )
+            # Each call gets its own copy of the history (it grows per round).
+            if not tools:
+                data, error = self._llm_call_with_retries(
+                    discuss_channel, list(conversation), budget, before_call)
+            elif final:
+                data, error = self._llm_call_with_retries(
+                    discuss_channel, conversation + [{'role': 'system', 'content': TOOL_ROUND_LIMIT_NOTE}],
+                    budget, before_call, tools=tools, tool_choice='none')
+            else:
+                data, error = self._llm_call_with_retries(
+                    discuss_channel, list(conversation), budget, before_call,
+                    tools=tools, tool_choice='auto', allow_tool_calls=True)
+            if error:
+                return {'reply': None, 'error': error, 'calls': budget['calls'], 'tool_rounds': rounds}
+
+            message = data['choices'][0].get('message') or {}
+            tool_calls = self._ai_sanitize_tool_calls(message.get('tool_calls')) if tools and not final else []
+            if not tool_calls:
+                reply = self._strip_think_tags(message.get('content') or '')
+                return {'reply': reply, 'error': None, 'calls': budget['calls'], 'tool_rounds': rounds}
+
+            rounds += 1
+            _logger.info(
+                "AI reply for channel %s: tool round %s/%s (%s)", self.id, rounds,
+                LLM_MAX_TOOL_ROUNDS, ', '.join(c['function']['name'] for c in tool_calls),
+            )
+            conversation.append({
+                'role': 'assistant',
+                'content': message.get('content') or None,
+                'tool_calls': tool_calls,
+            })
+            conversation.extend(self._ai_run_tool_calls(tool_calls))
+
+    def _llm_call_with_retries(self, discuss_channel, messages, budget, before_call=None,
+                               tools=None, tool_choice=None, allow_tool_calls=False):
+        """
+        One chat completion step, retried while the reply's retry budget lasts.
+
+        A response is valid when it has visible content (after removing
+        <think> blocks) or, if allow_tool_calls, tool calls. Every call is
+        logged (tokens, time, requested tool names; content only when
+        "Log Conversation Content" is on).
+
+        Returns:
+            tuple: (response dict, None) on success, (None, short error) when
+                every call failed
         """
         self.ensure_one()
         env = self.env
-        retries = max(0, min(self.ai_max_retries, LLM_MAX_RETRIES))
-        total_calls = retries + 1
+        attempts = 0
         last_error = None
-
-        for attempt in range(total_calls):
-            if attempt:
-                time.sleep(LLM_RETRY_BACKOFF[min(attempt - 1, len(LLM_RETRY_BACKOFF) - 1)])
+        while True:
+            if attempts:
+                wait = LLM_RETRY_BACKOFF[min(budget['used'] - 1, len(LLM_RETRY_BACKOFF) - 1)]
+                time.sleep(wait)
             if before_call:
                 before_call()
+            attempts += 1
+            budget['calls'] += 1
             start_time = time.time()
             try:
-                response_data = self._call_llm_api(messages)
+                response_data = self._call_llm_api(messages, tools=tools, tool_choice=tool_choice)
                 response_time = time.time() - start_time
 
-                # Extract response content and strip reasoning tags
-                raw_reply = response_data.get('choices', [{}])[0].get('message', {}).get('content', '')
-                ai_reply = self._strip_think_tags(raw_reply)
-                if not ai_reply:
+                message = response_data.get('choices', [{}])[0].get('message') or {}
+                tool_names = []
+                if allow_tool_calls and isinstance(message.get('tool_calls'), list):
+                    tool_names = [
+                        (call.get('function') or {}).get('name') or '?'
+                        for call in message['tool_calls'] if isinstance(call, dict)
+                    ]
+                if not tool_names and not self._strip_think_tags(message.get('content') or ''):
                     raise LLMEmptyResponse("Empty response from LLM API")
 
-                usage = response_data.get('usage', {})
+                usage = response_data.get('usage') or {}
                 self._create_api_log(
                     env,
                     channel_id=self.id,
@@ -635,20 +816,23 @@ class ImLivechatChannel(models.Model):
                     completion_tokens=usage.get('completion_tokens', 0),
                     total_tokens=usage.get('total_tokens', 0),
                     response_time=response_time,
-                    retry_count=attempt,
+                    retry_count=attempts - 1,
+                    tool_names=', '.join(tool_names),
                 )
-                return {'reply': ai_reply, 'error': None, 'calls': attempt + 1}
+                return response_data, None
 
             except Exception as e:  # noqa: BLE001 - every failure is retried or reported
                 response_time = time.time() - start_time
                 # Full detail goes to the server log only; the stored log
                 # keeps a short message without the upstream response body.
                 last_error = self._short_llm_error(e)
+                can_retry = budget['used'] < budget['retries']
                 _logger.warning(
-                    "AI API call failed for channel %s (call %s/%s): %s",
-                    self.id, attempt + 1, total_calls, e,
+                    "AI API call failed for channel %s (call %s of this step, %s retries left): %s",
+                    self.id, attempts, budget['retries'] - budget['used'], e,
                 )
-                if attempt < total_calls - 1:
+                if can_retry:
+                    budget['used'] += 1
                     self._create_api_log(
                         env,
                         channel_id=self.id,
@@ -659,24 +843,25 @@ class ImLivechatChannel(models.Model):
                         response_payload=None,
                         response_time=response_time,
                         error_message=last_error,
-                        retry_count=attempt + 1,
+                        retry_count=attempts,
                     )
+                    continue
 
-        self._create_api_log(
-            env,
-            channel_id=self.id,
-            discuss_channel_id=discuss_channel.id,
-            model_name=self.ai_model,
-            status='error',
-            request_payload=messages,
-            response_payload=None,
-            response_time=None,
-            error_message=f'All {total_calls} calls failed. Last error: {last_error}'[:MAX_LOG_ERROR_LENGTH],
-            retry_count=retries,
-        )
-        return {'reply': None, 'error': last_error, 'calls': total_calls}
+                self._create_api_log(
+                    env,
+                    channel_id=self.id,
+                    discuss_channel_id=discuss_channel.id,
+                    model_name=self.ai_model,
+                    status='error',
+                    request_payload=messages,
+                    response_payload=None,
+                    response_time=None,
+                    error_message=f'All {attempts} calls failed. Last error: {last_error}'[:MAX_LOG_ERROR_LENGTH],
+                    retry_count=attempts - 1,
+                )
+                return None, last_error
 
-    def _call_llm_api(self, messages):
+    def _call_llm_api(self, messages, tools=None, tool_choice=None):
         """
         Call the system LiteLLM gateway (OpenAI-compatible chat completions).
 
@@ -685,6 +870,8 @@ class ImLivechatChannel(models.Model):
 
         Args:
             messages (list): List of message dicts with 'role' and 'content' keys
+            tools (list|None): OpenAI-style tool definitions (package E)
+            tool_choice (str|None): 'auto' or 'none' (sent only with tools)
 
         Returns:
             dict: The API response JSON
@@ -705,6 +892,10 @@ class ImLivechatChannel(models.Model):
             payload['temperature'] = self.ai_temperature
         if self.ai_max_tokens:
             payload['max_tokens'] = self.ai_max_tokens
+        if tools:
+            payload['tools'] = tools
+            if tool_choice:
+                payload['tool_choice'] = tool_choice
 
         response = self._llm_request('POST', '/chat/completions', json_payload=payload)
 
@@ -719,8 +910,9 @@ class ImLivechatChannel(models.Model):
         """
         Post a message to the livechat session as the AI bot.
 
-        The body is escaped to prevent XSS from LLM responses,
-        then newlines are converted to <br/> for display.
+        The body is escaped to prevent XSS from LLM responses; markdown
+        links and bare http(s) URLs become links, **text** becomes bold and
+        newlines are converted to <br/> for display.
 
         Args:
             env (api.Environment): Environment with new cursor
@@ -736,7 +928,7 @@ class ImLivechatChannel(models.Model):
 
         # Escape HTML to prevent XSS, then convert newlines for display
         safe_body = Markup('<br/>').join(
-            Markup.escape(line) for line in body.split('\n')
+            self._format_reply_line(line) for line in body.split('\n')
         )
 
         return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
@@ -746,10 +938,34 @@ class ImLivechatChannel(models.Model):
             author_id=bot_partner.id,
         )
 
+    @staticmethod
+    def _format_reply_line(line):
+        """One line of AI text -> safe Markup: escaped text, with markdown
+        links / bare http(s) URLs as links and **bold**. Only http(s) URLs
+        become links; every piece of text and every URL is escaped."""
+        parts = []
+        position = 0
+        for match in _REPLY_FORMAT_RE.finditer(line):
+            parts.append(Markup.escape(line[position:match.start()]))
+            if match.group('url'):
+                parts.append(_LINK_MARKUP % (match.group('url'), match.group('text')))
+            elif match.group('bare'):
+                url = match.group('bare')
+                trailing = len(url) - len(url.rstrip(_URL_TRAILING_PUNCTUATION))
+                url, tail = (url[:-trailing], url[-trailing:]) if trailing else (url, '')
+                parts.append(_LINK_MARKUP % (url, url))
+                parts.append(Markup.escape(tail))
+            else:
+                parts.append(Markup('<strong>%s</strong>') % match.group('bold'))
+            position = match.end()
+        parts.append(Markup.escape(line[position:]))
+        return Markup('').join(parts)
+
     def _create_api_log(self, env, channel_id, discuss_channel_id, model_name,
                         status, request_payload, response_payload,
                         prompt_tokens=0, completion_tokens=0, total_tokens=0,
-                        response_time=None, error_message=None, retry_count=0):
+                        response_time=None, error_message=None, retry_count=0,
+                        tool_names=None):
         """
         Create an LLM API log entry.
 
@@ -770,6 +986,7 @@ class ImLivechatChannel(models.Model):
             response_time (float|None): Response time in seconds
             error_message (str|None): Error message if failed
             retry_count (int): Number of retry attempt
+            tool_names (str|None): Tools the model asked for in this response
         """
         try:
             vals = {
@@ -782,6 +999,7 @@ class ImLivechatChannel(models.Model):
                 'prompt_tokens': prompt_tokens or 0,
                 'completion_tokens': completion_tokens or 0,
                 'total_tokens': total_tokens or 0,
+                'tool_names': tool_names or False,
             }
 
             # Validate FK references

@@ -17,6 +17,7 @@
                 <field name="total_tokens"/>
                 <field name="response_time" widget="float" digits="[10,2]"/>
                 <field name="retry_count"/>
+                <field name="tool_names" optional="show"/>
             </list>
         </field>
     </record>
@@ -42,6 +43,7 @@
                             <field name="prompt_tokens"/>
                             <field name="completion_tokens"/>
                             <field name="total_tokens"/>
+                            <field name="tool_names"/>
                         </group>
                     </group>
 

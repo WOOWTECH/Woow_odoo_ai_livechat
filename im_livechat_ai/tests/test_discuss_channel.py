@@ -138,7 +138,10 @@ class TestDiscussChannel(TransactionCase):
 
         self.assertTrue(len(messages) >= 2)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertEqual(messages[0]['content'], 'You are a helpful assistant.')
+        self.assertEqual(
+            messages[0]['content'],
+            'You are a helpful assistant.\n\n' + self.livechat_channel._ai_product_guard(),
+        )
 
     def test_build_llm_messages_visitor_role(self):
         """Visitor messages should have role 'user'."""
@@ -227,13 +230,16 @@ class TestDiscussChannel(TransactionCase):
             self.assertLess(resp_idx, second_idx)
 
     def test_build_llm_messages_no_system_prompt(self):
-        """Without system prompt, messages should start with user/assistant."""
+        """Without a channel prompt the system message holds only the product rules."""
         self.livechat_channel.write({'ai_system_prompt': False})
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
-        self.assertTrue(len(messages) >= 1)
-        self.assertNotEqual(messages[0]['role'], 'system')
+        self.assertTrue(len(messages) >= 2)
+        self.assertEqual(messages[0], {
+            'role': 'system', 'content': self.livechat_channel._ai_product_guard(),
+        })
+        self.assertEqual(messages[1]['role'], 'user')
 
         # Restore
         self.livechat_channel.write({'ai_system_prompt': 'You are a helpful assistant.'})

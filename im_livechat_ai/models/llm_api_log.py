@@ -114,6 +114,11 @@ class LLMApiLog(models.Model):
         default=0,
         help='Number of retry attempts made',
     )
+    tool_names = fields.Char(
+        string='Tools Requested',
+        help='Product lookup tools the model asked for in this response '
+             '(names only; the arguments are conversation content)',
+    )
 
     @api.model
     def _get_retention_days(self):

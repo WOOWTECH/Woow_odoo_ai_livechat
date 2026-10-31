@@ -43,7 +43,7 @@ from .im_livechat_channel import DEFAULT_ERROR_MESSAGE, DEFAULT_HANDOFF_MESSAGE
 _logger = logging.getLogger(__name__)
 
 DEBOUNCE_SECONDS = 1.5  # rapid visitor messages within this window get one reply
-MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 3 LLM calls)
+MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 6 LLM calls)
 STALE_PENDING_SECONDS = 30  # pending this long past run_after: the thread was lost
 STALE_RUNNING_SECONDS = 60  # running and unlocked this long: the process died
 JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone)
@@ -182,7 +182,8 @@ class LivechatAiJob(models.Model):
         string='LLM Calls',
         default=0,
         readonly=True,
-        help='LLM API calls made in the last run (1 call + at most 2 retries)',
+        help='LLM API calls made in the last run (one per product lookup round '
+             'plus the answer, and at most 2 retries)',
     )
     run_after = fields.Datetime(
         string='Run After',
@@ -605,7 +606,8 @@ class LivechatAiJob(models.Model):
                              job.id, job.state, job.attempts)
             job_ids = [job.id for job in session_jobs]
             if commit:
-                # One job can take ~2.5 minutes (3 calls x 45 s + backoff),
+                # One job can take several minutes (up to 4 tool/answer
+                # calls + 2 retries, 45 s each, plus backoff),
                 # longer than the cron watchdog (limit_time_real), so the
                 # cron only hands the session over to a thread.
                 threading.Thread(

@@ -423,14 +423,19 @@ class TestHistoryRoles(HandoffCase):
     def test_no_operator_note_without_operator_messages(self):
         self._msg(self.visitor, 'hi')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {'role': 'system', 'content': '你是客服助理。'})
+        self.assertEqual(messages[0], {
+            'role': 'system', 'content': '你是客服助理。\n\n' + self.channel._ai_product_guard(),
+        })
 
     def test_operator_note_without_custom_prompt(self):
         self.channel.ai_system_prompt = False
         self._msg(self.operator, '稍等')
         self._msg(self.visitor, '好')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {'role': 'system', 'content': OPERATOR_SYSTEM_NOTE})
+        self.assertEqual(messages[0], {
+            'role': 'system',
+            'content': OPERATOR_SYSTEM_NOTE + '\n\n' + self.channel._ai_product_guard(),
+        })
 
     @patch(POST)
     def test_job_sends_operator_as_assistant(self, mock_post):

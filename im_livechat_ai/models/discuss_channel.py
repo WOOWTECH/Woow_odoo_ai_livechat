@@ -196,8 +196,8 @@ class DiscussChannel(models.Model):
         Fetches the most recent N messages from this discuss.channel,
         determines the role for each (visitor: user; AI bot and human
         operators: assistant, operators marked "[真人客服 name]") and
-        prepends the system prompt (plus a note about operator messages
-        when there are any).
+        prepends the system message: the channel prompt, a note about
+        operator messages when there are any, and the fixed product rules.
 
         Args:
             livechat_channel (im_livechat.channel): The livechat channel config
@@ -242,13 +242,11 @@ class DiscussChannel(models.Model):
                 role = 'assistant'
             history.append({'role': role, 'content': clean_body})
 
-        llm_messages = []
-        system_prompt = livechat_channel.ai_system_prompt or ''
+        # The product rules (package E, P1-8) are always appended: prices,
+        # specifications and stock only come from the product tools.
+        parts = [livechat_channel.ai_system_prompt or '']
         if has_operator:
-            system_prompt = (system_prompt + '\n\n' + OPERATOR_SYSTEM_NOTE).strip()
-        if system_prompt:
-            llm_messages.append({
-                'role': 'system',
-                'content': system_prompt,
-            })
-        return llm_messages + history
+            parts.append(OPERATOR_SYSTEM_NOTE)
+        parts.append(livechat_channel._ai_product_guard())
+        system_prompt = '\n\n'.join(p.strip() for p in parts if p and p.strip())
+        return [{'role': 'system', 'content': system_prompt}] + history

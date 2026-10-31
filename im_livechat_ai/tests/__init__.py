@@ -7,3 +7,4 @@ from . import test_edge_cases
 from . import test_litellm_settings
 from . import test_ai_job
 from . import test_handoff
+from . import test_product_tools

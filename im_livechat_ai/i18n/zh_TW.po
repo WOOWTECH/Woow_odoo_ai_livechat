@@ -758,8 +758,10 @@ msgstr "此工作開始處理的次數（最多 3 次）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__llm_calls
-msgid "LLM API calls made in the last run (1 call + at most 2 retries)"
-msgstr "最近一次處理呼叫 LLM API 的次數（1 次，加上最多重試 2 次）"
+msgid ""
+"LLM API calls made in the last run (one per product lookup round plus the "
+"answer, and at most 2 retries)"
+msgstr "最近一次處理呼叫 LLM API 的次數（每輪商品查詢 1 次加上回答 1 次，另外最多重試 2 次）"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__llm_calls
@@ -926,3 +928,33 @@ msgstr "AI 回覆：由 LLM 回答。轉真人客服：訪客要求真人客服�
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
 msgid "When an operator posts in a conversation, or the visitor writes one of the keywords, the AI stops answering that conversation for this many minutes. For a keyword the visitor gets the handoff message once and the operators are notified."
 msgstr "真人客服在對話中發言，或訪客寫到任一關鍵字時，AI 會在設定的分鐘數內暫停回覆這段對話。若是關鍵字，訪客會收到一次轉接訊息，並通知客服。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_product_lookup
+msgid "Allow Product Lookup"
+msgstr "允許查詢商品"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_product_lookup
+msgid ""
+"Let the AI look up published products on the website (name, website price, "
+"specifications, link) while answering. Needs the eCommerce module. Prices "
+"are never quoted from anything else."
+msgstr "讓 AI 回覆時查詢官網已上架的商品（品名、官網售價、規格、連結）。需要安裝電子商務模組。AI 不會使用其他來源的價格。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__tool_names
+msgid "Tools Requested"
+msgstr "要求的工具"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__tool_names
+msgid ""
+"Product lookup tools the model asked for in this response (names only; the "
+"arguments are conversation content)"
+msgstr "模型在這次回應中要求使用的商品查詢工具（只記名稱；參數屬於對話內容，不記錄）"
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_tools
+msgid "Live Chat AI Product Tools"
+msgstr "Live Chat AI 商品查詢工具"

@@ -13,6 +13,7 @@
                             <field name="ai_model"
                                    invisible="not ai_enabled"
                                    required="ai_enabled"/>
+                            <field name="ai_product_lookup" invisible="not ai_enabled"/>
                             <div class="text-muted" colspan="2" invisible="not ai_enabled">
                                 The LiteLLM URL and API key are managed by system administrators
                                 in Settings &gt; Live Chat AI, where the model list is refreshed.

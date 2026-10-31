@@ -30,6 +30,10 @@ Features:
   "客服" send a handoff notice once, pause the AI and notify the operators
 * Operator replies are sent to the LLM as colleague replies ("[真人客服 name]")
   so the AI does not contradict them
+* Product lookup tools (per channel, on by default, needs eCommerce): the AI
+  searches published products and reads variant prices, specifications and
+  links with the ORM (OpenAI tool calling, at most 3 rounds per reply); the
+  system prompt always forbids prices that do not come from these tools
 * API call logging with token usage tracking (Live Chat administrators only;
   conversation content is not stored unless explicitly enabled)
 

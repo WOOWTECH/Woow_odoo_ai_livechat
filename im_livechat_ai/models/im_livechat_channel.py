@@ -39,13 +39,13 @@ from datetime import timedelta, timezone
 from urllib.parse import urlsplit
 
 import requests
-from markupsafe import Markup
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 from odoo import api, fields, models, tools, _
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL
 
+from ..tools.markdown import markdown_to_html
 from .discuss_channel import DOCUMENT_MODE_FILE, DOCUMENT_MODE_LINK, redact_base64
 
 _logger = logging.getLogger(__name__)
@@ -122,16 +122,6 @@ BOT_CATEGORY_XMLID = 'im_livechat_ai.partner_category_ai_bot'
 # this long, or unfinished jobs this old, are reported.
 MONITOR_STALE_MINUTES = 5
 
-# Light formatting of AI replies: [text](https://...) and bare http(s) URLs
-# become links (store hosts only), **text** bold. Everything else stays
-# escaped text.
-_REPLY_FORMAT_RE = re.compile(
-    r'\[(?P<text>[^\]\n]{1,300})\]\((?P<url>https?://[^\s()<>"]{1,2000})\)'
-    r"|(?P<bare>https?://[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]{1,2000})"
-    r'|\*\*(?P<bold>[^*\n]{1,300})\*\*'
-)
-_URL_TRAILING_PUNCTUATION = '.,;:!?\''
-_LINK_MARKUP = Markup('<a href="%s" target="_blank" rel="noopener noreferrer">%s</a>')
 
 # Keywords made only of these characters (English words or phrases) must
 # match as whole words, case-insensitive, with any whitespace between the
@@ -1358,14 +1348,15 @@ class ImLivechatChannel(models.Model):
         """
         Post a message to the livechat session as the AI bot.
 
-        The body is escaped to prevent XSS from LLM responses; markdown
-        links and bare http(s) URLs become links, **text** becomes bold and
-        newlines are converted to <br/> for display.
+        The text is rendered as markdown (tools/markdown.py: paragraphs,
+        line breaks, **bold**, lists, tables, headings, code), every piece of
+        it escaped first and the result sanitized, so an LLM answer can never
+        inject HTML. Only links to the store's own hosts become clickable.
 
         Args:
             env (api.Environment): Environment with new cursor
             discuss_channel (discuss.channel): The chat session
-            body (str): Message body text
+            body (str): Message body text (markdown)
 
         Returns:
             mail.message: the posted message
@@ -1373,13 +1364,7 @@ class ImLivechatChannel(models.Model):
         self.ensure_one()
 
         bot_partner = self._get_bot_partner()
-
-        # Escape HTML to prevent XSS, then convert newlines for display.
-        # Only links to the store's own hosts become clickable.
-        hosts = self._ai_link_hosts()
-        safe_body = Markup('<br/>').join(
-            self._format_reply_line(line, hosts) for line in body.split('\n')
-        )
+        safe_body = markdown_to_html(body, link_hosts=self._ai_link_hosts())
 
         return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
             body=safe_body,
@@ -1414,38 +1399,6 @@ class ImLivechatChannel(models.Model):
             if host:
                 hosts.add(host)
         return frozenset(hosts)
-
-    @classmethod
-    def _format_reply_line(cls, line, allowed_hosts=()):
-        """One line of AI text -> safe Markup: escaped text, with markdown
-        links / bare http(s) URLs as links and **bold**. Only http(s) URLs
-        whose host is in `allowed_hosts` (the store's own hosts) become
-        links: an off-site markdown link keeps only its text and an off-site
-        bare URL stays plain text, so a prompt-injected reply cannot post a
-        clickable phishing link. Every piece of text and every URL is escaped."""
-        parts = []
-        position = 0
-        for match in _REPLY_FORMAT_RE.finditer(line):
-            parts.append(Markup.escape(line[position:match.start()]))
-            if match.group('url'):
-                if cls._url_host(match.group('url')) in allowed_hosts:
-                    parts.append(_LINK_MARKUP % (match.group('url'), match.group('text')))
-                else:
-                    parts.append(Markup.escape(match.group('text')))
-            elif match.group('bare'):
-                url = match.group('bare')
-                trailing = len(url) - len(url.rstrip(_URL_TRAILING_PUNCTUATION))
-                url, tail = (url[:-trailing], url[-trailing:]) if trailing else (url, '')
-                if cls._url_host(url) in allowed_hosts:
-                    parts.append(_LINK_MARKUP % (url, url))
-                else:
-                    parts.append(Markup.escape(url))
-                parts.append(Markup.escape(tail))
-            else:
-                parts.append(Markup('<strong>%s</strong>') % match.group('bold'))
-            position = match.end()
-        parts.append(Markup.escape(line[position:]))
-        return Markup('').join(parts)
 
     def _create_api_log(self, env, channel_id, discuss_channel_id, model_name,
                         status, request_payload, response_payload,

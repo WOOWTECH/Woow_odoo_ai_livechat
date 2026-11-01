@@ -465,15 +465,14 @@ class TestCreateBotMessageEdgeCases(TransactionCase):
         self.assertEqual(msg.body.count('<br'), 2)
 
     def test_multiple_consecutive_newlines(self):
-        """Multiple newlines should produce multiple <br/>."""
+        """A blank line separates two paragraphs (markdown), no <br/>."""
         self.channel._create_bot_message(
             self.env, self.session,
             'Para 1\n\nPara 2',
         )
         msg = self._get_latest_bot_message()
-        # Should have two line breaks (sanitized to <br>)
-        br_count = msg.body.count('<br')
-        self.assertEqual(br_count, 2)
+        self.assertEqual(msg.body.count('<br'), 0)
+        self.assertIn('<p>Para 1</p><p>Para 2</p>', msg.body)
 
     # --- Unicode content ---
 

@@ -244,7 +244,7 @@ Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until
 
 ### Security & Safety
 
-- **XSS protection** -- AI replies are escaped; only markdown links / bare `http(s)` URLs become links and `**text**` bold.
+- **Markdown replies, XSS-safe** -- AI replies are rendered as markdown (paragraphs, `**bold**`, lists, pipe tables, headings, `code` and code blocks) by a small built-in renderer; every piece of text is escaped first and the result sanitized; only links to the store's own hosts become links.
 - **Loop prevention** -- AI bots, OdooBot and the session operator never trigger the AI.
 - **AI settings for Live Chat managers only** -- The channel's AI fields (prompt, model, handoff keywords, error text, ...) are restricted to Live Chat managers; operators, employees and portal customers cannot read them. The connection (backend type, endpoint URL, access token, content logging) and **Test Connection** are for system administrators only. The bot partner is created by the module and cannot be chosen.
 - **Links only to the store** -- AI replies only turn URLs of `web.base.url` and the website domains into links; other URLs stay plain text.
@@ -628,6 +628,8 @@ im_livechat_ai/
 │   │                                    #   recovery cron, operator notification
 │   └── llm_api_log.py                   # llm.api.log: AI API logs (metadata only
 │                                        #   unless enabled), per-channel retention
+├── tools/
+│   └── markdown.py                      # AI reply markdown -> sanitized HTML
 ├── controllers/
 │   └── main.py                          # signed download of visitor attachments
 │                                        #   (/im_livechat_ai/attachment/...)
@@ -647,7 +649,7 @@ im_livechat_ai/
 │   └── 18.0.1.2.0/                      # System parameters -> every channel,
 │                                        #   then delete im_livechat_ai.* parameters;
 │                                        #   Visitor Files per channel (Hermes: link)
-├── tests/                               # 359 tests (see Testing)
+├── tests/                               # 371 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -668,7 +670,7 @@ The endpoint URL, the access token and content logging carry `groups='base.group
 
 ### XSS protection
 
-AI replies are escaped with `markupsafe` before posting. Only markdown links and bare URLs with `http(s)` become links (`target="_blank" rel="noopener noreferrer"`), `**text**` becomes bold, and newlines become `<br/>`; every text and URL is escaped.
+AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of woow_ai_contact; Odoo 18 ships no markdown library): paragraphs and line breaks, `**bold**`, `*italic*`, `~~strike~~`, `-`/`1.` lists, pipe tables (`<table class="table table-sm table-bordered">`), headings (`<h4>`), `code` and fenced code blocks (`<pre><code>`), quotes and rules. Every piece of backend text is escaped with `markupsafe` before it is wrapped in these tags, and the result goes through Odoo's `html_sanitize`. Only `http(s)` links (markdown or bare) whose host is `web.base.url` or a website domain become links (`target="_blank" rel="noopener noreferrer"`); any other link keeps only its text, so a prompt-injected reply cannot post a clickable phishing link.
 
 ### Loop prevention and authors
 
@@ -689,7 +691,7 @@ AI replies are escaped with `markupsafe` before posting. Only markdown links and
 
 ### Test Suite Overview
 
-The module has **359 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **371 automated tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -701,8 +703,9 @@ The module has **359 automated tests**. All HTTP calls are mocked: no key or net
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
+| `test_reply_markdown.py` | 7 | Markdown replies: a real advisor reply (pipe table, bold, shop links, off-site link as text), headings, lists, code, paragraphs, link host allowlist, HTML escaped everywhere |
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
-| `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
+| `test_pause_disclosure.py` | 47 | Explicit handoff keywords, questions that only mention support, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
 ### Running the Tests
 

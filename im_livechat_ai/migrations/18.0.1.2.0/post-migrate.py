@@ -15,7 +15,11 @@ settings, and nothing in the Settings app. This script:
   copied (the channel keeps working);
 - copies im_livechat_ai.log_payload and im_livechat_ai.log_retention_days
   to every channel;
-- deletes every im_livechat_ai.* system parameter (the key included).
+- deletes every im_livechat_ai.* system parameter (the key included);
+- sets "Visitor Files" (ai_document_mode, owner decision 39) where it is
+  empty (pre-migrate creates the column empty): 'link' for Hermes channels
+  (model 'hermes-agent' or an endpoint URL containing 'hermes', which take
+  no file content), 'file' for the others.
 
 ai_enabled is not touched: a channel with AI on and copied credentials keeps
 answering; one with AI on but no credentials stays on and is skipped until a
@@ -56,7 +60,7 @@ def ensure_columns(cr):
     """The registry created them; added here too so the SQL below never fails."""
     for column, kind in (('ai_backend_type', 'VARCHAR'), ('ai_endpoint_url', 'VARCHAR'),
                          (TOKEN_COLUMN, 'VARCHAR'), ('ai_log_payload', 'BOOLEAN'),
-                         ('ai_log_retention_days', 'INTEGER')):
+                         ('ai_log_retention_days', 'INTEGER'), ('ai_document_mode', 'VARCHAR')):
         if not sql.column_exists(cr, TABLE, column):
             cr.execute(SQL("ALTER TABLE %s ADD COLUMN %s " + kind,
                            SQL.identifier(TABLE), SQL.identifier(column)))
@@ -112,7 +116,21 @@ def migrate_connection(cr, params):
 
     cr.execute("DELETE FROM ir_config_parameter WHERE key LIKE %s", (ICP_PREFIX + '%',))
     counts['params_deleted'] = cr.rowcount
+    counts.update(migrate_document_mode(cr))
     return counts
+
+
+def migrate_document_mode(cr):
+    """Empty ai_document_mode -> 'link' (Hermes) or 'file'. Returns counts."""
+    cr.execute(SQL("""
+        UPDATE %s SET ai_document_mode = CASE
+            WHEN lower(trim(coalesce(ai_model, ''))) = 'hermes-agent'
+              OR coalesce(ai_endpoint_url, '') ILIKE %s THEN 'link'
+            ELSE 'file' END
+         WHERE ai_document_mode IS NULL OR ai_document_mode = ''
+     RETURNING ai_document_mode""", SQL.identifier(TABLE), '%hermes%'))
+    modes = [row[0] for row in cr.fetchall()]
+    return {'document_mode_link': modes.count('link'), 'document_mode_file': modes.count('file')}
 
 
 def channel_summary(cr):
@@ -141,6 +159,7 @@ def migrate(cr, version):
         "backend type set on %(backend_type_set)s, endpoint URL copied to %(url_copied)s "
         "(1.1.0 default URL used: %(legacy_default_url)s), access token copied to %(token_copied)s, "
         "log settings copied to %(log_settings_copied)s, %(params_deleted)s im_livechat_ai.* system "
-        "parameter(s) deleted; AI enabled on %(ai_enabled)s channel(s), %(ai_enabled_with_connection)s "
+        "parameter(s) deleted; visitor files set to link on %(document_mode_link)s and to file on "
+        "%(document_mode_file)s channel(s); AI enabled on %(ai_enabled)s channel(s), %(ai_enabled_with_connection)s "
         "of them with URL and token", counts,
     )

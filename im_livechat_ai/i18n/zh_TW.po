@@ -1060,3 +1060,38 @@ msgstr "連線失敗：%(reason)s"
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
 msgstr "連線成功（HTTP %(status)s），模型 %(model)s 有回應。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_document_mode
+msgid "Visitor Files"
+msgstr "訪客傳的檔案"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_channel__ai_document_mode__file
+msgid "Attach the file (LiteLLM / OpenAI)"
+msgstr "直接附檔（LiteLLM／OpenAI）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_channel__ai_document_mode__link
+msgid "Download link only (Hermes…)"
+msgstr "只給下載連結（Hermes 等）"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_document_mode
+msgid ""
+"Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly. "
+"Download link only: for Hermes and other backends that do not take file "
+"content; the backend downloads the file itself. Images are attached in both "
+"modes; n8n always gets download links."
+msgstr ""
+"直接附檔 = LiteLLM/OpenAI 可直接讀 PDF、Excel、Word；只給下載連結 = Hermes "
+"等不收檔案內容的後端，由後端自己下載。圖片在兩種模式都會直接附上；n8n "
+"一律只給下載連結。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly.\n"
+"                                Download link only: for Hermes and other backends that do not take file\n"
+"                                content; the backend downloads the file itself."
+msgstr "直接附檔 = LiteLLM/OpenAI 可直接讀 PDF、Excel、Word；只給下載連結 = Hermes 等不收檔案內容的後端，由後端自己下載。"

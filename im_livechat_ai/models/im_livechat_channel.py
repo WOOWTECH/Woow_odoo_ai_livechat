@@ -65,8 +65,14 @@ HTTP_ALLOWED_SUFFIX = '.svc.cluster.local'
 
 DEFAULT_LOG_RETENTION_DAYS = 14
 
-LLM_REQUEST_TIMEOUT = 45  # seconds per OpenAI compatible call
-N8N_REQUEST_TIMEOUT = 90  # seconds per n8n call (agents take 20-30 s; Cloudflare cuts at 100 s)
+# Seconds to wait for the backend's answer, per call: the channel's
+# ai_request_timeout (10-300), or these defaults when it is 0. The n8n smart
+# home advisor took 112 s on a long whole-house question (live test
+# 2026-11-01; Cloudflare did not cut it at 100 s), so n8n waits 120 s.
+LLM_REQUEST_TIMEOUT = 45  # OpenAI compatible default
+N8N_REQUEST_TIMEOUT = 120  # n8n default
+MIN_REQUEST_TIMEOUT = 10
+MAX_REQUEST_TIMEOUT = 300
 LLM_MAX_RETRIES = 2  # retries after the first call
 LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 N8N_RETRY_STATUSES = (429, 503)  # n8n: the only HTTP answers that are retried
@@ -413,8 +419,15 @@ class ImLivechatChannel(models.Model):
         groups=AI_CONFIG_GROUP,
         default=2,
         help='Retries after a failed backend call (0-2), after 3 seconds and then 10 '
-             'seconds; calls time out after 45 seconds (n8n: 90 seconds). n8n calls are only '
+             'seconds; each call waits "Backend Reply Timeout" seconds. n8n calls are only '
              'retried when the connection could not be opened or n8n answered HTTP 429 or 503.',
+    )
+    ai_request_timeout = fields.Integer(
+        string='Backend Reply Timeout (seconds)',
+        groups=AI_CONFIG_GROUP,
+        default=0,
+        help='0 = default (OpenAI compatible 45 seconds, n8n 120 seconds). Otherwise 10-300 '
+             'seconds per call. n8n calls are never retried after a timeout.',
     )
     ai_error_message = fields.Text(
         string='Error Message',
@@ -659,6 +672,13 @@ class ImLivechatChannel(models.Model):
             if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
                 raise ValidationError(_('Max Retries must be between 0 and 2.'))
 
+    @api.constrains('ai_request_timeout')
+    def _check_ai_request_timeout(self):
+        for record in self:
+            seconds = record.ai_request_timeout or 0
+            if seconds and not MIN_REQUEST_TIMEOUT <= seconds <= MAX_REQUEST_TIMEOUT:
+                raise ValidationError(_('等待後端回覆的秒數必須是 0（預設）或介於 10 到 300 之間。'))
+
     @api.constrains('ai_handoff_pause_minutes')
     def _check_ai_handoff_pause_minutes(self):
         for record in self:
@@ -685,6 +705,7 @@ class ImLivechatChannel(models.Model):
     _AI_RANGE_CHECKS = (
         '_check_ai_max_history',
         '_check_ai_max_retries',
+        '_check_ai_request_timeout',
         '_check_ai_handoff_pause_minutes',
         '_check_ai_handoff_wait_minutes',
     )
@@ -998,6 +1019,16 @@ class ImLivechatChannel(models.Model):
         self.ensure_one()
         return max(1, min(self.ai_max_history or DEFAULT_AI_MAX_HISTORY, MAX_AI_MAX_HISTORY))
 
+    def _ai_request_timeout_value(self):
+        """Seconds a chat call waits: ai_request_timeout (10-300), or 45 s
+        (OpenAI compatible) / 120 s (n8n) when it is 0 or empty."""
+        self.ensure_one()
+        channel = self.sudo()
+        seconds = channel.ai_request_timeout or 0
+        if seconds <= 0:
+            return N8N_REQUEST_TIMEOUT if channel.ai_backend_type == BACKEND_N8N else LLM_REQUEST_TIMEOUT
+        return max(MIN_REQUEST_TIMEOUT, min(seconds, MAX_REQUEST_TIMEOUT))
+
     # --- Response Processing ---
 
     @staticmethod
@@ -1096,6 +1127,7 @@ class ImLivechatChannel(models.Model):
             return {
                 'backend': backend, 'url': url, 'headers': headers, 'payload': payload,
                 'body': json_dumps(payload).encode(), 'token': token,
+                'timeout': channel._ai_request_timeout_value(),
             }
         payload = {}
         model = (channel.ai_model or '').strip()
@@ -1108,6 +1140,7 @@ class ImLivechatChannel(models.Model):
         return {
             'backend': backend, 'url': url + '/chat/completions', 'headers': headers,
             'payload': payload, 'body': None, 'token': None,
+            'timeout': channel._ai_request_timeout_value(),
         }
 
     def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None):
@@ -1158,14 +1191,15 @@ class ImLivechatChannel(models.Model):
     def _ai_post(request):
         """One HTTP POST (no database access). n8n bodies are signed per call
         (fresh timestamp) when a signing secret is set; redirects are never
-        followed."""
+        followed. Waits request['timeout'] seconds (the channel's setting)."""
         headers = dict(request['headers'])
-        kwargs = {'headers': headers, 'timeout': LLM_REQUEST_TIMEOUT, 'allow_redirects': False}
-        if request['backend'] == BACKEND_N8N:
+        n8n = request['backend'] == BACKEND_N8N
+        timeout = request.get('timeout') or (N8N_REQUEST_TIMEOUT if n8n else LLM_REQUEST_TIMEOUT)
+        kwargs = {'headers': headers, 'timeout': timeout, 'allow_redirects': False}
+        if n8n:
             if request['token']:
                 headers.update(n8n_signature_headers(request['token'], request['body']))
             kwargs['data'] = request['body']
-            kwargs['timeout'] = N8N_REQUEST_TIMEOUT
         else:
             kwargs['json'] = request['payload']
         return requests.post(request['url'], **kwargs)
@@ -1207,7 +1241,8 @@ class ImLivechatChannel(models.Model):
 
         Failed calls are retried at most ai_max_retries times (0-2), waiting
         LLM_RETRY_BACKOFF seconds (3 s, then 10 s); each call times out after
-        LLM_REQUEST_TIMEOUT (45 s; n8n: N8N_REQUEST_TIMEOUT, 90 s). n8n calls
+        the channel's ai_request_timeout (0: LLM_REQUEST_TIMEOUT 45 s, n8n
+        N8N_REQUEST_TIMEOUT 120 s; at most MAX_REQUEST_TIMEOUT). n8n calls
         are retried only when they could not be delivered (see
         _ai_should_retry): never after a read timeout, since the agent may
         still be running.

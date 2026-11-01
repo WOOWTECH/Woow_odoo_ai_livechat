@@ -51,15 +51,28 @@ from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
 
 from .discuss_channel import PAUSE_HANDOFF
-from .im_livechat_channel import DEFAULT_ERROR_MESSAGE, DEFAULT_HANDOFF_MESSAGE
+from .im_livechat_channel import (
+    DEFAULT_ERROR_MESSAGE,
+    DEFAULT_HANDOFF_MESSAGE,
+    LLM_MAX_RETRIES,
+    LLM_RETRY_BACKOFF,
+    MAX_REQUEST_TIMEOUT,
+)
 
 _logger = logging.getLogger(__name__)
 
 DEBOUNCE_SECONDS = 1.5  # rapid visitor messages within this window get one reply
 MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 3 backend calls)
 STALE_PENDING_SECONDS = 30  # pending this long past run_after: the thread was lost
-STALE_RUNNING_SECONDS = 60  # running and unlocked this long: the process died
-JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone)
+# Running and unlocked this long: the process died. A live run holds the
+# session's advisory lock for its whole duration, however long the backend
+# takes, and the cron skips locked sessions (_session_lock_held), so this
+# does not need to exceed MAX_RUN_SECONDS.
+STALE_RUNNING_SECONDS = 60
+# The longest one run can legitimately take: every call waiting the longest
+# allowed timeout, plus the retry backoff (3 x 300 s + 13 s, about 15 min).
+MAX_RUN_SECONDS = (LLM_MAX_RETRIES + 1) * MAX_REQUEST_TIMEOUT + sum(LLM_RETRY_BACKOFF)
+JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone); > MAX_RUN_SECONDS
 CRON_SEARCH_LIMIT = 200
 CRON_BATCH_LIMIT = 10  # sessions handed to recovery threads per cron run
 CHAIN_LIMIT = 20  # jobs one thread runs back to back for the same session
@@ -781,13 +794,17 @@ class LivechatAiJob(models.Model):
     @api.model
     def _stale_job_count(self, minutes=MONITOR_STALE_MINUTES):
         """AI tab monitoring (P1-6): pending jobs due more than `minutes`
-        ago and jobs running for more than `minutes` (deferred jobs that are
-        not due yet are not counted)."""
-        cutoff = fields.Datetime.now() - timedelta(minutes=minutes)
+        ago and jobs running for longer than a run can legitimately take
+        (`minutes`, at least MAX_RUN_SECONDS plus a minute: a slow backend
+        with a long timeout is not a stuck job). Deferred jobs that are not
+        due yet are not counted."""
+        now = fields.Datetime.now()
+        cutoff = now - timedelta(minutes=minutes)
+        running_cutoff = now - timedelta(seconds=max(minutes * 60, MAX_RUN_SECONDS + 60))
         return self.sudo().search_count([
             '|',
             '&', ('state', '=', 'pending'), ('run_after', '<', cutoff),
-            '&', ('state', '=', 'running'), ('started_at', '<', cutoff),
+            '&', ('state', '=', 'running'), ('started_at', '<', running_cutoff),
         ])
 
     @api.model
@@ -828,8 +845,8 @@ class LivechatAiJob(models.Model):
                              job.id, job.state, job.attempts)
             job_ids = [job.id for job in session_jobs]
             if commit:
-                # One job can take minutes (a call + 2 retries, 45 s
-                # each, plus backoff),
+                # One job can take minutes (a call + 2 retries, up to
+                # 300 s each, plus backoff: MAX_RUN_SECONDS),
                 # longer than the cron watchdog (limit_time_real), so the
                 # cron only hands the session over to a thread.
                 threading.Thread(

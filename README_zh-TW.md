@@ -155,7 +155,7 @@ AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程�
  |       |  最近 N 則歷史、客服訊息加標記          |  openai：/v1/chat/      | |
  |       v                                    |    completions          | |
  |  _generate_ai_reply() ---- POST ---------->|  n8n：簽章 Webhook       | |
- |       |  逾時 45 秒、最多重試 2 次             |                        | |
+ |       |  逾時依頻道設定、最多重試 2 次         |                        | |
  |       |<-------- 回覆 ----------------------|                        | |
  |       |                                    +------------------------+ |
  |       v                                                               |
@@ -212,7 +212,7 @@ flowchart LR
     F --> G[交易完成後處理<br/>等 1.5 秒、對話加鎖]
     G --> I{有新訊息或已暫停？}
     I -->|是| S[略過]
-    I -->|否| L[呼叫頻道的 AI 後端<br/>逾時 45 秒]
+    I -->|否| L[呼叫頻道的 AI 後端<br/>逾時依頻道設定]
     L --> M{成功？}
     M -->|是| R[發送 AI 回覆]
     M -->|否，可重試| W[等 3 秒／10 秒] --> L
@@ -235,7 +235,7 @@ flowchart LR
 
 - **有紀錄的回覆工作**（`im_livechat.ai.job`）-- 和訪客訊息在同一筆交易建立，訊息寫入成功才有工作；交易完成後才開始處理。
 - **連發只回一次** -- 等 1.5 秒合併連發訊息；每段對話一把 PostgreSQL advisory lock（跨 prefork worker 與排程程序都有效）；有更新工作的舊工作會被略過，由最新的工作帶完整上下文回覆。
-- **呼叫有上限** -- 每次呼叫逾時 45 秒（n8n 90 秒，低於 Cloudflare 的 100 秒），最多重試 2 次（先等 3 秒、再等 10 秒），每個工作最多處理 3 次。OpenAI 相容後端任何失敗都會重試；n8n 只在連不上或回 HTTP 429／503 時重試，讀取逾時一律不重試（agent 可能還在跑；同一個工作流程不會跑兩次）。
+- **呼叫有上限** -- 每次呼叫最多等「**等待後端回覆的秒數**」（每個頻道各自設定；0＝預設：OpenAI 相容 45 秒、n8n 120 秒；10-300 秒），最多重試 2 次（先等 3 秒、再等 10 秒），每個工作最多處理 3 次。OpenAI 相容後端任何失敗都會重試；n8n 只在連不上或回 HTTP 429／503 時重試，讀取逾時一律不重試（agent 可能還在跑；同一個工作流程不會跑兩次）。
 - **補救排程** -- 每 2 分鐘把因重啟或當機而停在「待處理／處理中」的工作重新執行；機器人已經回覆過的不會重複回覆。超過 30 分鐘仍未完成的工作會放棄。等候真人逾時後的延後回覆也由它執行（會在等候結束的時間觸發）。需要排程程序（見[上線須知](#上線須知重啟或部署後的回覆)）。
 - **監看** -- 頻道 AI 分頁的「**AI 回覆工作**」區塊（即時聊天管理員）顯示排程上次執行時間與超過 5 分鐘仍在「待處理／處理中」的工作數；排程超過 5 分鐘沒跑或有卡住的工作時顯示警告。
 - **失敗處理** -- 全部重試失敗時，訪客收到頻道的錯誤訊息（預設繁中），客服會收到通知（OdooBot 訊息與不會自動消失的提示）。
@@ -419,7 +419,8 @@ Woow_odoo_ai_livechat/
 | `ai_document_mode` | Selection | `file` | 訪客傳的檔案：`file` 直接附檔（LiteLLM／OpenAI）、`link` 只給下載連結（Hermes 等） |
 | `ai_system_prompt` | Text | -- | 選填的系統提示詞；空白時 Odoo 不送 system 訊息，只有對話事件（客服發言、等候真人逾時） |
 | `ai_max_history` | Integer | `50` | 最大歷史訊息數，用於建構對話上下文（1-200） |
-| `ai_max_retries` | Integer | `2` | 呼叫失敗後的重試次數（0-2；每次逾時 45 秒、n8n 90 秒，先等 3 秒、再等 10 秒；n8n 只在連不上或回 429／503 時重試） |
+| `ai_max_retries` | Integer | `2` | 呼叫失敗後的重試次數（0-2；先等 3 秒、再等 10 秒；n8n 只在連不上或回 429／503 時重試） |
+| `ai_request_timeout` | Integer | `0` | 等待後端回覆的秒數：0＝預設（OpenAI 相容 45 秒、n8n 120 秒；智居顧問回答整棟規劃的長問題要 112 秒），否則 10-300 秒。測試連線按鈕維持自己的短逾時。超過約 120 秒時，請確認後端前面的代理（例如 Cloudflare）與 Odoo 的 `limit_time_real` 允許：長呼叫期間回收的 worker 會在 `limit_time_real` 後被終止，再由補救排程重試 |
 | `ai_error_message` | Text | 抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。 | 全部重試失敗後發送給訪客的訊息（同時通知客服） |
 | `ai_handoff_pause_minutes` | Integer | `30` | 客服發言後 AI 暫停回覆的分鐘數，客服每次發言都會延長（1-1440） |
 | `ai_handoff_wait_minutes` | Integer | `10` | 訪客要求真人後，AI 等候客服的分鐘數；逾時沒有客服回覆就由 AI 接回（1-1440） |
@@ -492,7 +493,7 @@ Content-Type: application/json
 }
 ```
 
-- `model` 有值才送；不送 `tools`、`temperature`、`max_tokens`、`stream`（由後端決定）。不串流，45 秒逾時。
+- `model` 有值才送；不送 `tools`、`temperature`、`max_tokens`、`stream`（由後端決定）。不串流，逾時依頻道的「等待後端回覆的秒數」（預設 45 秒）。
 - `messages` 一定以 user 開頭、以 user 結尾：第一則訪客訊息之前的歡迎訊息會拿掉；最後一則訪客訊息之後的機器人訊息會移到它前面（若會變成第一則，就合併成開頭的一則 user 引述）。
 - `user` 與 `metadata.session_id` 是 `woow-ai-<database.uuid 前 8 碼>-<discuss.channel id>`，同一段對話固定不變。`metadata` 的值都是字串，不含 email。
 - 回覆：一般的 chat completion，取 `choices[0].message.content`（文字或文字片段）；`<think>` 區塊會移除。
@@ -541,7 +542,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(密鑰, "<X-Woow-Timestamp>.<原始 bo
 - `user` 依 woow_ai_contact docs/LIVECHAT.md 的訪客表（訪客、入口網站使用者、員工以訪客身分、沒有使用者的聯絡人、公開使用者）。即時聊天訪客多半是匿名的：`channel.type` 是 `livechat` 或 `user.is_guest` 為 true 時，只能給模型公開資料的工具。
 - **測試連線** 會送 `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<頻道 id>"}`；非 `message` 的事件請回 HTTP 200（例如 `{"skip": true}`）。Chat Trigger 會自己回應 `loadPreviousSession`，不會執行 agent。
 
-回覆：HTTP 200 的 JSON，90 秒內：
+回覆：HTTP 200 的 JSON，在頻道的「等待後端回覆的秒數」內（預設 120 秒）：
 
 ```json
 {"reply": {"text": "markdown 文字"}}
@@ -551,7 +552,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(密鑰, "<X-Woow-Timestamp>.<原始 bo
 {"output": "markdown 文字"}
 ```
 
-`reply` 發一則訊息、`replies` 發多則（最多 10 則）、`skip` 不發（工作完成但沒有訊息）、`output`（n8n AI Agent 與 Chat Trigger 的預設回覆）發一則。也接受 n8n 的項目清單（`[{"reply": ...}]`、`[{"output": ...}]`）。其他（非 200、不是 JSON、沒有 `reply`／`replies`／`skip`／`output`、文字是空的）都算錯誤：訪客收到頻道的錯誤訊息、客服收到通知、AI API 日誌留下 HTTP 狀態碼。Agent 失敗時請回非 200（例如 502）。每次呼叫 90 秒逾時，只有連不上或 n8n 回 429／503 時才重試；讀取逾時（agent 可能還在跑）或其他回應都不重試。不跟隨轉址。回覆附件不支援（只送文字）。
+`reply` 發一則訊息、`replies` 發多則（最多 10 則）、`skip` 不發（工作完成但沒有訊息）、`output`（n8n AI Agent 與 Chat Trigger 的預設回覆）發一則。也接受 n8n 的項目清單（`[{"reply": ...}]`、`[{"output": ...}]`）。其他（非 200、不是 JSON、沒有 `reply`／`replies`／`skip`／`output`、文字是空的）都算錯誤：訪客收到頻道的錯誤訊息、客服收到通知、AI API 日誌留下 HTTP 狀態碼。Agent 失敗時請回非 200（例如 502）。每次呼叫依頻道的「等待後端回覆的秒數」逾時（預設 120 秒），只有連不上或 n8n 回 429／503 時才重試；讀取逾時（agent 可能還在跑）或其他回應都不重試。不跟隨轉址。回覆附件不支援（只送文字）。
 
 #### 驗證簽章（必做）
 
@@ -577,7 +578,7 @@ return [{ json: JSON.parse(raw) }];
 
 - **端點網址**：`<n8n>/webhook/<webhookId>/chat`（例如 `https://n8n.example.com/webhook/smart-home-advisor/chat`）；**存取金鑰（Token）**留空（公開的 Chat Trigger 不驗簽章；若自行加了驗證，再填密鑰）。
 - Odoo 會送 `action: "sendMessage"`、`sessionId`、`chatInput`（以及所有協定欄位）；Chat Trigger 回 `{"output": "..."}`，發成一則訊息（連到官網的 markdown 連結與 `**粗體**` 都會顯示）。
-- 這類 agent 每次回答約 20-30 秒：n8n 逾時是 90 秒，讀取逾時一律不重試。
+- 這類 agent 每次回答約 20-30 秒：n8n 預設逾時 120 秒（「等待後端回覆的秒數」；顧問最長要 112 秒，Cloudflare 在 100 秒時沒有切斷），讀取逾時一律不重試。
 - 限制：這種工作流程**依 `sessionId` 自己保存記憶**，不看 Odoo 送的 `history` 與 `events`，所以看不到轉真人期間真人客服說了什麼，也無法確認請求真的來自 Odoo。新的工作流程請優先用 **Webhook** 節點開頭並驗證簽章（見下方）。
 
 #### 最小 n8n 工作流程
@@ -588,7 +589,7 @@ return [{ json: JSON.parse(raw) }];
 4. **AI Agent** -- Prompt `{{ $json.message.text }}`；System Message `{{ ($json.system_prompt || '你是我們網站的客服助理。') + ($json.events.length ? '\n\nConversation events (facts, not your words):\n' + $json.events.map(e => '- ' + e.time + ' ' + e.text).join('\n') : '') }}`；選一個 Chat Model；記憶（選用）用 `{{ $json.session_id }}` 當 key；只接公開、唯讀的工具（商品查詢、營業時間）。
 5. **Respond to Webhook** -- Respond With `JSON`，Response Body `{{ JSON.stringify({ reply: { text: $json.output } }) }}`。
 
-把正式 Webhook 網址填進 **端點網址**、密鑰填進 **存取金鑰（Token）**，按 **測試連線**（HTTP 200），再啟用 AI。n8n 每次執行都會保存 Webhook 內容（也就是對話）：請設定執行紀錄保留期限，或不保存成功的執行。超過 90 秒（Cloudflare 約 100 秒就會切斷）的工作流程，請立刻回 `{"skip": true}`。
+把正式 Webhook 網址填進 **端點網址**、密鑰填進 **存取金鑰（Token）**，按 **測試連線**（HTTP 200），再啟用 AI。n8n 每次執行都會保存 Webhook 內容（也就是對話）：請設定執行紀錄保留期限，或不保存成功的執行。超過「等待後端回覆的秒數」（最多 300 秒）的工作流程，請立刻回 `{"skip": true}`。
 
 ### 訪客傳的檔案
 
@@ -656,7 +657,7 @@ im_livechat_ai/
 │   ├── 18.0.1.1.0/               # 從 18.0.1.0.x：清空頻道金鑰、關閉 AI、清理日誌
 │   └── 18.0.1.2.0/               # 系統參數 -> 每個頻道，再刪除 im_livechat_ai.* 參數；
 │                                 #   每個頻道的「訪客傳的檔案」（Hermes：只給連結）
-├── tests/                        # 371 項測試（見「測試」）
+├── tests/                        # 378 項測試（見「測試」）
 └── i18n/
     └── zh_TW.po                  # 繁體中文翻譯
 ```
@@ -712,7 +713,7 @@ AI 回覆由 `tools/markdown.py` 轉成 HTML（與 woow_ai_contact 同一個不�
 
 ### 測試套件總覽
 
-本模組包含 **371 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要金鑰或網路。
+本模組包含 **378 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要金鑰或網路。
 
 | 測試套件 | 檔案 | 測試數 | 說明 |
 |----------|------|:---:|------|
@@ -720,7 +721,7 @@ AI 回覆由 `tools/markdown.py` 轉成 HTML（與 woow_ai_contact 同一個不�
 | 頻道整合測試 | `test_discuss_channel.py` | 18 | 訊息攔截、訪客判斷、對話上下文建構 |
 | 端對端整合測試 | `test_integration.py` | 9 | 完整流程、重試、錯誤訊息、每個頻道各自的連線 |
 | 邊界情境測試 | `test_edge_cases.py` | 97 | 回應格式、HTTP 錯誤、think 標籤、XSS、上限、日誌 |
-| 後端連線測試 | `test_backend.py` | 47 | 連線權限（即時聊天管理員與系統管理員）、只寫的金鑰、網址規則、OpenAI 請求格式、n8n 簽章／內容／回覆、各後端的重試規則、n8n Chat Trigger（不需密鑰、`output` 回覆、90 秒逾時）、每個頻道的日誌設定、18.0.1.2.0 與 18.0.1.1.0 升級腳本 |
+| 後端連線測試 | `test_backend.py` | 54 | 連線權限（即時聊天管理員與系統管理員）、只寫的金鑰、網址規則、OpenAI 請求格式、n8n 簽章／內容／回覆、各後端的重試規則、n8n Chat Trigger（不需密鑰、`output` 回覆）、每個頻道的「等待後端回覆的秒數」、每個頻道的日誌設定、18.0.1.2.0 與 18.0.1.1.0 升級腳本 |
 | 回覆工作測試 | `test_ai_job.py` | 38 | 與訊息同交易建立、合併連發、加鎖、略過、重試、補救排程 |
 | 轉真人測試 | `test_handoff.py` | 43 | 入口網站客戶、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人、中文預設 |
 | 分支審查修正 | `test_review_fixes.py` | 20 | AI 設定權限、機器人聯絡人保護、測試連線權限、哪些訊息會觸發、後端呼叫期間不留交易 |
@@ -778,7 +779,7 @@ docker compose run --rm odoo -d test_db -i website_sale,website_livechat,portal,
 | `HTTP 3xx` | 網址會轉址（例如登入代理） | 不跟隨轉址：改填最終網址，或叢集內的 `*.svc.cluster.local` 網址 |
 | `HTTP 429` | 呼叫太頻繁或額度已用完 | 檢查金鑰在 LiteLLM 的速率與預算 |
 | `HTTP 5xx` | 後端或上游服務故障 | OpenAI 相容會自動重試（3 秒、10 秒）；n8n 只重試 503；檢查後端狀態 |
-| 逾時／無法連線 | 網路或防火牆 | Odoo 必須連得到端點網址；每次呼叫 45 秒逾時 |
+| 逾時／無法連線 | 網路或防火牆 | Odoo 必須連得到端點網址；每次呼叫依頻道的「等待後端回覆的秒數」逾時（預設 45 秒、n8n 120 秒） |
 | `回應格式不正確` | n8n 回覆沒有 `reply`／`replies`／`skip` | 在 Respond to Webhook 節點回 `{"reply": {"text": ...}}` |
 
 ### Docker 相關問題
@@ -834,7 +835,7 @@ odoo.addons.im_livechat_ai
 
 - **所有設定都回到即時聊天頻道**：設定 App 裡已沒有本模組（移除「設定 → Live Chat AI」與「AI 設定」選單）。
 - **每個頻道通用的後端連線**：後端類型（OpenAI 相容或 n8n Webhook）、端點網址、存取金鑰（Token），只有系統管理員能設定（金鑰只寫不讀、存在 SQL 欄位；只接受 https，http 只限本機與叢集內主機）。即時聊天管理員看得到連線是否已設定。測試連線（系統管理員）：送一個小的 chat completion，或簽章過的 n8n ping。
-- **n8n 協定**與 woow_ai_contact 相同：`X-Woow-Timestamp`／`X-Woow-Signature` HMAC 簽章（密鑰選填、不送出）、session id `woow-ai-<db8>-<對話>`、依訪客類型的 `user`、`channel.livechat`、`events`；回覆 `reply`／`replies`／`skip`；只在沒送達或 429／503 時重試。也支援 **n8n Chat Trigger** 工作流程：內容附 `action`／`sessionId`／`chatInput`、接受 `{"output": ...}` 回覆、不需密鑰、逾時 90 秒。
+- **n8n 協定**與 woow_ai_contact 相同：`X-Woow-Timestamp`／`X-Woow-Signature` HMAC 簽章（密鑰選填、不送出）、session id `woow-ai-<db8>-<對話>`、依訪客類型的 `user`、`channel.livechat`、`events`；回覆 `reply`／`replies`／`skip`；只在沒送達或 429／503 時重試。也支援 **n8n Chat Trigger** 工作流程：內容附 `action`／`sessionId`／`chatInput`、接受 `{"output": ...}` 回覆、不需密鑰。每個頻道的「**等待後端回覆的秒數**」（預設 45 秒／n8n 120 秒，10-300 秒）。
 - **OpenAI 請求**：有模型才送 `model`，訊息以 user 開頭與結尾，附 `user` 與字串 `metadata`；不送工具、溫度、max_tokens。真人客服改為標記 `[真人客服 姓名]` 的 user。
 - **移除**：商品查詢工具與「允許查詢商品」、溫度、Max Tokens、LiteLLM 模型清單與快取、預設網址與模型、系統提示裡的身分說明與商品規則。這些都交給後端。
 - **每個頻道的日誌設定**：記錄對話內容與日誌保留天數改成每個頻道設定；AI API 日誌記錄後端類型與 HTTP 狀態碼；AI 分頁顯示補救排程監看。
@@ -845,7 +846,7 @@ odoo.addons.im_livechat_ai
 
 - **LiteLLM 系統設定**：連線移到「設定 → Live Chat AI」（只有系統管理員、金鑰只寫不讀、錯誤只顯示簡短說明），拿掉頻道上的 API 網址與金鑰。頻道模型改成下拉選單，選項來自「讀取可用模型」；預設 `chatgpt-pool/gpt-6-sol`。
 - **升級**：清空並移除舊的頻道金鑰／網址欄位，**所有頻道的 AI 先關閉**，等系統管理員設定 LiteLLM 後再逐一打開；移除重試延遲、最大重試次數上限改為 2；預設錯誤訊息改繁中；機器人聯絡人封存並加標籤；清理舊日誌。
-- **工作佇列**：訪客訊息與 `im_livechat.ai.job` 回覆工作同一筆交易建立，交易完成後處理；等 1.5 秒合併連發、同一段對話加鎖，連發只回一次；逾時 45 秒、最多重試 2 次（3 秒／10 秒）；每 2 分鐘補救排程；失敗時回錯誤訊息並通知客服。
+- **工作佇列**：訪客訊息與 `im_livechat.ai.job` 回覆工作同一筆交易建立，交易完成後處理；等 1.5 秒合併連發、同一段對話加鎖，連發只回一次；逾時依頻道設定、最多重試 2 次（3 秒／10 秒）；每 2 分鐘補救排程；失敗時回錯誤訊息並通知客服。
 - **轉真人／暫停**：入口網站客戶也會得到回覆；客服發言後 AI 暫停 30 分鐘（頻道可調）；轉真人關鍵字回一次轉接訊息、暫停並通知客服；客服訊息以標記過的同事回覆送給 LLM；啟用 AI 的當下建立機器人聯絡人。
 - **商品工具**：`search_products` 與 `get_product_details`（ORM 唯讀、只查已上架、官網價格、附連結），每則回覆最多呼叫 3 次；頻道開關「允許查詢商品」；系統提示固定加上不可編造價格的規則。
 - **隱私**：API 日誌與回覆工作只有即時聊天管理員看得到；預設不存對話內容（「記錄對話內容」開關）；保留 14 天（可調）。

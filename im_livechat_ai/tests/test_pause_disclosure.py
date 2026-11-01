@@ -591,8 +591,12 @@ class TestJobMonitoring(TransactionCase):
         old = fields.Datetime.now() - timedelta(minutes=8)
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'run_after': old})
+        # A run may legitimately take MAX_RUN_SECONDS (3 calls of up to 300 s):
+        # a job running for 8 minutes is not stuck yet, one running for 20 is.
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'state': 'running', 'started_at': old})
+        Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
+                    'state': 'running', 'started_at': fields.Datetime.now() - timedelta(minutes=20)})
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'run_after': fields.Datetime.now() - timedelta(minutes=1)})
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,

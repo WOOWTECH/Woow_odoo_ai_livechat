@@ -714,11 +714,11 @@ msgstr "回應時間（秒）"
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_max_retries
 msgid ""
 "Retries after a failed backend call (0-2), after 3 seconds and then 10 "
-"seconds; calls time out after 45 seconds (n8n: 90 seconds). n8n calls are "
+"seconds; each call waits \"Backend Reply Timeout\" seconds. n8n calls are "
 "only retried when the connection could not be opened or n8n answered HTTP "
 "429 or 503."
 msgstr ""
-"後端呼叫失敗後的重試次數（0–2），先等 3 秒、再等 10 秒；每次呼叫 45 秒逾時（n8n 為 90 秒）。n8n 只在無法建立連線或回應 "
+"後端呼叫失敗後的重試次數（0–2），先等 3 秒、再等 10 秒；每次呼叫最多等「等待後端回覆的秒數」。n8n 只在無法建立連線或回應 "
 "HTTP 429、503 時重試。"
 
 #. module: im_livechat_ai
@@ -1095,3 +1095,15 @@ msgid ""
 "                                Download link only: for Hermes and other backends that do not take file\n"
 "                                content; the backend downloads the file itself."
 msgstr "直接附檔 = LiteLLM/OpenAI 可直接讀 PDF、Excel、Word；只給下載連結 = Hermes 等不收檔案內容的後端，由後端自己下載。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_request_timeout
+msgid "Backend Reply Timeout (seconds)"
+msgstr "等待後端回覆的秒數"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_request_timeout
+msgid ""
+"0 = default (OpenAI compatible 45 seconds, n8n 120 seconds). Otherwise 10-300 "
+"seconds per call. n8n calls are never retried after a timeout."
+msgstr "0＝預設（OpenAI 相容 45 秒、n8n 120 秒）。其他值為每次呼叫 10–300 秒。n8n 逾時後不會重試。"

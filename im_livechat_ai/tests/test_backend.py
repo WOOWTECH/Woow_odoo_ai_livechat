@@ -25,9 +25,13 @@ from odoo.tests.common import TransactionCase, new_test_user
 from odoo.tools import mute_logger
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
+    LLM_MAX_RETRIES,
     LLM_REQUEST_TIMEOUT,
+    LLM_RETRY_BACKOFF,
     MAX_N8N_REPLIES,
+    MAX_REQUEST_TIMEOUT,
     N8N_REQUEST_TIMEOUT,
+    N8N_TEST_TIMEOUT,
     TOKEN_COLUMN,
     endpoint_url_allowed,
     n8n_signature_headers,
@@ -651,11 +655,11 @@ class TestN8nChatTrigger(BackendCase):
 
     @patch(POST)
     def test_timeouts_per_backend(self, mock_post):
-        self.assertEqual(N8N_REQUEST_TIMEOUT, 90)
+        self.assertEqual(N8N_REQUEST_TIMEOUT, 120)
         self.assertEqual(LLM_REQUEST_TIMEOUT, 45)
         mock_post.return_value = _json_response({'output': 'ok'})
         call_backend(self.chat)
-        self.assertEqual(mock_post.call_args.kwargs['timeout'], 90)
+        self.assertEqual(mock_post.call_args.kwargs['timeout'], 120)
         mock_post.return_value = ok_response()
         call_backend(self.channel)
         self.assertEqual(mock_post.call_args.kwargs['timeout'], 45)
@@ -999,3 +1003,66 @@ class TestMigration18011(TransactionCase):
         self.assertFalse(self.ch_on.ai_enabled)
         self.env.cr.execute("SELECT count(*) FROM ir_config_parameter WHERE key LIKE 'im_livechat_ai.%%'")
         self.assertEqual(self.env.cr.fetchone()[0], 0)
+
+
+class TestRequestTimeout(BackendCase):
+    """ai_request_timeout: seconds a chat call waits, per channel (live test:
+    the n8n advisor took 112 s, Odoo gave up at 90 s)."""
+
+    def _timeout(self, mock_post, channel, response):
+        mock_post.return_value = response
+        call_backend(channel)
+        return mock_post.call_args.kwargs['timeout']
+
+    @patch(POST)
+    def test_defaults_when_zero_or_empty(self, mock_post):
+        for value in (0, False):
+            self.channel.ai_request_timeout = value
+            self.n8n.ai_request_timeout = value
+            self.assertEqual(self._timeout(mock_post, self.channel, ok_response()), 45)
+            self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 120)
+
+    @patch(POST)
+    def test_channel_value_is_used(self, mock_post):
+        self.n8n.ai_request_timeout = 180
+        self.channel.ai_request_timeout = 20
+        self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 180)
+        self.assertEqual(self._timeout(mock_post, self.channel, ok_response()), 20)
+
+    @patch(POST)
+    def test_out_of_range_stored_value_is_clamped(self, mock_post):
+        """A value written around the constraint never reaches requests."""
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_request_timeout = 5000 WHERE id = %s",
+                            (self.n8n.id,))
+        self.n8n.invalidate_recordset(['ai_request_timeout'])
+        self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 300)
+
+    def test_range_constraint(self):
+        for value in (0, 10, 112, 300):
+            self.channel.ai_request_timeout = value
+        for value in (5, 9, 301, -1):
+            with self.assertRaises(ValidationError), self.env.cr.savepoint():
+                self.channel.ai_request_timeout = value
+                self.channel.flush_recordset()
+
+    def test_manager_can_set_it(self):
+        self.channel.with_user(self.manager).ai_request_timeout = 150
+        self.assertEqual(self.channel.ai_request_timeout, 150)
+
+    @patch(POST)
+    def test_connection_test_timeouts_unchanged(self, mock_post):
+        self.channel.ai_request_timeout = 250
+        self.n8n.ai_request_timeout = 250
+        mock_post.return_value = ok_response()
+        self.channel.with_user(self.admin).action_test_ai_connection()
+        self.assertEqual(mock_post.call_args.kwargs['timeout'], LLM_REQUEST_TIMEOUT)
+        mock_post.return_value = _json_response({'skip': True})
+        self.n8n.with_user(self.admin).action_test_ai_connection()
+        self.assertEqual(mock_post.call_args.kwargs['timeout'], N8N_TEST_TIMEOUT)
+
+    def test_job_thresholds_cover_the_longest_run(self):
+        from odoo.addons.im_livechat_ai.models import livechat_ai_job as jobs
+        longest = (LLM_MAX_RETRIES + 1) * MAX_REQUEST_TIMEOUT + sum(LLM_RETRY_BACKOFF)
+        self.assertEqual(jobs.MAX_RUN_SECONDS, longest)
+        self.assertGreater(jobs.JOB_MAX_AGE_MINUTES * 60, longest)
+        self.assertEqual(MAX_REQUEST_TIMEOUT, 300)

@@ -184,7 +184,7 @@ flowchart TD
     F --> G[After commit: debounce,<br/>per-session lock]
     G --> I{Newer job or paused?}
     I -->|Yes| S[Skipped]
-    I -->|No| J[Call the channel backend<br/>45 s timeout]
+    I -->|No| J[Call the channel backend<br/>timeout per channel]
     J --> K{Success?}
     K -->|Yes| L[Post reply]
     K -->|No, retries left| R[Wait 3 s / 10 s] --> J
@@ -212,7 +212,7 @@ flowchart TD
 
 - **Durable reply jobs** (`im_livechat.ai.job`) -- Created in the same transaction as the visitor message, so a job exists exactly when the message was committed. Processing starts after commit.
 - **One reply for rapid messages** -- 1.5 s debounce, a PostgreSQL advisory lock per conversation (works across prefork workers and the cron process), and a job that has a newer job in the same conversation is skipped; the newest one answers with the full context.
-- **Bounded calls** -- 45 s timeout per call (n8n: 90 s, under Cloudflare's 100 s), at most 2 retries (waiting 3 s, then 10 s), at most 3 processing runs per job. OpenAI compatible calls are retried on any failure; n8n calls only when the connection could not be opened or n8n answered HTTP 429 / 503 -- never after a read timeout (the agent may still be running; a workflow is never started twice).
+- **Bounded calls** -- each call waits **Backend Reply Timeout** seconds, per channel (0 = default: 45 s for OpenAI compatible backends, 120 s for n8n; 10 - 300 s), at most 2 retries (waiting 3 s, then 10 s), at most 3 processing runs per job. OpenAI compatible calls are retried on any failure; n8n calls only when the connection could not be opened or n8n answered HTTP 429 / 503 -- never after a read timeout (the agent may still be running; a workflow is never started twice).
 - **Recovery cron** -- Every 2 minutes, jobs left pending or running by a restart or crash are run again; a job is never answered twice (it is skipped when the bot already replied after its message). Unfinished jobs older than 30 minutes are given up. The cron also runs the deferred replies of a handoff wait (triggered for the end of the wait). Requires a cron process (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
 - **Monitoring** -- The **Reply Jobs** block of each channel's AI tab (Live Chat managers) shows the cron's last run and the number of pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck.
 - **Failure handling** -- After the last retry the visitor gets the channel's error message (Traditional Chinese by default) and the operators are notified (OdooBot message and a sticky notification).
@@ -397,7 +397,8 @@ Validation: every range is checked on each save, whether AI is on or off, and en
 
 | Field | Description | Default |
 |---|---|---|
-| **Max Retries** (`ai_max_retries`) | Retries after a failed call, 0 - 2 (45 s timeout; waits 3 s, then 10 s). n8n: only when the call could not be delivered or got HTTP 429 / 503. | `2` |
+| **Max Retries** (`ai_max_retries`) | Retries after a failed call, 0 - 2 (waits 3 s, then 10 s). n8n: only when the call could not be delivered or got HTTP 429 / 503. | `2` |
+| **Backend Reply Timeout (seconds)** (`ai_request_timeout`) | Seconds each chat call waits for the answer. 0 = default: 45 s (OpenAI compatible), 120 s (n8n; the smart home advisor needed 112 s for a long whole-house question). 10 - 300. The Test Connection button keeps its own short timeouts. Above about 120 s, check that the proxy in front of the backend (e.g. Cloudflare) and Odoo's `limit_time_real` allow it: a worker recycled during a long call is killed after `limit_time_real`, and the recovery cron retries the job. | `0` |
 | **Error Message** (`ai_error_message`) | Sent to the visitor when every retry failed (operators are notified too). | 抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。 |
 
 ### Step 5: Human handoff
@@ -475,7 +476,7 @@ Content-Type: application/json
 }
 ```
 
-- `model` only when set; no `tools`, `temperature`, `max_tokens` or `stream` (the backend decides). Not streamed; 45 s timeout.
+- `model` only when set; no `tools`, `temperature`, `max_tokens` or `stream` (the backend decides). Not streamed; the channel's Backend Reply Timeout (45 s by default).
 - `messages` start and end with a user turn: the welcome message before the first visitor message is dropped; bot messages after the last visitor message are moved before it (quoted in one leading user turn when they would come first).
 - `user` and `metadata.session_id` = `woow-ai-<first 8 hex of database.uuid>-<discuss.channel id>`: stable for one conversation. `metadata` values are strings; no email.
 - Answer: a normal chat completion, `choices[0].message.content` (text or text parts). `<think>` blocks are removed.
@@ -524,7 +525,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Woow-Timestamp>.<raw body>
 - `user` follows the visitor rows of woow_ai_contact docs/LIVECHAT.md (guest, portal user, employee as visitor, partner without user, public user). Visitors are often anonymous: when `channel.type` is `livechat` or `user.is_guest` is true, give the model public data tools only.
 - The **Test Connection** button sends `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<channel id>"}`; answer HTTP 200 (for example `{"skip": true}`) to any non-`message` event. A Chat Trigger answers `loadPreviousSession` itself, without running the agent.
 
-Answer: HTTP 200 with JSON, within 90 s:
+Answer: HTTP 200 with JSON, within the channel's Backend Reply Timeout (120 s by default):
 
 ```json
 {"reply": {"text": "markdown 文字"}}
@@ -534,7 +535,7 @@ Answer: HTTP 200 with JSON, within 90 s:
 {"output": "markdown 文字"}
 ```
 
-`reply` posts one message, `replies` several (at most 10), `skip` none (the job is done without a message), `output` (the default answer of an n8n AI Agent and of a Chat Trigger) one message. An n8n item list (`[{"reply": ...}]`, `[{"output": ...}]`) is accepted. Anything else (non-200, not JSON, no `reply`/`replies`/`skip`/`output`, empty text) is an error: the visitor gets the channel's error message, the operators are notified and the AI API log keeps the HTTP status. When the agent fails, answer non-200 (e.g. 502). Calls time out after 90 s and are retried only when the connection could not be opened or n8n answered 429 / 503; never after a read timeout (the agent may still be running) or another answer. Redirects are not followed. Reply attachments are not supported (text only).
+`reply` posts one message, `replies` several (at most 10), `skip` none (the job is done without a message), `output` (the default answer of an n8n AI Agent and of a Chat Trigger) one message. An n8n item list (`[{"reply": ...}]`, `[{"output": ...}]`) is accepted. Anything else (non-200, not JSON, no `reply`/`replies`/`skip`/`output`, empty text) is an error: the visitor gets the channel's error message, the operators are notified and the AI API log keeps the HTTP status. When the agent fails, answer non-200 (e.g. 502). Calls time out after the channel's Backend Reply Timeout (120 s by default) and are retried only when the connection could not be opened or n8n answered 429 / 503; never after a read timeout (the agent may still be running) or another answer. Redirects are not followed. Reply attachments are not supported (text only).
 
 #### Verify the signature (required)
 
@@ -560,7 +561,7 @@ An existing workflow that starts with a **Chat Trigger** node (public chat, no a
 
 - **Endpoint URL**: `<n8n>/webhook/<webhookId>/chat` (e.g. `https://n8n.example.com/webhook/smart-home-advisor/chat`); **Access Token** empty (a public Chat Trigger checks no signature; if you add a check, set the secret).
 - Odoo sends `action: "sendMessage"`, `sessionId` and `chatInput` (with all the protocol fields); the Chat Trigger answers `{"output": "..."}`, posted as one message (markdown links to the website and `**bold**` are rendered).
-- Agents of this kind take about 20-30 s per answer: the n8n timeout is 90 s and a read timeout is never retried.
+- Agents of this kind take about 20-30 s per answer: the n8n timeout is 120 s by default (Backend Reply Timeout; the advisor took up to 112 s, Cloudflare did not cut it at 100 s) and a read timeout is never retried.
 - Limits: such a workflow keeps **its own memory per `sessionId`** and ignores Odoo's `history` and `events`, so it does not see what a human operator wrote during a handoff, and it cannot verify that the request comes from Odoo. For new workflows prefer a **Webhook** node entry with the signature check below.
 
 #### Minimal n8n workflow
@@ -571,7 +572,7 @@ An existing workflow that starts with a **Chat Trigger** node (public chat, no a
 4. **AI Agent** -- Prompt `{{ $json.message.text }}`; system message `{{ ($json.system_prompt || 'You are the customer service assistant of our website.') + ($json.events.length ? '\n\nConversation events (facts, not your words):\n' + $json.events.map(e => '- ' + e.time + ' ' + e.text).join('\n') : '') }}`; a chat model; optional memory keyed by `{{ $json.session_id }}`; public, read-only tools only (product search, opening hours).
 5. **Respond to Webhook** -- Respond With `JSON`, Response Body `{{ JSON.stringify({ reply: { text: $json.output } }) }}`.
 
-Copy the production webhook URL into **Endpoint URL** and the secret into **Access Token**, click **Test Connection** (HTTP 200), then enable AI. n8n keeps the webhook body (the conversation) with each execution: set an execution retention, or do not save successful executions. A workflow that takes longer than 90 s (Cloudflare cuts at about 100 s) should answer `{"skip": true}` at once.
+Copy the production webhook URL into **Endpoint URL** and the secret into **Access Token**, click **Test Connection** (HTTP 200), then enable AI. n8n keeps the webhook body (the conversation) with each execution: set an execution retention, or do not save successful executions. A workflow that takes longer than the Backend Reply Timeout (at most 300 s) should answer `{"skip": true}` at once.
 
 ---
 
@@ -649,7 +650,7 @@ im_livechat_ai/
 │   └── 18.0.1.2.0/                      # System parameters -> every channel,
 │                                        #   then delete im_livechat_ai.* parameters;
 │                                        #   Visitor Files per channel (Hermes: link)
-├── tests/                               # 371 tests (see Testing)
+├── tests/                               # 378 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -691,7 +692,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **371 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **378 automated tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -699,7 +700,7 @@ The module has **371 automated tests**. All HTTP calls are mocked: no key or net
 | `test_discuss_channel.py` | 18 | Message interception, visitor detection, context building |
 | `test_integration.py` | 9 | End-to-end flow, retries, error fallback, per-channel connection |
 | `test_edge_cases.py` | 97 | Edge cases: payloads, HTTP errors, think tags, XSS, limits, logging |
-| `test_backend.py` | 47 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`, 90 s timeout), 18.0.1.2.0 and 18.0.1.1.0 migrations |
+| `test_backend.py` | 54 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.2.0 and 18.0.1.1.0 migrations |
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
@@ -757,7 +758,7 @@ Odoo no longer looks up products (18.0.1.2.0). Give the backend its own product 
 | `HTTP 3xx` | The URL redirects (e.g. a login proxy) | Redirects are not followed: use the final URL, or an in-cluster `*.svc.cluster.local` URL |
 | `HTTP 429` | Rate limit or budget reached | Check the key's limits and spend in LiteLLM |
 | `HTTP 5xx` | Backend or provider issue | OpenAI compatible: retried (3 s, 10 s); n8n: only 503 is retried; check the backend |
-| Timeout / connection | Network or firewall | Odoo must reach the endpoint URL; calls time out after 45 s |
+| Timeout / connection | Network or firewall | Odoo must reach the endpoint URL; calls time out after the channel's Backend Reply Timeout (45 s / n8n 120 s by default) |
 | `回應格式不正確` | n8n answered without `reply` / `replies` / `skip` | Return `{"reply": {"text": ...}}` from the Respond to Webhook node |
 
 ### Bot messages show raw HTML
@@ -806,7 +807,7 @@ Per channel: an OpenAI-compatible server with `/v1/chat/completions` (LiteLLM, H
 
 - **All settings on the Live Chat channel**: nothing of the module in the Settings app any more (Settings > Live Chat AI and the AI Settings menu removed).
 - **Generic backend per channel**: Backend Type (OpenAI compatible or n8n Webhook), Endpoint URL and Access Token on every channel, set by system administrators only (write-only token in an SQL-only column; https only, http for local and in-cluster hosts). Live Chat managers see whether the connection is set. Test Connection (system administrators): a small chat completion, or a signed n8n ping.
-- **n8n protocol** of woow_ai_contact: `X-Woow-Timestamp` / `X-Woow-Signature` HMAC signing (optional secret, never sent), session id `woow-ai-<db8>-<conversation>`, `user` identity per visitor kind, `channel.livechat`, `events`; answers `reply` / `replies` / `skip`; retried only when not delivered or on 429 / 503. **n8n Chat Trigger** workflows work too: `action` / `sessionId` / `chatInput` in the body, `{"output": ...}` answers, no secret needed, 90 s timeout.
+- **n8n protocol** of woow_ai_contact: `X-Woow-Timestamp` / `X-Woow-Signature` HMAC signing (optional secret, never sent), session id `woow-ai-<db8>-<conversation>`, `user` identity per visitor kind, `channel.livechat`, `events`; answers `reply` / `replies` / `skip`; retried only when not delivered or on 429 / 503. **n8n Chat Trigger** workflows work too: `action` / `sessionId` / `chatInput` in the body, `{"output": ...}` answers, no secret needed. **Backend Reply Timeout** per channel (45 s / n8n 120 s by default, 10 - 300 s).
 - **OpenAI requests**: `model` only when set, messages that start and end with a user turn, `user` and string `metadata`; no tools, temperature or max_tokens. Operators are user turns marked `[真人客服 name]`.
 - **Removed**: product lookup tools and Allow Product Lookup, Temperature, Max Tokens, the LiteLLM model list and its cache, the default URL and model, the identity block and product rules in the system prompt. The backend does all of this.
 - **Per-channel logs**: Log Conversation Content and Log Retention (days) per channel; AI API logs record the backend type and the HTTP status; the AI tab shows the recovery cron monitoring.
@@ -817,7 +818,7 @@ Per channel: an OpenAI-compatible server with `/v1/chat/completions` (LiteLLM, H
 
 - **LiteLLM system setting**: the connection moved to Settings > Live Chat AI (administrators only, write-only key, short errors); per-channel API URL/key removed. Channel model is a dropdown fed by **Fetch Available Models**; default `chatgpt-pool/gpt-6-sol`.
 - **Upgrade**: wipes and drops the old per-channel key/URL, **turns AI off on every channel** until an administrator configures LiteLLM and re-enables it, removes Retry Delay, caps Max Retries to 2, translates the default error message, archives and tags the bot partners, scrubs old logs.
-- **Job queue**: durable `im_livechat.ai.job` reply jobs created with the visitor message, processed after commit with a 1.5 s debounce and a per-conversation lock; rapid messages get one reply; 45 s timeout, at most 2 retries (3 s / 10 s); recovery cron every 2 minutes; error message plus operator notification on failure.
+- **Job queue**: durable `im_livechat.ai.job` reply jobs created with the visitor message, processed after commit with a 1.5 s debounce and a per-conversation lock; rapid messages get one reply; timeout per channel, at most 2 retries (3 s / 10 s); recovery cron every 2 minutes; error message plus operator notification on failure.
 - **Handoff / pause**: portal customers are answered; an operator reply pauses the AI for 30 minutes (per channel); handoff keywords send one notice, pause and notify operators; operator replies are sent to the LLM as marked colleague replies; the bot partner is created when AI is enabled.
 - **Product tools**: `search_products` and `get_product_details` (read-only ORM, published products, website prices, links), at most 3 tool rounds per reply, per-channel **Allow Product Lookup**, and a fixed prompt rule against invented prices.
 - **Privacy**: API logs and jobs for Live Chat administrators only; no conversation content unless **Log Conversation Content** is on; 14-day retention (configurable).

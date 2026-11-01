@@ -107,6 +107,7 @@
                         <group string="Advanced Settings" invisible="not ai_enabled">
                             <field name="ai_max_history"/>
                             <field name="ai_max_retries"/>
+                            <field name="ai_request_timeout"/>
                         </group>
                         <group string="API Logs &amp; Privacy">
                             <field name="ai_log_payload" groups="base.group_system"/>

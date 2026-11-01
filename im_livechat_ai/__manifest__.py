@@ -33,7 +33,8 @@ Features:
 * Durable reply jobs: queued in the visitor's transaction, processed after
   commit, one at a time per conversation (rapid messages get one reply),
   recovered by a cron after a restart
-* Bounded backend calls (45 s timeout, at most 2 retries; n8n only retried
+* Bounded backend calls (timeout per channel, by default 45 s for OpenAI
+  compatible backends and 120 s for n8n, 10-300 s; at most 2 retries; n8n only retried
   when the call could not be delivered or got HTTP 429/503); on failure the
   visitor gets an error message and the operators are notified
 * Portal (logged-in) customers are answered like guests; internal users,

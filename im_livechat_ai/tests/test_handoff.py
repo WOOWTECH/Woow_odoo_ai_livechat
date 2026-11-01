@@ -24,11 +24,10 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     DEFAULT_HANDOFF_MESSAGE,
     DEFAULT_HANDOFF_PAUSE_MINUTES,
     DEFAULT_HANDOFF_WAIT_MINUTES,
-    ICP_API_KEY,
     LEGACY_ERROR_MESSAGE,
 )
 
-from .common import setup_litellm
+from .common import TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -49,8 +48,8 @@ class HandoffCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Handoff Channel',
             'ai_enabled': True,
             'ai_model': 'chatgpt-pool/gpt-6-sol',
@@ -366,9 +365,11 @@ class TestKeywordHandoff(HandoffCase):
         self._post('<p>麻煩<b>找真人</b>回覆</p>', self.visitor)
         self.assertEqual(self._jobs().kind, 'handoff')
 
-    def test_handoff_without_litellm(self):
-        """The handoff notice needs no LLM, so it works without the key."""
-        self.env['ir.config_parameter'].sudo().set_param(ICP_API_KEY, False)
+    def test_handoff_without_backend(self):
+        """The handoff notice needs no backend, so it works without the token."""
+        self.channel._ai_set_token(False)
+        self.channel.invalidate_recordset()
+        self.assertFalse(self.channel._ai_connection_is_ready())
         self._post('找客服', self.visitor)
         job = self._jobs()
         self.assertEqual(job.kind, 'handoff')
@@ -402,7 +403,7 @@ class TestKeywordHandoff(HandoffCase):
 
 
 class TestHistoryRoles(HandoffCase):
-    """P1-3: operator messages are assistant messages marked as a colleague's."""
+    """Operator messages are user turns marked as a colleague's (18.0.1.2.0)."""
 
     def _msg(self, author, body):
         return self.env['mail.message'].create({
@@ -418,12 +419,11 @@ class TestHistoryRoles(HandoffCase):
         self._msg(None, '匿名訪客')
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertTrue(messages[0]['content'].startswith(self.channel._ai_identity_block() + '\n\n你是客服助理。'))
-        self.assertIn(OPERATOR_SYSTEM_NOTE, messages[0]['content'])
+        self.assertEqual(messages[0]['content'], '你是客服助理。\n\n' + OPERATOR_SYSTEM_NOTE)
         self.assertEqual(messages[1:], [
             {'role': 'user', 'content': '請問可以退貨嗎？'},
             {'role': 'assistant', 'content': '可以，七天內可退貨。'},
-            {'role': 'assistant', 'content': '[真人客服 王小明] 我幫您安排明天收件。'},
+            {'role': 'user', 'content': '[真人客服 王小明] 我幫您安排明天收件。'},
             {'role': 'user', 'content': '好的，謝謝'},
             {'role': 'user', 'content': '匿名訪客'},
         ])
@@ -431,26 +431,24 @@ class TestHistoryRoles(HandoffCase):
     def test_no_operator_note_without_operator_messages(self):
         self._msg(self.visitor, 'hi')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {
-            'role': 'system',
-            'content': self.channel._ai_identity_block() + '\n\n你是客服助理。\n\n'
-            + self.channel._ai_product_guard(),
-        })
+        self.assertEqual(messages[0], {'role': 'system', 'content': '你是客服助理。'})
 
     def test_operator_note_without_custom_prompt(self):
         self.channel.ai_system_prompt = False
         self._msg(self.operator, '稍等')
         self._msg(self.visitor, '好')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {
-            'role': 'system',
-            'content': self.channel._ai_identity_block() + '\n\n' + OPERATOR_SYSTEM_NOTE + '\n\n'
-            + self.channel._ai_product_guard(),
-        })
+        self.assertEqual(messages[0], {'role': 'system', 'content': OPERATOR_SYSTEM_NOTE})
+        # Operators are user turns (woow_ai_contact protocol): an operator who
+        # wrote first is kept, not dropped like a leading assistant turn.
+        self.assertEqual(messages[1:], [
+            {'role': 'user', 'content': '[真人客服 王小明] 稍等'},
+            {'role': 'user', 'content': '好'},
+        ])
 
     @patch(POST)
-    def test_job_sends_operator_as_assistant(self, mock_post):
-        """After the pause, the AI sees the operator's reply as assistant."""
+    def test_job_sends_operator_as_marked_user_turn(self, mock_post):
+        """After the pause, the AI sees the operator's reply as a marked user turn."""
         mock_post.return_value = _ok()
         self._post('有現貨嗎？', self.visitor)
         self._post('有現貨，今天出貨。', self.operator)
@@ -460,7 +458,7 @@ class TestHistoryRoles(HandoffCase):
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
         sent = mock_post.call_args.kwargs['json']['messages']
-        self.assertIn({'role': 'assistant', 'content': '[真人客服 王小明] 有現貨，今天出貨。'}, sent)
+        self.assertIn({'role': 'user', 'content': '[真人客服 王小明] 有現貨，今天出貨。'}, sent)
         self.assertEqual(sent[-1], {'role': 'user', 'content': '那運費多少？'})
         self.assertIn(OPERATOR_SYSTEM_NOTE, sent[0]['content'])
 
@@ -471,11 +469,11 @@ class TestBotPartnerTiming(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.category = cls.env.ref('im_livechat_ai.partner_category_ai_bot')
 
     def test_created_with_ai_enabled(self):
         channel = self.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Bot On Create', 'ai_enabled': True, 'ai_bot_name': '小幫手',
         })
         bot = channel.ai_bot_partner_id
@@ -490,7 +488,7 @@ class TestBotPartnerTiming(TransactionCase):
         self.assertFalse(channel.ai_bot_partner_id)
 
     def test_created_when_ai_enabled_later_and_renamed(self):
-        channel = self.env['im_livechat.channel'].create({'name': 'Enable Later'})
+        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Enable Later'})
         channel.write({'ai_enabled': True})
         bot = channel.ai_bot_partner_id
         self.assertTrue(bot)
@@ -505,9 +503,9 @@ class TestBotPartnerTiming(TransactionCase):
     def test_manager_enabling_ai_creates_bot(self):
         manager = new_test_user(self.env, login='bot_timing_manager',
                                 groups='base.group_user,im_livechat.im_livechat_group_manager')
-        channel = self.env['im_livechat.channel'].with_user(manager).create({
-            'name': 'Manager Channel', 'ai_enabled': True,
-        })
+        # The system administrator sets the connection, the manager enables AI.
+        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Manager Channel'})
+        channel.with_user(manager).write({'ai_enabled': True})
         self.assertTrue(channel.sudo().ai_bot_partner_id)
 
     def test_default_bot_is_archived_and_tagged(self):
@@ -519,6 +517,7 @@ class TestBotPartnerTiming(TransactionCase):
     def test_reply_processing_never_creates_or_writes_bot(self, mock_post):
         mock_post.return_value = _ok('回覆')
         channel = self.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Lost Bot', 'ai_enabled': True, 'ai_model': 'chatgpt-pool/gpt-6-sol',
         })
         channel.ai_bot_partner_id.unlink()  # ondelete set null
@@ -548,6 +547,7 @@ class TestBotPartnerTiming(TransactionCase):
     def test_reply_authored_by_archived_bot(self, mock_post):
         mock_post.return_value = _ok('封存的機器人也能發言')
         channel = self.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Archived Bot', 'ai_enabled': True, 'ai_model': 'chatgpt-pool/gpt-6-sol',
         })
         session = self.env['discuss.channel'].create({
@@ -605,8 +605,7 @@ class TestChineseErrorMessage(TransactionCase):
         self.assertEqual(custom.ai_error_message, '請撥 02-1234-5678')
 
     def test_migration_archives_and_tags_existing_bots(self):
-        setup_litellm(self.env)
-        channel = self.env['im_livechat.channel'].create({'name': 'Old Bot', 'ai_enabled': True})
+        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Old Bot', 'ai_enabled': True})
         bot = channel.ai_bot_partner_id
         category = self.env.ref('im_livechat_ai.partner_category_ai_bot')
         bot.write({'active': True, 'category_id': [(5, 0, 0)]})

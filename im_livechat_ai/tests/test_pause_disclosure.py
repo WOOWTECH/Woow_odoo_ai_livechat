@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Owner-approved round 2: explicit handoff keywords and the two pause kinds
-with waiting notice and auto-resume (P0-1), range and model validation
-(P1-1, P1-2), settings privacy (P1-3), job monitoring (P1-6), AI disclosure
-(P1-7), the identity block (P1-8) and idempotent migration scripts (P2-4).
+with waiting notice and auto-resume (P0-1), range validation (P1-1), the
+free-text model and no Settings page (18.0.1.2.0), job monitoring on the AI
+tab (P1-6), AI disclosure (P1-7) and idempotent migration scripts (P2-4).
 
 All HTTP is mocked; no real key is used. Jobs run synchronously in the test
 transaction with _run_job(commit=False) / _cron_recover_jobs(commit=False).
@@ -26,17 +26,12 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     DEFAULT_HANDOFF_MESSAGE,
     DEFAULT_HANDOFF_PAUSE_MINUTES,
     DEFAULT_HANDOFF_WAIT_MINUTES,
-    DEFAULT_MODEL,
     DEFAULT_PAUSE_NOTICE,
     DEFAULT_WELCOME_MESSAGE,
-    ICP_BASE_URL,
-    ICP_LOG_PAYLOAD,
-    ICP_LOG_RETENTION_DAYS,
-    ICP_MODEL_CACHE,
     LEGACY_HANDOFF_KEYWORDS,
 )
 
-from .common import setup_litellm
+from .common import TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -65,13 +60,11 @@ class PauseCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'R2 Channel',
             'ai_enabled': True,
-            'ai_model': DEFAULT_MODEL,
             'ai_system_prompt': '你是客服助理。',
-            'ai_product_lookup': False,
         })
         cls.bot = cls.channel.ai_bot_partner_id
         cls.operator_user = new_test_user(
@@ -423,22 +416,21 @@ class TestRangeValidation(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
-        cls.channel = cls.env['im_livechat.channel'].create({'name': 'Ranges', 'ai_enabled': False})
+        cls.channel = cls.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Ranges', 'ai_enabled': False})
 
     def test_checked_with_ai_off(self):
-        for field, bad in (('ai_max_tokens', 0), ('ai_max_tokens', 8193), ('ai_max_history', 0),
-                           ('ai_max_history', 201), ('ai_temperature', 2.5), ('ai_temperature', -0.1),
+        for field, bad in (('ai_max_history', 0), ('ai_max_history', 201),
                            ('ai_max_retries', 3), ('ai_max_retries', -1),
-                           ('ai_handoff_pause_minutes', 0), ('ai_handoff_wait_minutes', 1441)):
+                           ('ai_handoff_pause_minutes', 0), ('ai_handoff_wait_minutes', 1441),
+                           ('ai_log_retention_days', 0), ('ai_log_retention_days', 3651)):
             with self.subTest(field=field, value=bad), self.assertRaises(ValidationError):
                 with self.env.cr.savepoint():
                     self.channel.write({field: bad})
         with self.assertRaises(ValidationError):
-            self.env['im_livechat.channel'].create({'name': 'Bad', 'ai_max_tokens': 99999})
+            self.env['im_livechat.channel'].create({'name': 'Bad', 'ai_max_history': 99999})
 
     def test_enabling_revalidates_legacy_values(self):
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 0, ai_temperature = 7 "
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 0 "
                             "WHERE id = %s", (self.channel.id,))
         self.env.invalidate_all()
         # Unrelated writes and turning AI off still work.
@@ -446,170 +438,107 @@ class TestRangeValidation(TransactionCase):
         with self.assertRaises(ValidationError), self.env.cr.savepoint():
             self.channel.write({'ai_enabled': True})
         self.env.invalidate_all()
-        self.channel.write({'ai_enabled': True, 'ai_max_history': 20, 'ai_temperature': 0.5})
+        self.channel.write({'ai_enabled': True, 'ai_max_history': 20})
         self.assertTrue(self.channel.ai_enabled)
 
-    @patch(POST)
-    def test_runtime_clamp(self, mock_post):
-        mock_post.return_value = _ok('OK')
-        self.channel.write({'ai_enabled': True})
-        cases = ((99999, 9.5, 8192, 2.0), (0, -3, 1024, 0.0), (300, 0.4, 300, 0.4))
-        for tokens, temperature, exp_tokens, exp_temperature in cases:
-            self.env.cr.execute(
-                "UPDATE im_livechat_channel SET ai_max_tokens = %s, ai_temperature = %s WHERE id = %s",
-                (tokens, temperature, self.channel.id))
-            self.env.invalidate_all()
-            self.channel._call_llm_api([{'role': 'user', 'content': 'hi'}])
-            payload = mock_post.call_args.kwargs['json']
-            self.assertEqual(payload['max_tokens'], exp_tokens)
-            self.assertAlmostEqual(payload['temperature'], exp_temperature)
+    def test_runtime_clamp(self):
         self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 5000 WHERE id = %s",
                             (self.channel.id,))
         self.env.invalidate_all()
         self.assertEqual(self.channel._ai_max_history_value(), 200)
 
 
-class TestModelValidation(TransactionCase):
-    """P1-2: the model must come from the cached LiteLLM list (or be the default)."""
+class TestFreeTextModel(TransactionCase):
+    """18.0.1.2.0: the model is free text (no LiteLLM model list), optional,
+    required only to enable AI on an OpenAI compatible backend."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env, models=['pool/a', 'pool/b'])
         cls.manager = new_test_user(cls.env, login='r2_model_manager',
                                     groups='base.group_user,im_livechat.im_livechat_group_manager')
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Models', 'ai_enabled': True, 'ai_model': 'pool/a',
         })
 
-    def test_cached_and_default_allowed(self):
-        self.channel.with_user(self.manager).write({'ai_model': 'pool/b'})
-        self.channel.with_user(self.manager).write({'ai_model': DEFAULT_MODEL})
-        self.assertEqual(self.channel.ai_model, DEFAULT_MODEL)
+    def test_any_model_name_allowed(self):
+        self.channel.with_user(self.manager).write({'ai_model': 'MiniMax-M1'})
+        self.assertEqual(self.channel.ai_model, 'MiniMax-M1')
+        self.channel.with_user(self.manager).write({'ai_model': 'hermes-agent'})
+        self.assertEqual(self.channel.ai_model, 'hermes-agent')
+        self.assertEqual(self.channel._fields['ai_model'].type, 'char')
 
-    def test_unknown_model_rejected(self):
-        with self.assertRaises(ValidationError) as caught:
-            self.channel.with_user(self.manager).write({'ai_model': 'pool/zzz'})
-        self.assertIn('不在可用模型清單中', str(caught.exception))
-        with self.assertRaises(ValidationError):
-            self.env['im_livechat.channel'].create({'name': 'X', 'ai_model': 'pool/zzz'})
-        # Also with AI off: the value is set/changed.
-        off = self.env['im_livechat.channel'].create({'name': 'Off'})
-        with self.assertRaises(ValidationError):
-            off.write({'ai_model': 'nope/model'})
+    def test_model_required_to_enable_openai(self):
+        with self.assertRaises(UserError), self.env.cr.savepoint():
+            self.channel.with_user(self.manager).write({'ai_model': False})
+        off = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'No Model', 'ai_model': False})
+        with self.assertRaises(UserError), self.env.cr.savepoint():
+            off.with_user(self.manager).write({'ai_enabled': True})
+        off.with_user(self.manager).write({'ai_enabled': True, 'ai_model': 'pool/b'})
+        self.assertTrue(off.ai_enabled)
 
-    def test_legacy_value_does_not_block_other_fields(self):
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_model = 'MiniMax-M1', ai_enabled = FALSE "
-                            "WHERE id = %s", (self.channel.id,))
-        self.env.invalidate_all()
-        self.channel.with_user(self.manager).write({'ai_system_prompt': '新提示', 'ai_max_tokens': 500})
-        self.channel.with_user(self.manager).write({'ai_model': 'MiniMax-M1'})  # unchanged value
-        # Enabling AI with the legacy model is refused, choosing a listed one works.
-        with self.assertRaises(ValidationError), self.env.cr.savepoint():
-            self.channel.with_user(self.manager).write({'ai_enabled': True})
-        self.env.invalidate_all()
-        self.channel.with_user(self.manager).write({'ai_enabled': True, 'ai_model': 'pool/b'})
-        self.assertTrue(self.channel.ai_enabled)
-
-    def test_enabled_channel_with_legacy_value_can_be_edited(self):
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_model = 'MiniMax-M1' WHERE id = %s",
-                            (self.channel.id,))
-        self.env.invalidate_all()
-        self.channel.with_user(self.manager).write({'ai_handoff_wait_minutes': 15, 'ai_enabled': True})
-        self.assertEqual(self.channel.ai_handoff_wait_minutes, 15)
+    def test_model_not_needed_for_n8n(self):
+        channel = self.env['im_livechat.channel'].create({
+            'name': 'n8n', 'ai_backend_type': 'n8n', 'ai_endpoint_url': 'https://n8n.test/webhook/x',
+            'ai_api_token': 'dummy-secret', 'ai_enabled': True,
+        })
+        self.assertTrue(channel.ai_enabled)
+        self.assertTrue(channel.ai_connection_ready)
 
 
-class TestSettingsPrivacy(TransactionCase):
-    """P1-3: non-system users never get the LiteLLM settings through RPC."""
+class TestNoSettingsPage(TransactionCase):
+    """Owner decision 1: nothing of im_livechat_ai in the Settings app."""
 
-    FIELDS = ['livechat_ai_base_url', 'livechat_ai_log_payload', 'livechat_ai_log_retention_days',
-              'livechat_ai_model_list', 'livechat_ai_api_key', 'livechat_ai_api_key_set',
-              'livechat_ai_cron_lastcall', 'livechat_ai_stale_job_count', 'livechat_ai_job_warning']
+    def test_no_settings_fields_views_or_menu(self):
+        Settings = self.env['res.config.settings']
+        self.assertFalse([name for name in Settings._fields if name.startswith('livechat_ai_')])
+        self.assertFalse(self.env.ref('im_livechat_ai.res_config_settings_view_form_livechat_ai',
+                                      raise_if_not_found=False))
+        self.assertFalse(self.env.ref('im_livechat_ai.res_config_settings_action_livechat_ai',
+                                      raise_if_not_found=False))
+        self.assertFalse(self.env.ref('im_livechat_ai.livechat_ai_settings_menu', raise_if_not_found=False))
+        self.assertFalse(self.env['ir.ui.view'].search_count([
+            ('model', '=', 'res.config.settings'), ('arch_db', 'ilike', 'im_livechat_ai'),
+        ]))
+        settings_arch = Settings.get_views([(False, 'form')])['views']['form']['arch']
+        self.assertNotIn('livechat_ai', settings_arch)
+        self.assertNotIn('Live Chat AI', settings_arch)
 
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        setup_litellm(cls.env, base_url='https://internal-litellm.example/v1', log_payload=True)
-        ICP = cls.env['ir.config_parameter'].sudo()
-        ICP.set_param(ICP_LOG_RETENTION_DAYS, 21)
-        ICP.set_param(ICP_MODEL_CACHE, json.dumps(['secret/model']))
-        cls.portal = new_test_user(cls.env, login='r2_portal', groups='base.group_portal')
-        cls.manager = new_test_user(cls.env, login='r2_lc_manager',
-                                    groups='base.group_user,im_livechat.im_livechat_group_manager')
-        cls.admin = new_test_user(cls.env, login='r2_sysadmin', groups='base.group_user,base.group_system')
-
-    def _assert_no_ai_values(self, call):
-        """Run ``call``; newer Odoo 18 builds refuse res.config.settings reads
-        for non-system users outright (AccessError), older ones return values
-        that this module filters. Either way no LiteLLM value may come back."""
-        try:
-            values = call()
-        except AccessError:
-            return
-        leaked = [name for name in values if name.startswith('livechat_ai_')]
-        self.assertFalse(leaked)
-        dumped = json.dumps(values, default=str)
-        for secret in ('internal-litellm', 'secret/model'):
-            self.assertNotIn(secret, dumped)
-
-    def test_portal_and_manager_get_nothing(self):
-        for user in (self.portal, self.manager):
-            Settings = self.env['res.config.settings'].with_user(user)
-            self._assert_no_ai_values(lambda: Settings.default_get(self.FIELDS))
-            self._assert_no_ai_values(lambda: Settings.browse().get_values())
-            try:
-                self.assertFalse(set(Settings.fields_get(self.FIELDS)))
-            except AccessError:
-                pass
-            with self.assertRaises(AccessError):
-                Settings.onchange({}, [], {name: {} for name in self.FIELDS})
-            with self.assertRaises(AccessError):
-                Settings.create({})
-            with self.assertRaises(AccessError):
-                Settings.browse().set_values()
-        # Nothing was changed by the attempts.
-        ICP = self.env['ir.config_parameter'].sudo()
-        self.assertEqual(ICP.get_param(ICP_BASE_URL), 'https://internal-litellm.example/v1')
-        self.assertEqual(ICP.get_param(ICP_LOG_PAYLOAD), 'True')
-
-    def test_system_admin_sees_and_edits(self):
-        Settings = self.env['res.config.settings'].with_user(self.admin)
-        values = Settings.default_get(self.FIELDS)
-        self.assertEqual(values['livechat_ai_base_url'], 'https://internal-litellm.example/v1')
-        self.assertTrue(values['livechat_ai_log_payload'])
-        self.assertEqual(values['livechat_ai_log_retention_days'], 21)
-        settings = Settings.create({'livechat_ai_log_retention_days': 30})
-        self.assertEqual(settings.livechat_ai_model_list, 'secret/model')
-        settings.set_values()
-        self.assertEqual(self.env['ir.config_parameter'].sudo().get_param(ICP_LOG_RETENTION_DAYS), '30')
+    def test_no_system_parameters_used(self):
+        self.assertFalse(self.env['ir.config_parameter'].sudo().search_count(
+            [('key', '=like', 'im_livechat_ai.%')]))
 
 
 class TestJobMonitoring(TransactionCase):
-    """P1-6: last run of the recovery cron and stuck jobs in the settings."""
+    """P1-6: last run of the recovery cron and stuck jobs on the channel's AI tab."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.cron = cls.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs')
-        channel = cls.env['im_livechat.channel'].create({'name': 'Monitor', 'ai_enabled': True})
+        channel = cls.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Monitor', 'ai_enabled': True})
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Monitor Session', 'channel_type': 'livechat',
             'livechat_operator_id': cls.env.ref('base.partner_admin').id,
             'livechat_channel_id': channel.id,
         })
         cls.channel = channel
+        cls.manager = new_test_user(cls.env, login='r2_monitor_manager',
+                                    groups='base.group_user,im_livechat.im_livechat_group_manager')
 
-    def _settings(self):
-        return self.env['res.config.settings'].create({})
+    def _monitor(self):
+        channel = self.channel.with_user(self.manager)
+        channel.invalidate_recordset()
+        return channel
 
     def test_ok_when_recent_and_no_stale_jobs(self):
         self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=1)
         self.env['im_livechat.ai.job'].search([]).unlink()
-        settings = self._settings()
-        self.assertEqual(settings.livechat_ai_cron_lastcall, self.cron.lastcall)
-        self.assertEqual(settings.livechat_ai_stale_job_count, 0)
-        self.assertFalse(settings.livechat_ai_job_warning)
+        channel = self._monitor()
+        self.assertEqual(channel.ai_cron_lastcall, self.cron.lastcall)
+        self.assertEqual(channel.ai_stale_job_count, 0)
+        self.assertFalse(channel.ai_job_warning)
 
     def test_warning_when_cron_late_or_jobs_stuck(self):
         self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=12)
@@ -624,37 +553,32 @@ class TestJobMonitoring(TransactionCase):
                     'run_after': fields.Datetime.now() - timedelta(minutes=1)})
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'deferred': True, 'run_after': fields.Datetime.now() + timedelta(minutes=9)})
-        settings = self._settings()
-        self.assertEqual(settings.livechat_ai_stale_job_count, 2)
-        self.assertIn('超過 5 分鐘沒有執行', settings.livechat_ai_job_warning)
-        self.assertIn('2 個 AI 回覆工作', settings.livechat_ai_job_warning)
+        channel = self._monitor()
+        self.assertEqual(channel.ai_stale_job_count, 2)
+        self.assertIn('超過 5 分鐘沒有執行', channel.ai_job_warning)
+        self.assertIn('2 個 AI 回覆工作', channel.ai_job_warning)
 
     def test_warning_when_never_run_or_inactive(self):
         self.cron.lastcall = False
-        self.assertIn('沒有執行', self._settings().livechat_ai_job_warning)
+        self.assertIn('沒有執行', self._monitor().ai_job_warning)
         self.cron.active = False
-        self.assertIn('已停用', self._settings().livechat_ai_job_warning)
+        self.assertIn('已停用', self._monitor().ai_job_warning)
 
-    def test_settings_form_onchange_shows_values(self):
-        """The settings form loads through onchange() (its view has company_id,
-        from base_setup): the computed values must be there."""
+    def test_channel_form_onchange_shows_values(self):
+        """A new channel form (onchange) gets the monitoring values too."""
         self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=12)
-        spec = {name: {} for name in ('company_id', 'livechat_ai_cron_lastcall', 'livechat_ai_stale_job_count',
-                                      'livechat_ai_job_warning', 'livechat_ai_api_key_set')}
-        value = self.env['res.config.settings'].onchange({}, [], spec)['value']
-        self.assertTrue(value['livechat_ai_cron_lastcall'])
-        self.assertIn('超過 5 分鐘沒有執行', value['livechat_ai_job_warning'])
-        self.assertTrue(value['livechat_ai_api_key_set'])
+        spec = {name: {} for name in ('ai_enabled', 'ai_cron_lastcall', 'ai_stale_job_count',
+                                      'ai_job_warning', 'ai_connection_ready')}
+        value = self.env['im_livechat.channel'].with_user(self.manager).onchange({}, [], spec)['value']
+        self.assertTrue(value['ai_cron_lastcall'])
+        self.assertIn('超過 5 分鐘沒有執行', value['ai_job_warning'])
+        self.assertFalse(value['ai_connection_ready'])
 
-    def test_monitoring_hidden_from_non_admins(self):
-        manager = new_test_user(self.env, login='r2_monitor_manager',
-                                groups='base.group_user,im_livechat.im_livechat_group_manager')
-        try:
-            values = self.env['res.config.settings'].with_user(manager).default_get(
-                ['livechat_ai_cron_lastcall', 'livechat_ai_job_warning'])
-        except AccessError:
-            return  # newer Odoo 18 builds refuse the read outright
-        self.assertFalse([k for k in values if k.startswith('livechat_ai_')])
+    def test_monitoring_hidden_from_operators(self):
+        operator = new_test_user(self.env, login='r2_monitor_operator',
+                                 groups='base.group_user,im_livechat.im_livechat_group_user')
+        with self.assertRaises(AccessError):
+            self.channel.with_user(operator).read(['ai_job_warning'])
 
 
 class TestAiDisclosure(TransactionCase):
@@ -663,8 +587,8 @@ class TestAiDisclosure(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Disclosure', 'ai_enabled': True, 'ai_bot_name': '小沃', 'ai_system_prompt': '只回答商品問題。',
         })
 
@@ -693,25 +617,24 @@ class TestAiDisclosure(TransactionCase):
         if info.get('options'):
             self.assertEqual(info['options']['default_message'], DEFAULT_WELCOME_MESSAGE)
 
-    def test_identity_block_first(self):
+    def test_no_identity_block_or_product_rules(self):
+        """18.0.1.2.0: the backend decides the persona; Odoo only sends the
+        channel's own prompt."""
         session = self.env['discuss.channel'].create({
             'name': 'Identity Session', 'channel_type': 'livechat',
             'livechat_operator_id': self.env.ref('base.partner_admin').id,
             'livechat_channel_id': self.channel.id,
         })
-        system = session._build_llm_messages(self.channel)[0]['content']
-        company = self.channel._ai_company_name()
-        self.assertTrue(company)
-        self.assertTrue(system.startswith(f'你是 {company} 的 AI 客服助理「小沃」。被問到身分時就這樣回答；'))
-        self.assertIn('不要自稱 ChatGPT、GPT、Codex、OpenAI 或其他產品／模型名稱。', system)
-        self.assertLess(system.index('不要自稱'), system.index('只回答商品問題。'))
-        self.assertLess(system.index('只回答商品問題。'), system.index('【商品資料規則】'))
-
-    def test_identity_uses_website_name(self):
-        if 'website' not in self.env or 'channel_id' not in self.env['website']._fields:
-            self.skipTest('website_livechat not installed')
-        website = self.env['website'].create({'name': '沃科技商店', 'channel_id': self.channel.id})
-        self.assertEqual(self.channel._ai_company_name(), website.name)
+        self.env['mail.message'].create({
+            'body': '你是誰？', 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': False,
+        })
+        messages = session._build_llm_messages(self.channel)
+        self.assertEqual(messages[0], {'role': 'system', 'content': '只回答商品問題。'})
+        dumped = json.dumps(messages, ensure_ascii=False)
+        for text in ('不要自稱', '商品資料規則', '小沃', self.env.company.name):
+            self.assertNotIn(text, dumped)
+        self.assertFalse(hasattr(self.channel, '_ai_identity_block'))
 
 
 class TestMigrationIdempotency(TransactionCase):
@@ -721,18 +644,17 @@ class TestMigrationIdempotency(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.pre = _load_migration('pre-migrate')
         cls.post = _load_migration('post-migrate')
         Channel = cls.env['im_livechat.channel']
-        cls.on = Channel.create({'name': 'Migrated On', 'ai_enabled': True, 'ai_max_retries': 1})
+        cls.on = Channel.create({**TEST_BACKEND, 'name': 'Migrated On', 'ai_enabled': True, 'ai_max_retries': 1})
         cls.custom = Channel.create({'name': 'Custom Keywords', 'ai_handoff_keywords': '專人,manager'})
         cls.log = cls.env['llm.api.log'].create({'status': 'success', 'request_payload': '[{"x": 1}]'})
 
     def _snapshot(self):
         cr = self.env.cr
         self.env.flush_all()
-        cr.execute("""SELECT id, ai_enabled, ai_max_retries, ai_max_tokens, ai_handoff_keywords,
+        cr.execute("""SELECT id, ai_enabled, ai_max_retries, ai_handoff_keywords,
                              ai_error_message, ai_bot_name, ai_bot_partner_id
                         FROM im_livechat_channel ORDER BY id""")
         channels = cr.fetchall()

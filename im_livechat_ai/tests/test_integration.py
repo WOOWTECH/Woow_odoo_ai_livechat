@@ -4,9 +4,8 @@ from unittest.mock import patch, MagicMock
 
 from odoo.tests.common import TransactionCase
 
-from odoo.addons.im_livechat_ai.models.im_livechat_channel import ICP_API_KEY
 
-from .common import TEST_BASE_URL, livechat_operator, run_ai_job, setup_litellm
+from .common import TEST_BASE_URL, livechat_operator, run_ai_job, TEST_BACKEND
 
 
 class TestAIIntegration(TransactionCase):
@@ -15,9 +14,9 @@ class TestAIIntegration(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
 
         cls.livechat_channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Integration Test Channel',
             'ai_enabled': True,
             'ai_model': 'gpt-4o',
@@ -154,8 +153,11 @@ class TestAIIntegration(TransactionCase):
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_multi_channel_isolation(self, mock_post):
-        """Channels share the system LiteLLM gateway but use their own model."""
+        """Each channel uses its own backend connection and model."""
         channel_b = self.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
+            'ai_endpoint_url': 'https://other-gateway.test/v1',
+            'ai_api_token': 'dummy-other-token',
             'name': 'Channel B',
             'ai_enabled': True,
             'ai_model': 'other-pool/other-model',
@@ -163,6 +165,8 @@ class TestAIIntegration(TransactionCase):
         })
 
         mock_response = MagicMock()
+
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             'choices': [{'message': {'content': 'MiniMax reply'}}],
             'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15},
@@ -180,9 +184,11 @@ class TestAIIntegration(TransactionCase):
 
         run_ai_job(self.env, session_b)
 
-        # Same system gateway for every channel
+        # The channel's own endpoint and token
         called_url = mock_post.call_args[0][0]
-        self.assertEqual(called_url, TEST_BASE_URL + '/chat/completions')
+        self.assertEqual(called_url, 'https://other-gateway.test/v1/chat/completions')
+        self.assertEqual(mock_post.call_args[1]['headers']['Authorization'], 'Bearer dummy-other-token')
+        self.assertNotEqual(called_url, TEST_BASE_URL + '/chat/completions')
 
         # Channel-specific model was sent
         sent_payload = mock_post.call_args[1]['json']
@@ -200,11 +206,11 @@ class TestAIIntegration(TransactionCase):
         self.livechat_channel.write({'ai_enabled': True})
 
     def test_missing_config_constraint(self):
-        """Saving an AI-enabled channel without a system API key raises an error."""
+        """Enabling AI on a channel without a backend connection raises an error."""
         from odoo.exceptions import UserError
-        self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
+        channel = self.env['im_livechat.channel'].create({'name': 'No Backend', 'ai_model': 'gpt-4o'})
         with self.assertRaises(UserError):
-            self.livechat_channel.write({'ai_model': 'gpt-4o'})
+            channel.write({'ai_enabled': True})
 
     # --- Bot Partner Isolation ---
 
@@ -232,6 +238,7 @@ class TestAIIntegration(TransactionCase):
     def test_log_records_token_usage(self, mock_post):
         """Logs should record token usage from API response."""
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             'choices': [{'message': {'content': 'Response'}}],
             'usage': {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150},
@@ -254,6 +261,7 @@ class TestAIIntegration(TransactionCase):
     def test_log_records_response_time(self, mock_post):
         """Logs should record response time."""
         mock_response = MagicMock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             'choices': [{'message': {'content': 'Quick response'}}],
             'usage': {},

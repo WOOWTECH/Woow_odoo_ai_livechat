@@ -1,20 +1,13 @@
 # -*- coding: utf-8 -*-
 
-import json
 from datetime import timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
-from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
-    DEFAULT_MODEL,
-    ICP_API_KEY,
-    ICP_BASE_URL,
-)
-
-from .common import TEST_BASE_URL, setup_litellm
+from .common import TEST_BACKEND, TEST_BASE_URL, call_backend, ok_response
 
 
 class TestImLivechatChannel(TransactionCase):
@@ -23,8 +16,8 @@ class TestImLivechatChannel(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Test AI Channel',
             'ai_enabled': True,
             'ai_model': 'gpt-4o',
@@ -48,31 +41,24 @@ class TestImLivechatChannel(TransactionCase):
         with self.assertRaises(UserError):
             self.channel.write({'ai_max_history': 201})
 
-    def test_temperature_valid(self):
-        """Valid temperature should pass."""
-        self.channel.write({'ai_temperature': 1.5})
-        self.assertAlmostEqual(self.channel.ai_temperature, 1.5)
-
-    def test_temperature_too_high(self):
-        """Temperature above 2.0 should raise UserError."""
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_temperature': 2.5})
-
-    def test_temperature_negative(self):
-        """Negative temperature should raise UserError."""
-        with self.assertRaises(UserError):
-            self.channel.write({'ai_temperature': -0.1})
-
     def test_default_values(self):
         """Default values should be set correctly."""
         channel = self.env['im_livechat.channel'].create({'name': 'Defaults Test'})
         self.assertFalse(channel.ai_enabled)
         self.assertEqual(channel.ai_max_history, 50)
-        self.assertAlmostEqual(channel.ai_temperature, 0.7)
-        self.assertEqual(channel.ai_max_tokens, 1024)
         self.assertEqual(channel.ai_max_retries, 2)
         self.assertEqual(channel.ai_bot_name, 'AI 客服助理')
-        self.assertEqual(channel.ai_model, DEFAULT_MODEL)
+        self.assertEqual(channel.ai_backend_type, 'openai')
+        self.assertEqual(channel.ai_log_retention_days, 14)
+        self.assertFalse(channel.ai_log_payload)
+        # 18.0.1.2.0: no default model, no default URL, no token.
+        self.assertFalse(channel.ai_model)
+        self.assertFalse(channel.ai_endpoint_url)
+        self.assertFalse(channel.ai_api_token_set)
+        self.assertFalse(channel.ai_connection_ready)
+        self.assertNotIn('ai_temperature', channel._fields)
+        self.assertNotIn('ai_max_tokens', channel._fields)
+        self.assertNotIn('ai_product_lookup', channel._fields)
 
     # --- Bot Partner Tests ---
 
@@ -104,120 +90,79 @@ class TestImLivechatChannel(TransactionCase):
     # --- API Call Tests (mocked) ---
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_call_llm_api_success(self, mock_post):
-        """Successful API call should return response data."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'Hello!'}}],
-            'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15},
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        messages = [{'role': 'user', 'content': 'Hi'}]
-        result = self.channel._call_llm_api(messages)
-
-        self.assertEqual(result['choices'][0]['message']['content'], 'Hello!')
-        self.assertEqual(result['usage']['total_tokens'], 15)
-
-        # Verify correct URL construction
-        call_args = mock_post.call_args
-        self.assertTrue(call_args[0][0].endswith('/chat/completions'))
+    def test_call_backend_success(self, mock_post):
+        """A successful call returns the reply text."""
+        mock_post.return_value = ok_response('Hello!')
+        result = call_backend(self.channel, 'Hi')
+        self.assertEqual(result['replies'], ['Hello!'])
+        self.assertEqual(result['reply'], 'Hello!')
+        self.assertFalse(result['error'])
+        self.assertTrue(mock_post.call_args[0][0].endswith('/chat/completions'))
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_call_llm_api_url_construction(self, mock_post):
-        """API URL should append /chat/completions if not present."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'OK'}}],
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        self.channel._call_llm_api([{'role': 'user', 'content': 'test'}])
-        called_url = mock_post.call_args[0][0]
-        self.assertEqual(called_url, TEST_BASE_URL + '/chat/completions')
+    def test_call_backend_url_construction(self, mock_post):
+        """/chat/completions is appended to the base URL."""
+        mock_post.return_value = ok_response()
+        call_backend(self.channel)
+        self.assertEqual(mock_post.call_args[0][0], TEST_BASE_URL + '/chat/completions')
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_call_llm_api_url_no_double_path(self, mock_post):
-        """Should not double-append /chat/completions."""
-        self.env['ir.config_parameter'].set_param(
-            ICP_BASE_URL, 'https://api.example.com/v1/chat/completions')
+    def test_call_backend_url_no_double_path(self, mock_post):
+        """A pasted /chat/completions is not appended twice."""
+        self.channel.write({'ai_endpoint_url': 'https://api.example.com/v1/chat/completions/'})
+        mock_post.return_value = ok_response()
+        call_backend(self.channel)
+        self.assertEqual(mock_post.call_args[0][0], 'https://api.example.com/v1/chat/completions')
 
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'OK'}}],
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        self.channel._call_llm_api([{'role': 'user', 'content': 'test'}])
-        called_url = mock_post.call_args[0][0]
-        self.assertEqual(called_url, 'https://api.example.com/v1/chat/completions')
+    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep')
+    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
+    def test_call_backend_empty_choices(self, mock_post, mock_sleep):
+        """Empty choices is an invalid response (an error, no reply)."""
+        response = ok_response()
+        response.json.return_value = {'choices': []}
+        mock_post.return_value = response
+        result = call_backend(self.channel)
+        self.assertFalse(result['replies'])
+        self.assertIn('回應格式不正確', result['error'])
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_call_llm_api_empty_choices(self, mock_post):
-        """Empty choices should raise ValueError."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {'choices': []}
-        mock_response.text = '{"choices": []}'
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        with self.assertRaises(ValueError):
-            self.channel._call_llm_api([{'role': 'user', 'content': 'test'}])
-
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_call_llm_api_sends_correct_payload(self, mock_post):
-        """Should send correct model, messages, temperature, max_tokens."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'OK'}}],
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
-        messages = [{'role': 'system', 'content': 'Be helpful'}, {'role': 'user', 'content': 'Hi'}]
-        self.channel._call_llm_api(messages)
-
-        call_kwargs = mock_post.call_args
-        sent_payload = call_kwargs[1]['json']
+    def test_call_backend_sends_correct_payload(self, mock_post):
+        """model, messages, user, metadata; no temperature, max_tokens or tools."""
+        mock_post.return_value = ok_response()
+        call_backend(self.channel, 'Hi')
+        sent_payload = mock_post.call_args[1]['json']
         self.assertEqual(sent_payload['model'], 'gpt-4o')
-        self.assertEqual(sent_payload['messages'], messages)
-        self.assertAlmostEqual(sent_payload['temperature'], 0.7)
-        self.assertEqual(sent_payload['max_tokens'], 1024)
+        self.assertEqual(sent_payload['messages'], [
+            {'role': 'system', 'content': 'You are a helpful assistant.'},
+            {'role': 'user', 'content': 'Hi'},
+        ])
+        for key in ('temperature', 'max_tokens', 'tools', 'tool_choice', 'stream'):
+            self.assertNotIn(key, sent_payload)
 
     # --- Test Connection Action ---
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_action_test_connection_success(self, mock_post):
         """Successful test should return success notification."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'choices': [{'message': {'content': 'OK'}}],
-            'usage': {'total_tokens': 10},
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
-
+        mock_post.return_value = ok_response()
         result = self.channel.action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
 
-    def test_action_test_connection_disabled(self):
-        """Testing with AI disabled should raise UserError."""
+    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
+    def test_action_test_connection_works_with_ai_disabled(self, mock_post):
+        """The administrator tests the connection before enabling AI."""
         self.channel.write({'ai_enabled': False})
-        with self.assertRaises(UserError):
-            self.channel.action_test_ai_connection()
-        # Restore
-        self.channel.write({'ai_enabled': True})
+        mock_post.return_value = ok_response()
+        result = self.channel.action_test_ai_connection()
+        self.assertEqual(result['params']['type'], 'success')
 
     def test_action_test_connection_no_config(self):
-        """Saving an AI-enabled channel without a system API key raises UserError."""
-        self.env['ir.config_parameter'].set_param(ICP_API_KEY, False)
+        """Without URL the test refuses; an AI-enabled channel cannot lose its URL."""
+        channel = self.env['im_livechat.channel'].create({'name': 'No Connection'})
         with self.assertRaises(UserError):
-            self.channel.write({'ai_model': 'gpt-4o'})
+            channel.action_test_ai_connection()
+        with self.assertRaises(UserError):
+            self.channel.write({'ai_endpoint_url': False})
 
     # --- View Action Tests ---
 
@@ -234,7 +179,6 @@ class TestLLMApiLog(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
             'name': 'Log Test Channel',
         })
@@ -277,7 +221,7 @@ class TestLLMApiLog(TransactionCase):
         self.assertEqual(logs[0].id, log2.id)
 
     def test_cleanup_old_logs(self):
-        """Should delete logs older than 30 days."""
+        """Should delete logs older than the retention (14 days by default)."""
         old_log = self.env['llm.api.log'].create({
             'status': 'success',
             'timestamp': fields.Datetime.now() - timedelta(days=31),

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
-from unittest.mock import patch
+
 
 from odoo.tests.common import TransactionCase
 
-from .common import livechat_operator, setup_litellm
+from .common import livechat_operator, TEST_BACKEND
 
 
 class TestDiscussChannel(TransactionCase):
@@ -13,10 +13,10 @@ class TestDiscussChannel(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
 
         # Create livechat channel with AI enabled
         cls.livechat_channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'AI Test Channel',
             'ai_enabled': True,
             'ai_model': 'gpt-4o',
@@ -138,11 +138,8 @@ class TestDiscussChannel(TransactionCase):
 
         self.assertTrue(len(messages) >= 2)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertEqual(
-            messages[0]['content'],
-            self.livechat_channel._ai_identity_block() + '\n\nYou are a helpful assistant.\n\n'
-            + self.livechat_channel._ai_product_guard(),
-        )
+        # 18.0.1.2.0: only the channel prompt, no identity block or product rules.
+        self.assertEqual(messages[0]['content'], 'You are a helpful assistant.')
 
     def test_build_llm_messages_visitor_role(self):
         """Visitor messages should have role 'user'."""
@@ -157,6 +154,7 @@ class TestDiscussChannel(TransactionCase):
         """Bot messages should have role 'assistant'."""
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         self._create_message(author_id=self.bot_partner.id, body='Hi there!')
+        self._create_message(author_id=self.visitor_partner.id, body='Thanks')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
         assistant_msgs = [m for m in messages if m['role'] == 'assistant']
@@ -231,18 +229,12 @@ class TestDiscussChannel(TransactionCase):
             self.assertLess(resp_idx, second_idx)
 
     def test_build_llm_messages_no_system_prompt(self):
-        """Without a channel prompt the system message holds only the product rules."""
+        """Without a channel prompt (and no event) there is no system message."""
         self.livechat_channel.write({'ai_system_prompt': False})
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
-        self.assertTrue(len(messages) >= 2)
-        self.assertEqual(messages[0], {
-            'role': 'system',
-            'content': self.livechat_channel._ai_identity_block() + '\n\n'
-            + self.livechat_channel._ai_product_guard(),
-        })
-        self.assertEqual(messages[1]['role'], 'user')
+        self.assertEqual(messages, [{'role': 'user', 'content': 'Hello'}])
 
         # Restore
         self.livechat_channel.write({'ai_system_prompt': 'You are a helpful assistant.'})

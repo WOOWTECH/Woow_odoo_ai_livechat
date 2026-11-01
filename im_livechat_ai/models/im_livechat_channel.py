@@ -46,7 +46,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL
 
 from ..tools.markdown import markdown_to_html
-from .discuss_channel import DOCUMENT_MODE_FILE, DOCUMENT_MODE_LINK, redact_base64
+from .discuss_channel import DOCUMENT_MODE_FILE, DOCUMENT_MODE_LINK, redact_base64, strip_handoff_marker
 
 _logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 N8N_RETRY_STATUSES = (429, 503)  # n8n: the only HTTP answers that are retried
 N8N_TEST_TIMEOUT = 15  # seconds, ping of the connection test
 MAX_N8N_REPLIES = 10
+MAX_HANDOFF_REASON_LENGTH = 300  # characters of n8n "handoff_reason" kept
 METADATA_MAX_VALUE = 512
 MAX_LOG_ERROR_LENGTH = 300
 CONNECTION_TEST_PROMPT = 'Connection test. Reply with "OK".'
@@ -92,9 +93,11 @@ LEGACY_ERROR_MESSAGE = (
     'Sorry, the AI assistant is temporarily unavailable. '
     'Please try again later or leave your contact information.'
 )
-# Explicit requests only (P0-1): single words such as 客服/人工/agent no
-# longer hand the conversation over.
-DEFAULT_HANDOFF_KEYWORDS = (
+# Handoff keywords are an optional pre-filter (owner decision 40): empty by
+# default, the backend decides the handoff ([[handoff]] / n8n "handoff").
+# The 18.0.1.1.0 default list, cleared by the 18.0.1.2.0 migration where a
+# channel still has it; also the example in the help text.
+HANDOFF_KEYWORDS_1_1_0 = (
     '找真人,真人客服,轉真人,轉人工,人工客服,找客服,聯絡客服,我要客服,'
     'human agent,talk to a human,real person,live agent'
 )
@@ -249,12 +252,18 @@ def n8n_replies(data):
     ``{"skip": true}``, the n8n AI Agent / Chat Trigger answer
     ``{"output": "text"}``, and the same wrapped in an n8n item list
     ``[{…}]``. Anything else raises LLMInvalidResponse. Reply attachments
-    are not supported (only the text is posted)."""
+    are not supported (only the text is posted).
+
+    With ``"handoff": true`` (n8n_handoff) the text is optional and
+    ``skip`` is ignored: ``{"handoff": true}`` alone gives no text."""
     if isinstance(data, list) and data and isinstance(data[0], dict):
         data = data[0]  # "Respond to Webhook" with all incoming items
     if not isinstance(data, dict):
         raise LLMInvalidResponse('invalid response: not a JSON object')
-    if data.get('skip') is True:
+    handoff = data.get('handoff') is True
+    if handoff and not any(key in data for key in ('reply', 'replies', 'output')):
+        return [], False
+    if data.get('skip') is True and not handoff:
         return [], True
     if 'replies' in data:
         raw = data['replies']
@@ -280,9 +289,35 @@ def n8n_replies(data):
         text = strip_think(text)
         if text:
             texts.append(text)
-    if not texts:
+    if not texts and not handoff:
         raise LLMEmptyResponse('empty reply')
     return texts, False
+
+
+def n8n_handoff(data):
+    """(handoff, reason) of an n8n answer: ``"handoff": true`` (the JSON
+    boolean) at the top level or in the first item of an item list, and the
+    optional ``"handoff_reason"`` string (at most 300 characters kept)."""
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        data = data[0]
+    if not isinstance(data, dict) or data.get('handoff') is not True:
+        return False, None
+    reason = data.get('handoff_reason')
+    reason = reason.strip()[:MAX_HANDOFF_REASON_LENGTH] if isinstance(reason, str) else ''
+    return True, reason or None
+
+
+def review_handoff(texts, handoff=False):
+    """Remove [[handoff]] markers from the reply texts (the visitor never
+    sees them); a marker in any text hands over. Texts left empty are
+    dropped. Returns (texts, handoff)."""
+    kept = []
+    for text in texts:
+        text, found = strip_handoff_marker(text)
+        handoff = handoff or found
+        if text:
+            kept.append(text)
+    return kept, handoff
 
 
 def usage_tokens(usage):
@@ -430,12 +465,14 @@ class ImLivechatChannel(models.Model):
     ai_handoff_keywords = fields.Char(
         string='Human Handoff Keywords',
         groups=AI_CONFIG_GROUP,
-        default=DEFAULT_HANDOFF_KEYWORDS,
-        help='Comma-separated words or phrases. When a visitor message contains one '
-             'of them, the AI sends the handoff message once, waits for an operator '
-             'and notifies the operators. Chinese entries match anywhere in the '
-             'message; English entries match whole words or phrases only, '
-             'case-insensitive.',
+        help='Optional, empty by default: the AI backend decides when the visitor wants '
+             'a human (it ends its reply with [[handoff]], n8n answers "handoff": true). '
+             'Comma-separated words or phrases checked before the backend is called: when '
+             'a visitor message contains one of them, the AI sends the handoff message at '
+             'once without calling the backend, waits for an operator and notifies the '
+             'operators. Chinese entries match anywhere in the message; English entries '
+             'match whole words or phrases only, case-insensitive. Example: 找真人,轉人工,'
+             'talk to a human.',
     )
     ai_pause_notice = fields.Text(
         string='Waiting Notice',
@@ -1207,12 +1244,15 @@ class ImLivechatChannel(models.Model):
                 answered (n8n ``message``)
 
         Returns:
-            dict: replies (list of str), reply (first reply or None), skip
-                (bool, n8n), error (short str or None), calls (int)
+            dict: replies (list of str, [[handoff]] markers removed), reply
+                (first reply or None), skip (bool, n8n), error (short str or
+                None), calls (int), handoff (bool: the backend asked for a
+                human, owner decision 40), handoff_reason (str or None, n8n)
         """
         self.ensure_one()
         channel = self.sudo()
-        result = {'replies': [], 'reply': None, 'skip': False, 'error': None, 'calls': 0}
+        result = {'replies': [], 'reply': None, 'skip': False, 'error': None, 'calls': 0,
+                  'handoff': False, 'handoff_reason': None}
         retries = max(0, min(channel.ai_max_retries, LLM_MAX_RETRIES))
         backend = channel.ai_backend_type or BACKEND_OPENAI
         log_model = (channel.ai_model or '').strip() if backend == BACKEND_OPENAI else False
@@ -1254,7 +1294,13 @@ class ImLivechatChannel(models.Model):
                     response_time=time.time() - start_time, retry_count=attempts - 1,
                     http_status=http_status, **log_base,
                 )
-                result.update(replies=texts, reply=texts[0] if texts else None, skip=skip)
+                # Owner decision 40: the backend decides the handoff.
+                handoff, reason = n8n_handoff(data) if backend == BACKEND_N8N else (False, None)
+                texts, handoff = review_handoff(texts, handoff)
+                if handoff:
+                    skip = False  # with handoff, skip is ignored
+                result.update(replies=texts, reply=texts[0] if texts else None, skip=skip,
+                              handoff=handoff, handoff_reason=reason)
                 return result
             except Exception as e:  # noqa: BLE001 - every failure is retried or reported
                 response_time = time.time() - start_time

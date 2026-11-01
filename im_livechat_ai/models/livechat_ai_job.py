@@ -87,6 +87,9 @@ DEFERRED_TRIGGER_DELAY_SECONDS = 2
 # Settings monitoring (P1-6): unfinished jobs this old, or a recovery cron
 # that has not run for this long, are reported.
 MONITOR_STALE_MINUTES = 5
+# Who decided a handoff (im_livechat.ai.job.handoff_source)
+HANDOFF_KEYWORD = 'keyword'  # a handoff keyword in the visitor message (no backend call)
+HANDOFF_BACKEND = 'backend'  # the backend's answer ([[handoff]] / n8n "handoff": true)
 
 # First key of the two-int advisory lock; the second is the discuss.channel id.
 LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.job') & 0x7FFFFFFF
@@ -238,6 +241,20 @@ class LivechatAiJob(models.Model):
     started_at = fields.Datetime(string='Started', readonly=True)
     finished_at = fields.Datetime(string='Finished', readonly=True)
     error = fields.Char(string='Error', readonly=True)
+    # The handoff record (owner decision 40): who decided it and why.
+    handoff_source = fields.Selection(
+        selection=[(HANDOFF_KEYWORD, 'Visitor keyword'), (HANDOFF_BACKEND, 'AI backend')],
+        string='Handoff Decided By',
+        readonly=True,
+        help='Visitor keyword: the visitor message contained a handoff keyword (no backend '
+             'call). AI backend: the backend asked for a human ([[handoff]] or n8n '
+             '"handoff": true).',
+    )
+    handoff_reason = fields.Char(
+        string='Handoff Reason',
+        readonly=True,
+        help='Reason given by the backend (n8n "handoff_reason"), also sent to the operators.',
+    )
     context_message_id = fields.Integer(
         string='Last Message In Context',
         readonly=True,
@@ -506,6 +523,12 @@ class LivechatAiJob(models.Model):
             return
         if result['error']:
             self._give_up(result['error'])
+        elif result['handoff']:
+            # Owner decision 40: the backend asked for a human. Its text is
+            # posted first, then the same handoff as for a keyword.
+            posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            self._process_backend_handoff(commit_step, posted, result['handoff_reason'])
+            return
         elif result['skip']:
             # n8n answered {"skip": true}: the workflow chose not to reply
             # (or replies later through its own channel).
@@ -614,12 +637,41 @@ class LivechatAiJob(models.Model):
         message = channel._create_bot_message(
             self.env, session, channel.ai_handoff_message or DEFAULT_HANDOFF_MESSAGE,
         )
+        self.write({'handoff_source': HANDOFF_KEYWORD})
         self._finish('done', False, reply_message=message)
         self._supersede_older()
         commit_step()
         minutes = channel._ai_wait_minutes()
         text = ('訪客在對話「%s」要求真人客服，AI 會先等候 %s 分鐘；'
                 '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, minutes)
+        self._notify_operators(text, 'AI 客服：訪客要求真人客服', notification_type='warning')
+        commit_step()
+
+    def _process_backend_handoff(self, commit_step, posted, reason=None):
+        """The backend's answer asked for a human ([[handoff]] or n8n
+        "handoff": true) and its text, if any, was posted as `posted`; the
+        caller holds the session row lock and checked that no operator wrote
+        meanwhile. Without text the channel's handoff message is posted.
+        Then the session waits for an operator (as after a handoff keyword),
+        the job records the handoff (source backend, reason) and the
+        operators are notified, with the reason when n8n gave one."""
+        channel = self.livechat_channel_id
+        session = self.discuss_channel_id
+        if not posted:
+            posted = [channel._create_bot_message(
+                self.env, session, channel.ai_handoff_message or DEFAULT_HANDOFF_MESSAGE)]
+        minutes = channel._ai_wait_minutes()
+        session._ai_pause(minutes=minutes, reason=PAUSE_HANDOFF)
+        self.write({'handoff_source': HANDOFF_BACKEND, 'handoff_reason': reason or False})
+        self._finish('done', False, reply_message=posted[0])
+        self._supersede_older()
+        commit_step()
+        if reason:
+            text = ('AI 判斷訪客在對話「%s」要找真人客服（%s），AI 會先等候 %s 分鐘；'
+                    '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, reason, minutes)
+        else:
+            text = ('AI 判斷訪客在對話「%s」要找真人客服，AI 會先等候 %s 分鐘；'
+                    '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, minutes)
         self._notify_operators(text, 'AI 客服：訪客要求真人客服', notification_type='warning')
         commit_step()
 

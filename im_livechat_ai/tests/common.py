@@ -3,16 +3,23 @@
 
 from unittest.mock import MagicMock
 
+from odoo.addons.im_livechat_ai.models.im_livechat_channel import HANDOFF_KEYWORDS_1_1_0
+
 TEST_BASE_URL = 'https://litellm.test/v1'
 TEST_API_KEY = 'dummy-test-token'
 TEST_MODEL = 'chatgpt-pool/gpt-6-sol'
 # Backend connection of an AI-enabled test channel (OpenAI compatible).
-# Spread first in a create() dict, so explicit keys of the test win.
+# Spread first in a create() dict, so explicit keys of the test win. The
+# handoff keywords (an optional pre-filter, empty on a new channel since
+# owner decision 40) are configured with the 18.0.1.1.0 list, so the keyword
+# tests keep their meaning.
+TEST_HANDOFF_KEYWORDS = HANDOFF_KEYWORDS_1_1_0
 TEST_BACKEND = {
     'ai_backend_type': 'openai',
     'ai_endpoint_url': TEST_BASE_URL,
     'ai_api_token': TEST_API_KEY,
     'ai_model': TEST_MODEL,
+    'ai_handoff_keywords': TEST_HANDOFF_KEYWORDS,
 }
 TEST_N8N_URL = 'https://n8n.test/webhook/livechat-ai'
 TEST_N8N_SECRET = 'dummy-signing-secret'

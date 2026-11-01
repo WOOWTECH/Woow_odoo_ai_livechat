@@ -233,13 +233,18 @@ msgstr "清理 AI API 日誌"
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
 msgid ""
-"Comma-separated words or phrases. When a visitor message contains one of "
-"them, the AI sends the handoff message once, waits for an operator and "
-"notifies the operators. Chinese entries match anywhere in the message; "
-"English entries match whole words or phrases only, case-insensitive."
+"Optional, empty by default: the AI backend decides when the visitor wants a "
+"human (it ends its reply with [[handoff]], n8n answers \"handoff\": true). "
+"Comma-separated words or phrases checked before the backend is called: when "
+"a visitor message contains one of them, the AI sends the handoff message at "
+"once without calling the backend, waits for an operator and notifies the "
+"operators. Chinese entries match anywhere in the message; English entries "
+"match whole words or phrases only, case-insensitive. Example: 找真人,轉人工,talk"
+" to a human."
 msgstr ""
-"以逗號分隔的字詞或片語。訪客訊息含其中之一時，AI "
-"回一次轉接訊息、通知客服並等候客服接手。中文關鍵字出現在訊息任何位置都算；英文字詞要整個字或整個片語相符，不分大小寫。"
+"選填，預設空白：由 AI 後端判斷訪客是否要找真人（回覆最後寫 [[handoff]]，n8n 回 \"handoff\": true）。"
+"這裡以逗號分隔的字詞或片語會在呼叫後端之前先檢查：訪客訊息含其中之一時，AI 不呼叫後端、直接回一次轉接訊息、通知客服並等候客服接手。"
+"中文關鍵字出現在訊息任何位置都算；英文字詞要整個字或整個片語相符，不分大小寫。例如：找真人,轉人工,talk to a human。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__completion_tokens
@@ -1107,3 +1112,36 @@ msgid ""
 "0 = default (OpenAI compatible 45 seconds, n8n 120 seconds). Otherwise 10-300 "
 "seconds per call. n8n calls are never retried after a timeout."
 msgstr "0＝預設（OpenAI 相容 45 秒、n8n 120 秒）。其他值為每次呼叫 10–300 秒。n8n 逾時後不會重試。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__handoff_source
+msgid "Handoff Decided By"
+msgstr "轉真人判斷來源"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__handoff_source
+msgid ""
+"Visitor keyword: the visitor message contained a handoff keyword (no backend "
+"call). AI backend: the backend asked for a human ([[handoff]] or n8n "
+"\"handoff\": true)."
+msgstr "訪客關鍵字：訪客訊息含轉真人關鍵字（不呼叫後端）。AI 後端：後端要求轉真人（[[handoff]] 或 n8n 的 \"handoff\": true）。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__keyword
+msgid "Visitor keyword"
+msgstr "訪客關鍵字"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__backend
+msgid "AI backend"
+msgstr "AI 後端"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__handoff_reason
+msgid "Handoff Reason"
+msgstr "轉真人原因"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__handoff_reason
+msgid "Reason given by the backend (n8n \"handoff_reason\"), also sent to the operators."
+msgstr "後端給的原因（n8n 的 \"handoff_reason\"），也會寫在給客服的通知裡。"

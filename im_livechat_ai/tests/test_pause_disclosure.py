@@ -22,7 +22,7 @@ from odoo.tools import SQL, sql
 
 from odoo.addons.im_livechat_ai.models.discuss_channel import RESUME_SYSTEM_NOTE
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
-    DEFAULT_HANDOFF_KEYWORDS,
+    HANDOFF_KEYWORDS_1_1_0,
     DEFAULT_HANDOFF_MESSAGE,
     DEFAULT_HANDOFF_PAUSE_MINUTES,
     DEFAULT_HANDOFF_WAIT_MINUTES,
@@ -108,7 +108,7 @@ class TestHandoffKeywords(PauseCase):
     """P0-1: only explicit requests hand over; English phrases match whole words."""
 
     def test_new_default(self):
-        self.assertEqual(self.channel.ai_handoff_keywords, DEFAULT_HANDOFF_KEYWORDS)
+        self.assertEqual(self.channel.ai_handoff_keywords, HANDOFF_KEYWORDS_1_1_0)
         keywords = self.channel._ai_handoff_keyword_list()
         for removed in ('客服', '人工', 'agent', 'operator', 'human'):
             self.assertNotIn(removed, keywords)
@@ -754,6 +754,10 @@ class TestMigrationIdempotency(TransactionCase):
 
     def test_handoff_keywords_migration(self):
         Channel = self.env['im_livechat.channel']
+        # Channels outside the test (created at install) have no keywords since
+        # owner decision 40: give them a custom value, so only ours change.
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = 'x' "
+                            "WHERE ai_handoff_keywords IS NULL")
         old = Channel.create({'name': 'Old Keywords'})
         empty = Channel.create({'name': 'No Keywords'})
         spaced = Channel.create({'name': 'Spaced Old Keywords'})
@@ -764,12 +768,12 @@ class TestMigrationIdempotency(TransactionCase):
         self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = %s WHERE id = %s",
                             (LEGACY_HANDOFF_KEYWORDS.replace(',', ', '), spaced.id))
         self.assertEqual(self.post.LEGACY_HANDOFF_KEYWORDS, LEGACY_HANDOFF_KEYWORDS)
-        self.assertEqual(self.post.NEW_HANDOFF_KEYWORDS, DEFAULT_HANDOFF_KEYWORDS)
+        self.assertEqual(self.post.NEW_HANDOFF_KEYWORDS, HANDOFF_KEYWORDS_1_1_0)
         changed = self.post.migrate_handoff_keywords(self.env.cr)
         self.env.invalidate_all()
         self.assertEqual(set(changed), {old.id, empty.id, spaced.id})
         for channel in (old, empty, spaced):
-            self.assertEqual(channel.ai_handoff_keywords, DEFAULT_HANDOFF_KEYWORDS)
+            self.assertEqual(channel.ai_handoff_keywords, HANDOFF_KEYWORDS_1_1_0)
         self.assertEqual(self.custom.ai_handoff_keywords, '專人,manager')
         self.assertFalse(self.post.migrate_handoff_keywords(self.env.cr))
 

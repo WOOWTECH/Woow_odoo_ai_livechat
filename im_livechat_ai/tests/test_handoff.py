@@ -20,7 +20,7 @@ from odoo.addons.im_livechat_ai.models.discuss_channel import (
 )
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     DEFAULT_ERROR_MESSAGE,
-    DEFAULT_HANDOFF_KEYWORDS,
+    HANDOFF_KEYWORDS_1_1_0,
     DEFAULT_HANDOFF_MESSAGE,
     DEFAULT_HANDOFF_PAUSE_MINUTES,
     DEFAULT_HANDOFF_WAIT_MINUTES,
@@ -333,7 +333,7 @@ class TestKeywordHandoff(HandoffCase):
         self.assertIn(DEFAULT_HANDOFF_MESSAGE, self._bot_messages().body)
 
     def test_default_keywords(self):
-        self.assertEqual(self.channel.ai_handoff_keywords, DEFAULT_HANDOFF_KEYWORDS)
+        self.assertEqual(self.channel.ai_handoff_keywords, HANDOFF_KEYWORDS_1_1_0)
         hit = self.channel._ai_is_handoff_request
         for text in ('找真人', '找客服', '轉人工服務', 'I want to talk to a HUMAN', 'Live agent please'):
             self.assertTrue(hit(text), text)

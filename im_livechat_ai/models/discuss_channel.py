@@ -36,6 +36,30 @@ RESUME_SYSTEM_NOTE = (
     '請一併回答訪客在等候期間提出、還沒有被回答的所有問題。'
 )
 
+# Owner decision 40 (same as woow_ai_contact_livechat): the backend decides
+# when the visitor goes to a human. openai backends (LiteLLM, Hermes) end
+# their reply with this marker; n8n answers "handoff": true or uses the
+# marker in "output" (Chat Trigger workflows).
+HANDOFF_MARKER = '[[handoff]]'
+# case insensitive, spaces inside allowed, also escaped (\[\[handoff\]\]) or in backticks
+HANDOFF_MARKER_RE = re.compile(r'`?\\?\[\\?\[\s*handoff\s*\\?\]\\?\]`?', re.IGNORECASE)
+# The only prompt text Odoo adds for the handoff (openai backends, channels with operators).
+HANDOFF_SYSTEM_LINE = (
+    '訪客要求真人客服、想跟真人說話時，在回覆最後單獨一行寫 [[handoff]]，系統就會轉接真人客服（不要說無法轉接；'
+    '只問電話或聯絡方式不算）。When the visitor asks for a human, end your reply with a line [[handoff]] '
+    'and Odoo hands the conversation to a human operator.'
+)
+
+
+def strip_handoff_marker(text):
+    """(text without the [[handoff]] markers, whether one was found)."""
+    if not text or not HANDOFF_MARKER_RE.search(text):
+        return text, False
+    text = HANDOFF_MARKER_RE.sub('', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip(), True
+
+
 # Why the AI of a session is paused (discuss.channel.ai_pause_reason)
 PAUSE_OPERATOR = 'operator'
 PAUSE_HANDOFF = 'handoff'
@@ -701,6 +725,14 @@ class DiscussChannel(models.Model):
             identity['name'] = session.anonymous_name or ''
         return identity
 
+    def _ai_handoff_available(self):
+        """True when the visitor can be handed to a human: the Live Chat
+        channel has an operator who is an internal user (the openai system
+        line and n8n ``channel.livechat.handoff_available``)."""
+        self.ensure_one()
+        livechat_channel = self.sudo().livechat_channel_id
+        return bool(livechat_channel) and any(not user.share for user in livechat_channel.user_ids)
+
     def _ai_channel_info(self):
         """``channel`` of the n8n payload."""
         self.ensure_one()
@@ -720,6 +752,7 @@ class DiscussChannel(models.Model):
                 'operator_name': self._ai_operator_name(operator) if operator else '',
                 'country_code': (session.country_id.code or '') if session.country_id else '',
                 'visitor_kind': self._ai_visitor_kind(),
+                'handoff_available': self._ai_handoff_available(),
             },
         }
 
@@ -939,10 +972,15 @@ class DiscussChannel(models.Model):
         as ``file`` parts with the original bytes and mimetype (plus a
         ``[附件]`` line), every other attachment as a ``[附件]`` line with its
         signed download URL (and a ``[附件說明]`` note when a limit skipped
-        it). Such a turn's content becomes a list of parts."""
+        it). Such a turn's content becomes a list of parts.
+
+        When the channel has operators, HANDOFF_SYSTEM_LINE ends the system
+        message: the model ends its reply with [[handoff]] to hand over."""
         livechat_channel = livechat_channel or self.sudo().livechat_channel_id
         mode = (livechat_channel.sudo().ai_document_mode if livechat_channel else None) or DOCUMENT_MODE_FILE
         parts = [conversation['system_prompt']] + [event['text'] for event in conversation['events']]
+        if self._ai_handoff_available():
+            parts.append(HANDOFF_SYSTEM_LINE)  # always the last line (owner decision 40)
         system = '\n\n'.join(p.strip() for p in parts if p and p.strip())
         history = conversation['history']
         has_attachments = any(entry.get('attachments') for entry in history)

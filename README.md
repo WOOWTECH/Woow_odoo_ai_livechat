@@ -66,6 +66,7 @@ The request formats are compatible with the n8n section of `woow_ai_contact` (do
 | `im_livechat_ai.log_payload` / `im_livechat_ai.log_retention_days` | Copied to every channel (**Log Conversation Content**, **Log Retention (days)**). |
 | All `im_livechat_ai.*` system parameters | Deleted (the key included; the model cache is no longer used). |
 | **Enable AI Integration**, model | Unchanged: a channel with AI on and copied credentials keeps answering. The model stays as text. |
+| **Human Handoff Keywords** still equal to the 18.0.1.1.0 default list | Cleared (owner decision 40: the backend decides the handoff; the keywords are an optional pre-filter, empty by default). Custom lists are kept. The WARNING line has the count. |
 | **Visitor Files** (new) | "Download link only" on Hermes channels (model `hermes-agent` or an endpoint URL containing `hermes`), "Attach the file" on the others. A value already set is kept. |
 | Settings > Live Chat AI, menu Live Chat > Configuration > AI Settings | Removed. |
 | Product lookup tools, Temperature, Max Tokens, model list, identity block | Removed: the backend does this now. |
@@ -223,7 +224,7 @@ flowchart TD
 Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until`, `ai_pause_reason`):
 
 - **Operator replied** (`operator`) -- When an internal user posts in a conversation, the AI stays quiet there for **30 minutes** (**Pause After Human Reply**, per channel, 1-1440). Each further operator post extends the pause to now + 30 minutes (never shortens it). During this pause the AI sends nothing: no reply, no notice.
-- **Visitor asked for a human** (`handoff`) -- Only explicit requests trigger it: `找真人`, `真人客服`, `轉真人`, `轉人工`, `人工客服`, `找客服`, `聯絡客服`, `我要客服`, `human agent`, `talk to a human`, `real person`, `live agent` (configurable). Chinese entries match anywhere in the message; English entries match whole words or phrases, case-insensitive, with any whitespace between the words. Single words such as `客服`, `人工`, `agent` no longer hand over (a question about "客服電話" is answered by the AI). The AI sends the handoff message once ("已幫您通知客服，請稍候。"), notifies the operators and **waits 10 minutes** (**Wait For Human After Handoff Request**, 1-1440).
+- **Visitor asked for a human** (`handoff`) -- **The backend decides** (owner decision 40, the same protocol as woow_ai_contact_livechat): the visitor message goes to the backend as usual, and an answer that asks for a human hands over. OpenAI compatible backends (LiteLLM, Hermes) end the reply with a line `[[handoff]]` (case-insensitive; spaces inside, backticks and the markdown escape `\[\[handoff\]\]` are accepted); n8n answers `"handoff": true` (top level or first item of an item list, optional `"handoff_reason"`, at most 300 characters kept), or ends `output` with the marker. Odoo removes the marker, posts the reply text (the channel's **Handoff Message** when there is none; with `handoff`, `skip` is ignored), then runs the handoff: the AI **waits 10 minutes** for an operator (**Wait For Human After Handoff Request**, 1-1440), the operators are notified (with the reason) and the reply job records it (**Handoff Decided By** = AI backend, **Handoff Reason**). If an operator posts while the backend is answering, the answer is discarded and nothing is handed over. **The only prompt text Odoo adds** for this: on a channel with operators (an internal user among the Live Chat channel's operators) the system message of an OpenAI request ends with the line 「訪客要求真人客服、想跟真人說話時，在回覆最後單獨一行寫 [[handoff]]，系統就會轉接真人客服（不要說無法轉接；只問電話或聯絡方式不算）。When the visitor asks for a human, end your reply with a line [[handoff]] and Odoo hands the conversation to a human operator.」; n8n gets `channel.livechat.handoff_available`. **Handoff keywords** are an optional pre-filter, **empty by default**: a visitor message containing one is handed over at once without calling the backend (Chinese entries match anywhere, English words or phrases as whole words, case-insensitive).
 - **Waiting notice** -- The first visitor message during that wait gets one fixed reply (**Waiting Notice**, default "已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 10 分鐘後繼續為您服務。"; `%(minutes)s` is replaced with the wait minutes). Once per wait (`discuss.channel.ai_pause_notice_sent`), no backend call.
 - **Operator takes over** -- An operator post during the wait turns it into an operator pause that ends 30 minutes after that post, even when the wait was set longer (a 120-minute wait does not keep the AI quiet for 120 minutes); the notice and the deferred replies are dropped quietly.
 - **Auto-resume** -- If no operator replied when the wait ends, the AI answers everything the visitor wrote during the wait, without the visitor writing again: each such message gets a deferred reply job due at the end of the wait (`im_livechat.ai.job.deferred`), the recovery cron is triggered for that time, and the newest job answers them all in one reply (the others are skipped). Expect the answer within about a minute after the wait ends (cron wake-up).
@@ -407,7 +408,7 @@ Validation: every range is checked on each save, whether AI is on or off, and en
 |---|---|---|
 | **Pause After Human Reply (minutes)** (`ai_handoff_pause_minutes`) | How long the AI stays quiet after an operator post (each post extends it), 1 - 1440. | `30` |
 | **Wait For Human After Handoff Request (minutes)** (`ai_handoff_wait_minutes`) | How long the AI waits for an operator after a handoff request before it answers again, 1 - 1440. | `10` |
-| **Human Handoff Keywords** (`ai_handoff_keywords`) | Comma-separated; Chinese entries match anywhere, English words/phrases match whole words, case-insensitive. | `找真人,真人客服,轉真人,轉人工,人工客服,找客服,聯絡客服,我要客服,human agent,talk to a human,real person,live agent` |
+| **Human Handoff Keywords** (`ai_handoff_keywords`) | Optional pre-filter (the backend decides the handoff, see [Human Handoff](#human-handoff)): comma-separated; a visitor message containing one is handed over without calling the backend. Chinese entries match anywhere, English words/phrases match whole words, case-insensitive. Example: `找真人,轉人工,talk to a human`. | *(empty)* |
 | **Handoff Message** (`ai_handoff_message`) | Sent once to the visitor who asked for a human. | 已幫您通知客服，請稍候。 |
 | **Waiting Notice** (`ai_pause_notice`) | Sent once to the first visitor message during the wait; `%(minutes)s` becomes the wait minutes (other text is sent as written). | 已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 %(minutes)s 分鐘後繼續為您服務。 |
 
@@ -509,7 +510,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Woow-Timestamp>.<raw body>
   "channel": {"id": 42, "type": "livechat",
               "livechat": {"livechat_channel_id": 3, "livechat_channel_name": "官網客服", "channel_id": 3,
                            "channel_name": "官網客服", "operator_name": "客服小明", "country_code": "TW",
-                           "visitor_kind": "guest"}},
+                           "visitor_kind": "guest", "handoff_available": true}},
   "system_prompt": "",
   "message": {"id": 991, "text": "請問營業時間？", "attachments": []},
   "history": [{"role": "assistant", "text": "您好，有什麼可以幫您？", "attachments": []}],
@@ -533,7 +534,10 @@ Answer: HTTP 200 with JSON, within the channel's Backend Reply Timeout (120 s by
 {"replies": [{"text": "第一則"}, {"text": "第二則"}]}
 {"skip": true}
 {"output": "markdown 文字"}
+{"output": "好的，我幫您轉接真人客服，請稍候。", "handoff": true, "handoff_reason": "訪客要求專人"}
 ```
+
+**Handoff** (owner decision 40): when `channel.livechat.handoff_available` is true (the channel has operators), answer `"handoff": true` (the JSON boolean, top level or in the first item of an item list) with an optional `"handoff_reason"` (at most 300 characters kept, shown to the operators and stored on the job). The reply text is posted first, then Odoo pauses the AI, notifies the operators and records the handoff; `{"handoff": true}` alone posts the channel's Handoff Message; with `handoff`, `skip` is ignored. A Chat Trigger workflow, which can only answer `output`, ends it with a line `[[handoff]]` instead (removed before posting).
 
 `reply` posts one message, `replies` several (at most 10), `skip` none (the job is done without a message), `output` (the default answer of an n8n AI Agent and of a Chat Trigger) one message. An n8n item list (`[{"reply": ...}]`, `[{"output": ...}]`) is accepted. Anything else (non-200, not JSON, no `reply`/`replies`/`skip`/`output`, empty text) is an error: the visitor gets the channel's error message, the operators are notified and the AI API log keeps the HTTP status. When the agent fails, answer non-200 (e.g. 502). Calls time out after the channel's Backend Reply Timeout (120 s by default) and are retried only when the connection could not be opened or n8n answered 429 / 503; never after a read timeout (the agent may still be running) or another answer. Redirects are not followed. Reply attachments are not supported (text only).
 
@@ -577,6 +581,8 @@ Copy the production webhook URL into **Endpoint URL** and the secret into **Acce
 ---
 
 ### Visitor files
+
+**Visitor upload stays off (訪客上傳維持關閉, owner decision 41)**: Live Chat visitors stay text-only and the module does not enable file upload in the chat widget. The forwarding below applies to files that do reach a conversation, for example from portal users or employees chatting as visitors.
 
 Images and files that **visitors** send in the chat go to the backend as they are: Odoo extracts no text and converts nothing (owner decision 39, same rules as woow_ai_contact). Attachments of bot, OdooBot and operator messages are never sent.
 
@@ -650,7 +656,7 @@ im_livechat_ai/
 │   └── 18.0.1.2.0/                      # System parameters -> every channel,
 │                                        #   then delete im_livechat_ai.* parameters;
 │                                        #   Visitor Files per channel (Hermes: link)
-├── tests/                               # 379 tests (see Testing)
+├── tests/                               # 390 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -692,7 +698,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **379 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **390 automated tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -704,9 +710,10 @@ The module has **379 automated tests**. All HTTP calls are mocked: no key or net
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
+| `test_backend_handoff.py` | 16 | Backend-decided handoff (owner decision 40): n8n `handoff` with and without text, item list, `output` marker, `skip` ignored, reason kept to 300 characters, `handoff_available`; openai `[[handoff]]` removed and handed over, marker only, marker variants, no marker no handoff, system line only with operators, operator interjecting during the call; keywords empty by default, configured keywords still hand over without the backend, migration clears the 1.1.0 default list |
 | `test_reply_markdown.py` | 8 | Markdown replies: a real advisor reply (pipe table, bold, shop links, off-site link as text), headings, lists, code, paragraphs, link host allowlist, HTML escaped everywhere |
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
-| `test_pause_disclosure.py` | 47 | Explicit handoff keywords, questions that only mention support, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
+| `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
 ### Running the Tests
 
@@ -811,7 +818,9 @@ Per channel: an OpenAI-compatible server with `/v1/chat/completions` (LiteLLM, H
 - **OpenAI requests**: `model` only when set, messages that start and end with a user turn, `user` and string `metadata`; no tools, temperature or max_tokens. Operators are user turns marked `[真人客服 name]`.
 - **Removed**: product lookup tools and Allow Product Lookup, Temperature, Max Tokens, the LiteLLM model list and its cache, the default URL and model, the identity block and product rules in the system prompt. The backend does all of this.
 - **Per-channel logs**: Log Conversation Content and Log Retention (days) per channel; AI API logs record the backend type and the HTTP status; the AI tab shows the recovery cron monitoring.
-- **Visitor files** (owner decision 39): visitor images go to OpenAI compatible backends as `image_url` data URIs, documents as `file` parts with the original bytes and type (Visitor Files = Attach the file) or as signed download links (Download link only, e.g. Hermes); n8n gets the attachments with signed URLs. Signed download route `/im_livechat_ai/attachment/<id>/<expires>.<hmac>` (1 hour, live chat attachments only). No text extraction. Dangerous types are links only; size, count and 7 MB limits; base64 is not stored in the logs.
+- **Handoff decided by the backend** (owner decision 40): `[[handoff]]` at the end of a reply (OpenAI compatible, n8n `output`) or n8n `"handoff": true` / `"handoff_reason"`; Odoo removes the marker, posts the text, waits for an operator and notifies the operators; channels with operators get one system line about it, n8n gets `handoff_available`. Handoff keywords are an optional pre-filter, empty by default (the 1.1.0 default list is cleared on upgrade).
+- **Markdown replies**: tables, headings, lists, code, bold and italics are rendered (built-in renderer, sanitized; links only to the store's hosts). **Backend Reply Timeout** per channel (45 s / n8n 120 s by default, 10 - 300 s).
+- **Visitor files** (owner decision 39; visitor upload stays off, decision 41): visitor images go to OpenAI compatible backends as `image_url` data URIs, documents as `file` parts with the original bytes and type (Visitor Files = Attach the file) or as signed download links (Download link only, e.g. Hermes); n8n gets the attachments with signed URLs. Signed download route `/im_livechat_ai/attachment/<id>/<expires>.<hmac>` (1 hour, live chat attachments only). No text extraction. Dangerous types are links only; size, count and 7 MB limits; base64 is not stored in the logs.
 - **Migration**: the 18.0.1.1.0 system parameters are copied to every channel and then deleted; AI state and models are kept; Visitor Files becomes "Download link only" on Hermes channels (model `hermes-agent` or a URL containing `hermes`) and "Attach the file" elsewhere (see [Upgrading to 18.0.1.2.0](#upgrading-to-180120)).
 
 ### v18.0.1.1.0

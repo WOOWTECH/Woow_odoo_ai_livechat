@@ -41,9 +41,11 @@ Features:
   the session operator and the bots never trigger the AI
 * Human handoff: an operator's reply pauses the AI for the conversation
   (30 minutes by default, per channel, extended by every operator reply);
-  explicit visitor requests such as "找真人" or "talk to a human" send a
-  handoff notice once, notify the operators and wait for an operator
-  (10 minutes by default); the first visitor message during the wait gets
+  the backend decides when the visitor wants a human (its reply ends with
+  [[handoff]], n8n answers "handoff": true; channels with operators get one
+  system line about it); Odoo posts the reply, notifies the operators and
+  waits for an operator (10 minutes by default); optional handoff keywords
+  hand over without calling the backend (empty by default); the first visitor message during the wait gets
   one waiting notice, and if no operator replies the AI answers what the
   visitor wrote meanwhile when the wait ends (recovery cron)
 * AI disclosure: robot avatar on the AI bot and an AI welcome message in the

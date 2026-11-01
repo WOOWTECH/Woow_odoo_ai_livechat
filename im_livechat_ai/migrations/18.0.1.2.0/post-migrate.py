@@ -19,7 +19,11 @@ settings, and nothing in the Settings app. This script:
 - sets "Visitor Files" (ai_document_mode, owner decision 39) where it is
   empty (pre-migrate creates the column empty): 'link' for Hermes channels
   (model 'hermes-agent' or an endpoint URL containing 'hermes', which take
-  no file content), 'file' for the others.
+  no file content), 'file' for the others;
+- clears the handoff keywords of channels that still have the 18.0.1.1.0
+  default list (owner decision 40: the backend decides the handoff, the
+  keywords are an optional pre-filter, empty by default); custom lists are
+  kept.
 
 ai_enabled is not touched: a channel with AI on and copied credentials keeps
 answering; one with AI on but no credentials stays on and is skipped until a
@@ -46,6 +50,11 @@ ICP_LOG_RETENTION_DAYS = 'im_livechat_ai.log_retention_days'
 # The URL 18.0.1.1.0 used when im_livechat_ai.base_url was not set.
 LEGACY_DEFAULT_BASE_URL = 'https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1'
 DEFAULT_LOG_RETENTION_DAYS = 14
+# The 18.0.1.1.0 default handoff keywords (cleared where unchanged).
+HANDOFF_KEYWORDS_1_1_0 = (
+    '找真人,真人客服,轉真人,轉人工,人工客服,找客服,聯絡客服,我要客服,'
+    'human agent,talk to a human,real person,live agent'
+)
 MAX_LOG_RETENTION_DAYS = 3650
 
 
@@ -117,7 +126,20 @@ def migrate_connection(cr, params):
     cr.execute("DELETE FROM ir_config_parameter WHERE key LIKE %s", (ICP_PREFIX + '%',))
     counts['params_deleted'] = cr.rowcount
     counts.update(migrate_document_mode(cr))
+    counts['keywords_cleared'] = clear_default_handoff_keywords(cr)
     return counts
+
+
+def clear_default_handoff_keywords(cr):
+    """Empty the keywords that still equal the 1.1.0 default (whitespace
+    ignored). Returns the number of channels changed."""
+    if not sql.column_exists(cr, TABLE, 'ai_handoff_keywords'):
+        return 0
+    cr.execute(SQL(
+        "UPDATE %s SET ai_handoff_keywords = NULL "
+        "WHERE regexp_replace(ai_handoff_keywords, '\\s', '', 'g') = regexp_replace(%s, '\\s', '', 'g')",
+        SQL.identifier(TABLE), HANDOFF_KEYWORDS_1_1_0))
+    return cr.rowcount
 
 
 def migrate_document_mode(cr):
@@ -160,6 +182,7 @@ def migrate(cr, version):
         "(1.1.0 default URL used: %(legacy_default_url)s), access token copied to %(token_copied)s, "
         "log settings copied to %(log_settings_copied)s, %(params_deleted)s im_livechat_ai.* system "
         "parameter(s) deleted; visitor files set to link on %(document_mode_link)s and to file on "
-        "%(document_mode_file)s channel(s); AI enabled on %(ai_enabled)s channel(s), %(ai_enabled_with_connection)s "
+        "%(document_mode_file)s channel(s); 1.1.0 default handoff keywords cleared on %(keywords_cleared)s "
+        "channel(s); AI enabled on %(ai_enabled)s channel(s), %(ai_enabled_with_connection)s "
         "of them with URL and token", counts,
     )

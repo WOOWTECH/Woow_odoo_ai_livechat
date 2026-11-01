@@ -134,50 +134,6 @@ class TestHandoffKeywords(PauseCase):
         self.assertEqual(job.kind, 'reply')
         self.assertFalse(self.session.ai_paused_until)
 
-    def test_questions_that_only_mention_support_do_not_hand_off(self):
-        """Live test 2026-11-01 (l23, c062-c065, c042, l22): the AI answers these."""
-        hit = self.channel._ai_is_handoff_request
-        for text in ('如果我要找客服，電話是多少？', '請問怎麼聯絡客服？', '客服的上班時間是幾點？',
-                     '如果要聯絡客服，一般需要準備哪些資料？', '你們客服幾點上班？',
-                     '客服人員是真人還是機器人？', '請問客服的服務態度評價如何？可以推薦燈具嗎？',
-                     '客服電話或 email 是什麼？', '請問客服今天有上班嗎？', '找客服要用什麼方式？',
-                     '我上個月買的燈壞了，客服都不理我，我要客訴！',
-                     '我想先確認一下訂單出貨進度，之後如果有問題再聯絡客服可以嗎？'):
-            self.assertFalse(hit(text), text)
-
-    def test_live_test_requests_hand_off(self):
-        hit = self.channel._ai_is_handoff_request
-        for text in ('找真人', '我要找真人客服', '轉人工', '真人客服', '請幫我轉客服', '我要找客服',
-                     '找客服', 'talk to a human', 'human agent', 'Talk to a human please',
-                     '我想找真人幫我報價', '麻煩幫我轉接真人，謝謝！', '找真人！！！', '我還是要找真人',
-                     '如果可以，請幫我轉真人',
-                     '我等了很久都沒有結果，真人客服可以來處理一下我的訂單問題嗎'):
-            self.assertTrue(hit(text), text)
-
-    def test_long_question_that_mentions_a_keyword(self):
-        """A longer question with a keyword but no request phrase: the AI answers."""
-        hit = self.channel._ai_is_handoff_request
-        self.assertFalse(hit('我想知道你們網站上的真人客服通常會在多久之內回覆訪客的留言？'))
-        self.assertFalse(hit('想請教一下你們的人工客服是外包的團隊還是公司內部自己的員工呢？'))
-        # the same without a question mark reads as a request
-        self.assertTrue(hit('我已經在這邊等了很久了，請你們的人工客服趕快過來處理'))
-
-    def test_request_phrase_follows_the_keyword_list(self):
-        """Request phrases only use person words of the channel's own keywords."""
-        self.channel.ai_handoff_keywords = '專人, manager'
-        hit = self.channel._ai_is_handoff_request
-        self.assertTrue(hit('請幫我轉專人'))
-        self.assertFalse(hit('請幫我轉客服'))
-        self.assertFalse(hit('我要找真人'))
-        self.channel.ai_handoff_keywords = False
-        self.assertFalse(hit('請幫我轉真人'))
-
-    def test_question_about_support_gets_ai_reply_not_handoff(self):
-        self._post('如果要聯絡客服，一般需要準備哪些資料？', self.visitor)
-        job = self._jobs()
-        self.assertEqual(job.kind, 'reply')
-        self.assertFalse(self.session.ai_paused_until)
-
     def test_custom_english_phrase(self):
         self.channel.ai_handoff_keywords = '主管, Speak To  Manager'
         hit = self.channel._ai_is_handoff_request

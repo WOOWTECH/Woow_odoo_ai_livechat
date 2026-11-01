@@ -134,30 +134,6 @@ MONITOR_STALE_MINUTES = 5
 # words ("live agent" does not match "olive agents"); others (e.g. Chinese)
 # match anywhere in the text.
 _WORD_CHARS_RE = re.compile(r"^[0-9a-z_' \-]+$")
-
-# Handoff decision (live test 2026-11-01): a keyword that is only MENTIONED
-# in a question about the support service ("請問怎麼聯絡客服？") must not
-# hand the conversation over. In order:
-# 1. no keyword, no request phrase                      -> no handoff
-# 2. a support-information word (HANDOFF_INFO_WORDS)    -> no handoff (the AI answers)
-# 3. an English phrase keyword or a request phrase      -> handoff
-# 4. a Chinese keyword in a short message               -> handoff
-# 5. a Chinese keyword in a longer question (?/？)       -> no handoff; otherwise handoff
-# A request phrase is a request verb, optionally a linking word, then a
-# person word that appears in one of the channel's keywords ("幫我轉客服",
-# "我想找真人"), so custom keyword lists keep their own meaning.
-HANDOFF_SHORT_MAX_CHARS = 20  # letters and digits, punctuation and spaces not counted
-HANDOFF_REQUEST_VERBS = ('我要', '我想', '想要', '幫我', '請', '麻煩', '給我', '轉', '找', '接', '換', '叫')
-HANDOFF_REQUEST_LINKS = ('一下', '個', '給', '成', '到', '找', '轉', '接', '聯絡', '聯繫')
-HANDOFF_PERSON_WORDS = ('真人', '人工', '客服', '專人')
-# Not ambiguous words such as 還是 ("or" / "still": 我還是要找真人) or 如果
-# (如果可以，請幫我轉真人), which also appear in real requests.
-HANDOFF_INFO_WORDS = (
-    '怎麼', '怎樣', '如何', '電話', '號碼', '幾號', '幾點', '時間', '時段', '上班', '下班', '營業',
-    '多少', '哪些', '哪裡', '哪個', '什麼', '甚麼', '資料', '評價', '態度', '方式', '管道', '信箱',
-    'email', 'e-mail',
-)
-_HANDOFF_NOT_COUNTED_RE = re.compile(r'[\W_]+')
 _PAUSE_NOTICE_PLACEHOLDER_RE = re.compile(r'%\(minutes\)[sd]')
 
 # Reasoning blocks and special tokens some models leave in the answer.
@@ -946,49 +922,24 @@ class ImLivechatChannel(models.Model):
         raw = self.ai_handoff_keywords or ''
         return [' '.join(k.lower().split()) for k in re.split(r'[,，、\n]', raw) if k.strip()]
 
-    @staticmethod
-    def _ai_phrase_in(keyword, text):
-        """English keyword: whole words, any whitespace between them."""
-        phrase = r'\s+'.join(re.escape(word) for word in keyword.split(' '))
-        return bool(re.search(r'(?<![0-9a-z_])' + phrase + r'(?![0-9a-z_])', text))
-
-    @staticmethod
-    def _ai_handoff_request_re(keywords):
-        """Request phrase regex for these keywords, or None (see HANDOFF_PERSON_WORDS)."""
-        persons = [word for word in HANDOFF_PERSON_WORDS if any(word in keyword for keyword in keywords)]
-        if not persons:
-            return None
-        def alternatives(words):
-            return '|'.join(re.escape(word) for word in sorted(words, key=len, reverse=True))
-        return re.compile('(?:%s)(?:%s)?(?:%s)' % (
-            alternatives(HANDOFF_REQUEST_VERBS), alternatives(HANDOFF_REQUEST_LINKS), alternatives(persons)))
-
     def _ai_is_handoff_request(self, text):
-        """True when the visitor asks for a human (rules at HANDOFF_SHORT_MAX_CHARS).
-
-        Keywords: Chinese (any non-Latin) entries match anywhere in the text,
-        English words and phrases as whole words, case-insensitive, any
-        whitespace between the words. A question that only mentions the
-        support service ("如果要聯絡客服，一般需要準備哪些資料？") is answered
-        by the AI instead."""
+        """True when the visitor text contains one of the handoff keywords:
+        Chinese (any non-Latin) entries anywhere in the text, English words
+        and phrases as whole words, case-insensitive, any whitespace between
+        the words."""
         self.ensure_one()
-        text = (text or '').lower().strip()
+        text = (text or '').lower()
         if not text:
             return False
-        keywords = self._ai_handoff_keyword_list()
-        english = any(self._ai_phrase_in(k, text) for k in keywords if _WORD_CHARS_RE.match(k))
-        chinese = any(k in text for k in keywords if not _WORD_CHARS_RE.match(k))
-        request_re = self._ai_handoff_request_re(keywords)
-        request = bool(request_re and request_re.search(text))
-        if not (english or chinese or request):
-            return False
-        if any(word in text for word in HANDOFF_INFO_WORDS):
-            return False
-        if english or request:
-            return True
-        if len(_HANDOFF_NOT_COUNTED_RE.sub('', text)) <= HANDOFF_SHORT_MAX_CHARS:
-            return True
-        return not text.endswith(('?', '？'))
+        for keyword in self._ai_handoff_keyword_list():
+            if _WORD_CHARS_RE.match(keyword):
+                phrase = r'\s+'.join(re.escape(word) for word in keyword.split(' '))
+                pattern = r'(?<![0-9a-z_])' + phrase + r'(?![0-9a-z_])'
+                if re.search(pattern, text):
+                    return True
+            elif keyword in text:
+                return True
+        return False
 
     def _ai_pause_minutes(self):
         """Pause after an operator's message (minutes)."""

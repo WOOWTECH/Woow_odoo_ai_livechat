@@ -5,23 +5,30 @@ from datetime import timedelta
 
 from odoo import api, fields, models
 
-from .im_livechat_channel import DEFAULT_LOG_RETENTION_DAYS, ICP_LOG_RETENTION_DAYS
+from .im_livechat_channel import (
+    BACKEND_N8N,
+    BACKEND_OPENAI,
+    DEFAULT_LOG_RETENTION_DAYS,
+    MAX_LOG_RETENTION_DAYS,
+    MIN_LOG_RETENTION_DAYS,
+)
 
 _logger = logging.getLogger(__name__)
 
 
 class LLMApiLog(models.Model):
     """
-    Log LLM API call activity for monitoring and debugging.
+    AI backend calls, for monitoring and debugging (AI API 日誌).
 
     Readable by Live Chat administrators only. By default a log keeps only
-    timestamp, model, token usage, timing, status and a short error; the
-    request/response payloads (conversation content) are stored only while
-    the system setting "Log Conversation Content" is on. Logs older than the
-    configured retention (default 14 days) are removed by a daily cron.
+    timestamp, backend, model, token usage, timing, status, HTTP status and a
+    short error; the request/response payloads (conversation content) are
+    stored only while the channel's "Log Conversation Content" is on. Logs
+    older than the channel's retention (default 14 days) are removed by a
+    daily cron.
     """
     _name = 'llm.api.log'
-    _description = 'LLM API Log'
+    _description = 'AI API Log'
     _order = 'timestamp desc'
     _rec_name = 'timestamp'
 
@@ -50,10 +57,23 @@ class LLMApiLog(models.Model):
         help='The chat session associated with this API call',
     )
 
-    # LLM Info
+    # Backend
+    backend_type = fields.Selection(
+        selection=[
+            (BACKEND_OPENAI, 'OpenAI compatible (LiteLLM, Hermes…)'),
+            (BACKEND_N8N, 'n8n Webhook'),
+        ],
+        string='Backend Type',
+        help='Backend type of the channel at the time of the call',
+    )
     model = fields.Char(
         string='Model',
-        help='The LLM model name used for this call',
+        help='Model name sent with the call (OpenAI compatible backends; empty when '
+             'not set or for n8n)',
+    )
+    http_status = fields.Integer(
+        string='HTTP Status',
+        help='HTTP status code of the backend answer (empty when no answer arrived)',
     )
 
     # Status
@@ -72,13 +92,13 @@ class LLMApiLog(models.Model):
     # Payload Data
     request_payload = fields.Text(
         string='Request Payload',
-        help='The messages array sent to the LLM API (JSON). Only stored while '
-             '"Log Conversation Content" is enabled in Settings > Live Chat AI.',
+        help='The request body sent to the backend (JSON, without the token). Only '
+             'stored while "Log Conversation Content" is on for the channel.',
     )
     response_payload = fields.Text(
         string='Response Payload',
-        help='The response received from the LLM API (JSON). Only stored while '
-             '"Log Conversation Content" is enabled in Settings > Live Chat AI.',
+        help='The answer received from the backend (JSON). Only stored while '
+             '"Log Conversation Content" is on for the channel.',
     )
 
     # Token Usage
@@ -114,54 +134,66 @@ class LLMApiLog(models.Model):
         default=0,
         help='Number of retry attempts made',
     )
-    tool_names = fields.Char(
-        string='Tools Requested',
-        help='Product lookup tools the model asked for in this response '
-             '(names only; the arguments are conversation content)',
-    )
 
     @api.model
-    def _get_retention_days(self):
-        value = self.env['ir.config_parameter'].sudo().get_param(ICP_LOG_RETENTION_DAYS)
-        try:
-            days = int(value) if value else DEFAULT_LOG_RETENTION_DAYS
-        except (TypeError, ValueError):
-            _logger.warning("Invalid %s value %r, using %s days",
-                            ICP_LOG_RETENTION_DAYS, value, DEFAULT_LOG_RETENTION_DAYS)
-            days = DEFAULT_LOG_RETENTION_DAYS
-        return max(1, days)
-
-    @api.model
-    def _erase_payloads(self):
-        """Remove stored conversation content from all logs."""
-        logs = self.search(['|', ('request_payload', '!=', False), ('response_payload', '!=', False)])
+    def _erase_payloads(self, livechat_channel_ids=None):
+        """Remove stored conversation content (of all logs, or of the logs of
+        the given live chat channels)."""
+        domain = ['|', ('request_payload', '!=', False), ('response_payload', '!=', False)]
+        if livechat_channel_ids is not None:
+            domain = [('livechat_channel_id', 'in', list(livechat_channel_ids))] + domain
+        logs = self.search(domain)
         if logs:
             logs.write({'request_payload': False, 'response_payload': False})
-            _logger.info("Erased conversation content from %s LLM API logs", len(logs))
+            _logger.info("Erased conversation content from %s AI API logs", len(logs))
         return len(logs)
+
+    @api.model
+    def _retention_by_channel(self):
+        """{live chat channel id: retention days} for every channel (archived
+        ones included), bounded to 1-3650; invalid values use 14 days."""
+        Channel = self.env['im_livechat.channel'].sudo().with_context(active_test=False)
+        retention = {}
+        for channel in Channel.search([]):
+            days = channel.ai_log_retention_days
+            if not days or days < MIN_LOG_RETENTION_DAYS:
+                days = DEFAULT_LOG_RETENTION_DAYS
+            retention[channel.id] = min(days, MAX_LOG_RETENTION_DAYS)
+        return retention
 
     def _cleanup_old_logs(self):
         """
-        Delete API logs older than the configured retention (default 14 days).
+        Delete API logs older than their channel's retention (default 14
+        days; logs without a channel use 14 days). Finished AI reply jobs
+        follow the same retention.
 
-        Called by a scheduled action to prevent the log table
-        from growing indefinitely.
+        Called daily by a scheduled action.
 
         Returns:
-            int: Number of records deleted
+            int: Number of logs deleted
         """
-        days = self._get_retention_days()
-        cutoff_date = fields.Datetime.now() - timedelta(days=days)
-        old_logs = self.search([('timestamp', '<', cutoff_date)])
-        count = len(old_logs)
-
-        if count > 0:
+        Log = self.sudo()
+        Job = self.env['im_livechat.ai.job']
+        now = fields.Datetime.now()
+        by_days = {}
+        for channel_id, days in self._retention_by_channel().items():
+            by_days.setdefault(days, []).append(channel_id)
+        count = 0
+        for days, channel_ids in by_days.items():
+            old_logs = Log.search([
+                ('livechat_channel_id', 'in', channel_ids),
+                ('timestamp', '<', now - timedelta(days=days)),
+            ])
+            count += len(old_logs)
             old_logs.unlink()
-            _logger.info("Cleaned up %s LLM API logs older than %s days", count, days)
-        else:
-            _logger.debug("No LLM API logs to clean up")
-
-        # Finished AI reply jobs follow the same retention.
-        self.env['im_livechat.ai.job']._cleanup_old_jobs(days)
-
+            Job._cleanup_old_jobs(days, channel_ids)
+        orphan_logs = Log.search([
+            ('livechat_channel_id', '=', False),
+            ('timestamp', '<', now - timedelta(days=DEFAULT_LOG_RETENTION_DAYS)),
+        ])
+        count += len(orphan_logs)
+        orphan_logs.unlink()
+        Job._cleanup_old_jobs(DEFAULT_LOG_RETENTION_DAYS, [False])
+        if count:
+            _logger.info("Cleaned up %s AI API logs older than their channel retention", count)
         return count

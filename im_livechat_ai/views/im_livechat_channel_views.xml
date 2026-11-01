@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- Live Chat > Configuration > Channels > AI tab: everything of the module lives here
+         (18.0.1.2.0: no Settings page). The backend connection is per channel and is
+         managed by system administrators; Live Chat managers only see whether it is set. -->
     <record id="im_livechat_channel_view_form_inherit_ai" model="ir.ui.view">
         <field name="name">im_livechat.channel.form.inherit.ai</field>
         <field name="model">im_livechat.channel</field>
@@ -7,19 +10,62 @@
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
                 <page string="AI Integration" name="ai_integration" groups="im_livechat.im_livechat_group_manager">
-                    <group>
-                        <group string="AI Configuration">
+                    <group name="ai_backend_connection">
+                        <group string="AI Backend Connection" name="ai_backend">
                             <field name="ai_enabled"/>
-                            <field name="ai_model"
-                                   invisible="not ai_enabled"
-                                   required="ai_enabled"/>
-                            <field name="ai_product_lookup" invisible="not ai_enabled"/>
-                            <div class="text-muted" colspan="2" invisible="not ai_enabled">
-                                The LiteLLM URL and API key are managed by system administrators
-                                in Settings &gt; Live Chat AI, where the model list is refreshed.
+                            <field name="ai_backend_type" groups="base.group_system" widget="radio"/>
+                            <field name="ai_backend_type" groups="!base.group_system" readonly="1"/>
+                            <field name="ai_endpoint_url" groups="base.group_system"
+                                   placeholder="https://litellm.example.com/v1"/>
+                            <field name="ai_api_token" groups="base.group_system" password="True"
+                                   placeholder="Leave empty to keep the saved token"/>
+                            <field name="ai_api_token_set" invisible="1" groups="base.group_system"/>
+                            <field name="ai_model" invisible="ai_backend_type == 'n8n'"
+                                   required="ai_enabled and ai_backend_type == 'openai'"
+                                   placeholder="chatgpt-pool/gpt-6-sol"/>
+                            <field name="ai_document_mode" widget="radio"
+                                   invisible="ai_backend_type == 'n8n'"/>
+                            <div colspan="2" class="text-muted" invisible="ai_backend_type == 'n8n'">
+                                Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly.
+                                Download link only: for Hermes and other backends that do not take file
+                                content; the backend downloads the file itself.
+                            </div>
+                            <field name="ai_connection_ready" invisible="1"/>
+                        </group>
+                        <group name="ai_backend_status">
+                            <div colspan="2" class="text-success" invisible="not ai_connection_ready">
+                                Backend connection is set up (managed by system administrators).
+                            </div>
+                            <div colspan="2" class="text-warning" invisible="ai_connection_ready">
+                                No backend connection yet: a system administrator must fill it in.
+                            </div>
+                            <div colspan="2" class="text-muted" groups="base.group_system">
+                                <span invisible="not ai_api_token_set">An access token is saved (it is never displayed). </span>
+                                <span invisible="ai_api_token_set">No access token saved yet. </span>
+                                OpenAI compatible (LiteLLM, Hermes…): the base URL ending in /v1 and the
+                                API key (sent as a Bearer token). n8n: the production webhook URL and,
+                                optionally, a signing secret (Odoo then signs each request with
+                                X-Woow-Signature and never sends the secret; without it, e.g. for a public
+                                Chat Trigger, requests are not signed). Odoo only records, forwards and
+                                manages the conversation: the backend decides the answer, its tools and its
+                                permissions.
+                            </div>
+                            <div colspan="2">
+                                <button name="action_test_ai_connection"
+                                        string="Test Connection"
+                                        type="object"
+                                        class="btn-primary"
+                                        groups="base.group_system"/>
+                                <button name="action_view_api_logs"
+                                        string="AI API Logs"
+                                        type="object"
+                                        class="btn-link"/>
                             </div>
                         </group>
-                        <group string="Bot Settings" invisible="not ai_enabled">
+                    </group>
+
+                    <group invisible="not ai_enabled">
+                        <group string="Bot Settings">
                             <field name="ai_bot_name"/>
                             <field name="ai_bot_partner_id" readonly="1"/>
                             <field name="ai_welcome_message"/>
@@ -28,26 +74,17 @@
                                 channel welcome message, so they know they are talking to an AI.
                             </div>
                         </group>
+                        <group string="Error Handling">
+                            <field name="ai_error_message"
+                                   placeholder="Sorry, the AI assistant is temporarily unavailable..."/>
+                        </group>
                     </group>
 
                     <group string="System Prompt" invisible="not ai_enabled">
                         <field name="ai_system_prompt"
                                nolabel="1"
-                               placeholder="You are a helpful customer service assistant. Please answer in the user's language..."
+                               placeholder="Optional. Leave empty to let the backend decide the persona."
                                colspan="2"/>
-                    </group>
-
-                    <group invisible="not ai_enabled">
-                        <group string="Advanced Settings">
-                            <field name="ai_max_history"/>
-                            <field name="ai_temperature"/>
-                            <field name="ai_max_tokens"/>
-                            <field name="ai_max_retries"/>
-                        </group>
-                        <group string="Error Handling">
-                            <field name="ai_error_message"
-                                   placeholder="Sorry, the AI assistant is temporarily unavailable..."/>
-                        </group>
                     </group>
 
                     <group string="Human Handoff" invisible="not ai_enabled">
@@ -66,17 +103,32 @@
                         </div>
                     </group>
 
-                    <group invisible="not ai_enabled">
-                        <button name="action_test_ai_connection"
-                                string="Test AI Connection"
-                                type="object"
-                                class="btn-primary"
-                                groups="im_livechat.im_livechat_group_manager"/>
-                        <button name="action_view_api_logs"
-                                string="View API Logs"
-                                type="object"
-                                class="btn-link"
-                                groups="im_livechat.im_livechat_group_manager"/>
+                    <group>
+                        <group string="Advanced Settings" invisible="not ai_enabled">
+                            <field name="ai_max_history"/>
+                            <field name="ai_max_retries"/>
+                            <field name="ai_request_timeout"/>
+                        </group>
+                        <group string="API Logs &amp; Privacy">
+                            <field name="ai_log_payload" groups="base.group_system"/>
+                            <field name="ai_log_retention_days"/>
+                        </group>
+                    </group>
+
+                    <group string="Reply Jobs" name="ai_monitoring">
+                        <field name="ai_cron_lastcall" readonly="1"/>
+                        <field name="ai_stale_job_count" readonly="1"/>
+                        <div colspan="2" class="alert alert-warning" role="alert" invisible="not ai_job_warning">
+                            <field name="ai_job_warning" readonly="1"/>
+                        </div>
+                        <div colspan="2" class="text-success" invisible="ai_job_warning">
+                            The recovery cron ran in the last 5 minutes and no reply job is stuck.
+                        </div>
+                        <div colspan="2" class="text-muted">
+                            Replies after a restart or deploy, and the AI answers after an unanswered
+                            handoff wait, are sent by the cron "Live Chat AI: Recover Reply Jobs"
+                            (every 2 minutes). A cron process must be running.
+                        </div>
                     </group>
                 </page>
             </xpath>

@@ -15,15 +15,14 @@ import requests
 
 from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import TransactionCase, new_test_user
-from odoo.tools import mute_logger
+from odoo.tools import mute_logger, sql
 
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
     DEFAULT_BOT_NAME,
     LEGACY_BOT_NAME,
-    MAX_AI_MAX_TOKENS,
 )
 
-from .common import setup_litellm
+from .common import TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -45,8 +44,8 @@ class ReviewCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Review Channel',
             'ai_enabled': True,
             'ai_model': 'chatgpt-pool/gpt-6-sol',
@@ -75,13 +74,14 @@ class TestAiConfigAccess(ReviewCase):
 
     def test_operator_cannot_change_ai_fields(self):
         Channel = self.env['im_livechat.channel'].with_user(self.lc_user)
-        for vals in ({'ai_system_prompt': '改掉提示'}, {'ai_max_tokens': 100000},
+        for vals in ({'ai_system_prompt': '改掉提示'}, {'ai_max_history': 100},
                      {'ai_enabled': False}, {'ai_error_message': '假的錯誤訊息'},
-                     {'ai_product_lookup': False}):
+                     {'ai_model': 'other/model'}, {'ai_endpoint_url': 'https://evil.example/v1'},
+                     {'ai_api_token': 'dummy'}):
             with self.assertRaises(AccessError, msg=vals):
                 self.channel.with_user(self.lc_user).write(vals)
         with self.assertRaises(AccessError):
-            Channel.create({'name': 'Operator AI', 'ai_enabled': True})
+            Channel.create({**TEST_BACKEND, 'name': 'Operator AI', 'ai_enabled': True})
         with self.assertRaises(AccessError):
             Channel.create({'name': 'Operator AI', 'ai_system_prompt': 'x'})
         self.assertEqual(self.channel.ai_system_prompt, '內部提示：不要透露折扣規則。')
@@ -103,12 +103,13 @@ class TestAiConfigAccess(ReviewCase):
             [(False, 'form')])['views']['form']['arch']
         self.assertIn('ai_system_prompt', arch)
 
-    def test_manager_configures_ai_with_token_cap(self):
+    def test_manager_configures_ai_with_history_cap(self):
         channel = self.channel.with_user(self.manager)
-        channel.write({'ai_system_prompt': '主管改的提示', 'ai_max_tokens': MAX_AI_MAX_TOKENS})
-        self.assertEqual(self.channel.ai_max_tokens, MAX_AI_MAX_TOKENS)
+        channel.write({'ai_system_prompt': '主管改的提示', 'ai_max_history': 200, 'ai_model': 'pool/other'})
+        self.assertEqual(self.channel.ai_max_history, 200)
+        self.assertEqual(self.channel.ai_model, 'pool/other')
         with self.assertRaises(ValidationError):
-            channel.write({'ai_max_tokens': MAX_AI_MAX_TOKENS + 1})
+            channel.write({'ai_max_history': 201})
 
     def test_prompt_not_readable_by_portal_or_employees(self):
         for user in (self.portal_user, self.employee, self.lc_user):
@@ -175,7 +176,7 @@ class TestBotPartnerProtection(ReviewCase):
         self.assertFalse(new_bot.active)
 
     def test_other_channels_bot_is_not_shared(self):
-        other = self.env['im_livechat.channel'].create({'name': 'Other', 'ai_enabled': True})
+        other = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Other', 'ai_enabled': True})
         other_bot = other.ai_bot_partner_id
         other_name = other_bot.name
         self.channel.write({'ai_bot_partner_id': other_bot.id})
@@ -185,18 +186,24 @@ class TestBotPartnerProtection(ReviewCase):
 
     def test_copy_gets_its_own_bot(self):
         copy = self.channel.copy()
+        # The copy starts with AI off and without the token.
+        self.assertFalse(copy.ai_enabled)
+        self.assertFalse(copy.ai_api_token_set)
+        self.assertFalse(copy.ai_bot_partner_id)
+        copy.write({'ai_endpoint_url': 'https://litellm.test/v1', 'ai_api_token': 'dummy-copy-token',
+                    'ai_enabled': True})
         self.assertTrue(copy.ai_bot_partner_id)
         self.assertNotEqual(copy.ai_bot_partner_id, self.channel.ai_bot_partner_id)
 
     def test_default_bot_name_is_chinese(self):
         self.assertEqual(DEFAULT_BOT_NAME, 'AI 客服助理')
-        channel = self.env['im_livechat.channel'].create({'name': 'New', 'ai_enabled': True})
+        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'New', 'ai_enabled': True})
         self.assertEqual(channel.ai_bot_partner_id.name, 'AI 客服助理')
         self.assertEqual(self.env.ref('im_livechat_ai.partner_ai_bot').name, 'AI 客服助理')
 
 
 class TestConnectionTestPermission(ReviewCase):
-    """The connection test spends the company key: managers only."""
+    """The connection test uses the channel's token: system administrators only."""
 
     @patch(POST)
     def test_non_managers_cannot_test_connection(self, mock_post):
@@ -206,8 +213,12 @@ class TestConnectionTestPermission(ReviewCase):
                 self.channel.with_user(user).action_test_ai_connection()
             with self.assertRaises(AccessError, msg=user.login):
                 self.channel.with_user(user).action_view_api_logs()
+        with self.assertRaises(AccessError):
+            self.channel.with_user(self.manager).action_test_ai_connection()
         mock_post.assert_not_called()
-        result = self.channel.with_user(self.manager).action_test_ai_connection()
+        # Live Chat managers still open the API logs.
+        self.channel.with_user(self.manager).action_view_api_logs()
+        result = self.channel.action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
         self.assertEqual(mock_post.call_count, 1)
 
@@ -298,7 +309,7 @@ class TestWhichMessagesTrigger(ReviewCase):
             'message_type': 'comment', 'author_id': self.lc_user.partner_id.id,
         })
         messages = session._build_llm_messages(self.channel)
-        self.assertEqual(messages[-1], {'role': 'assistant', 'content': '[真人客服 客服小美] 我幫您查'})
+        self.assertEqual(messages[-1], {'role': 'user', 'content': '[真人客服 客服小美] 我幫您查'})
         self.assertNotIn('一般客服', str(messages))
 
 
@@ -328,14 +339,17 @@ class TestNoTransactionDuringLlmCall(ReviewCase):
             return result
 
         mock_post.side_effect = post
-        self.channel.ai_product_lookup = False
         session = self.env['discuss.channel'].create({
             'name': 'Tx Session', 'channel_type': 'livechat',
             'livechat_operator_id': self.admin_partner.id,
             'livechat_channel_id': self.channel.id,
         })
-        result = self.channel._generate_ai_reply(
-            session, [{'role': 'user', 'content': 'hi'}], before_call=before_call)
+        self.env['mail.message'].create({
+            'body': 'hi', 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': self.portal_user.partner_id.id,
+        })
+        conversation = session._ai_conversation(self.channel)
+        result = self.channel._generate_ai_reply(session, conversation, before_call=before_call)
         self.assertEqual(result['reply'], '第二次成功')
         self.assertEqual(mock_post.call_count, 2)
         # Committed before the HTTP call and again before the retry wait.
@@ -364,21 +378,19 @@ class TestRetriesMigration(TransactionCase):
         expected = {1: 0, 2: 1, 3: 2, 10: 2, 0: 2, None: 2}
         self.assertEqual({v: c.ai_max_retries for v, c in channels.items()}, expected)
 
-    def test_max_tokens_capped(self):
-        channel = self.env['im_livechat.channel'].create({'name': 'Tokens'})
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_tokens = 100000 WHERE id = %s",
-                            (channel.id,))
-        self._load_post_migrate().cap_max_tokens(self.env.cr)
-        self.env.invalidate_all()
-        self.assertEqual(channel.ai_max_tokens, MAX_AI_MAX_TOKENS)
+    def test_max_tokens_cap_without_column(self):
+        """18.0.1.2.0 has no ai_max_tokens field: the 18.0.1.1.0 step is a no-op
+        on a fresh install (the column is only there on upgraded databases)."""
+        if sql.column_exists(self.env.cr, 'im_livechat_channel', 'ai_max_tokens'):
+            self.skipTest('upgraded database: legacy column present')
+        self.assertFalse(self._load_post_migrate().cap_max_tokens(self.env.cr))
 
     def test_legacy_bot_name_renamed_and_user_partner_unlinked(self):
-        setup_litellm(self.env)
         Channel = self.env['im_livechat.channel']
-        legacy = Channel.create({'name': 'Legacy Name', 'ai_enabled': True})
+        legacy = Channel.create({**TEST_BACKEND, 'name': 'Legacy Name', 'ai_enabled': True})
         legacy.write({'ai_bot_name': LEGACY_BOT_NAME})
         legacy.ai_bot_partner_id.name = LEGACY_BOT_NAME
-        custom = Channel.create({'name': 'Custom Name', 'ai_enabled': True, 'ai_bot_name': 'WoowTech AI'})
+        custom = Channel.create({**TEST_BACKEND, 'name': 'Custom Name', 'ai_enabled': True, 'ai_bot_name': 'WoowTech AI'})
         admin = self.env.ref('base.partner_admin')
         admin_name = admin.name
         hijacked = Channel.create({'name': 'Hijacked'})

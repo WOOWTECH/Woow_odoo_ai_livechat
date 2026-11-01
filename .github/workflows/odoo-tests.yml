@@ -4,7 +4,7 @@ name: Odoo tests
 # (--test-tags /im_livechat_ai). The job fails when Odoo exits non-zero, when
 # no im_livechat_ai test started (a tag that selects nothing would otherwise
 # "pass"), or when the log shows any failure, error or critical line.
-# Unit tests mock every HTTP call: no LiteLLM key or network access is needed.
+# Unit tests mock every HTTP call: no backend key or network access is needed.
 
 on:
   pull_request:

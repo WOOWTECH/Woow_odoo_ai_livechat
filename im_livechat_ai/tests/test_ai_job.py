@@ -28,7 +28,7 @@ from odoo.addons.im_livechat_ai.models.livechat_ai_job import (
     STALE_PENDING_SECONDS,
 )
 
-from .common import livechat_operator, setup_litellm
+from .common import livechat_operator, TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -52,8 +52,8 @@ class AiJobCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        setup_litellm(cls.env)
         cls.channel = cls.env['im_livechat.channel'].create({
+            **TEST_BACKEND,
             'name': 'Job Channel',
             'ai_enabled': True,
             'ai_model': 'chatgpt-pool/gpt-6-sol',
@@ -590,7 +590,7 @@ class TestJobFailure(AiJobCase):
             job._run_job(commit=False)
         self.assertEqual(job.state, 'failed')
         self.assertEqual(job.llm_calls, 3)
-        self.assertIn('無法連線到 LiteLLM', job.error)
+        self.assertIn('無法連線到 AI 後端', job.error)
         # Visitor gets the channel's Chinese error message.
         self.assertEqual(len(self._bot_messages()), 1)
         self.assertIn(ERROR_TEXT, self._bot_messages().body)

@@ -56,7 +56,7 @@ from .im_livechat_channel import DEFAULT_ERROR_MESSAGE, DEFAULT_HANDOFF_MESSAGE
 _logger = logging.getLogger(__name__)
 
 DEBOUNCE_SECONDS = 1.5  # rapid visitor messages within this window get one reply
-MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 6 LLM calls)
+MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 3 backend calls)
 STALE_PENDING_SECONDS = 30  # pending this long past run_after: the thread was lost
 STALE_RUNNING_SECONDS = 60  # running and unlocked this long: the process died
 JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone)
@@ -165,10 +165,10 @@ class LivechatAiJob(models.Model):
         default='reply',
         required=True,
         readonly=True,
-        help='AI Reply: answer with the LLM. Human Handoff: the visitor asked '
+        help='AI Reply: answer through the AI backend. Human Handoff: the visitor asked '
              'for a human; send the handoff message and notify the operators. '
              'Waiting Notice: first visitor message while waiting for a human; '
-             'send the waiting notice once (no LLM).',
+             'send the waiting notice once (no backend call).',
     )
     deferred = fields.Boolean(
         string='Deferred',
@@ -212,11 +212,10 @@ class LivechatAiJob(models.Model):
         help='How many times processing of this job started (at most 3)',
     )
     llm_calls = fields.Integer(
-        string='LLM Calls',
+        string='Backend Calls',
         default=0,
         readonly=True,
-        help='LLM API calls made in the last run (one per product lookup round '
-             'plus the answer, and at most 2 retries)',
+        help='Backend calls made in the last run (one call, plus at most 2 retries)',
     )
     run_after = fields.Datetime(
         string='Run After',
@@ -229,7 +228,7 @@ class LivechatAiJob(models.Model):
     context_message_id = fields.Integer(
         string='Last Message In Context',
         readonly=True,
-        help='Highest message id sent to the LLM as conversation; visitor '
+        help='Highest message id sent to the AI backend as conversation; visitor '
              'messages up to it are covered by this job\'s reply',
     )
 
@@ -462,8 +461,8 @@ class LivechatAiJob(models.Model):
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         context = session._ai_context_messages(channel)
-        messages = session._build_llm_messages(channel, recent_messages=context, resume=self.deferred)
-        if not any(m.get('role') == 'user' for m in messages):
+        conversation = session._ai_conversation(channel, recent_messages=context, resume=self.deferred)
+        if not any(e['kind'] == 'visitor' for e in conversation['history']):
             self._finish('skipped', '對話中沒有訪客訊息')
             commit_step()
             return
@@ -473,29 +472,36 @@ class LivechatAiJob(models.Model):
         # No transaction stays open during the HTTP calls and retry waits:
         # before_call commits right before each request.
         commit_step()
-        result = channel._generate_ai_reply(session, messages, before_call=commit_step)
+        result = channel._generate_ai_reply(session, conversation, before_call=commit_step,
+                                            trigger_message=self.message_id)
         self.write({'llm_calls': result['calls']})
 
         # Final checks and the post, with the session row locked (see
         # _lock_session_row): committed in one transaction.
         self._lock_session_row()
         if self._has_newer_job():
-            # A newer message arrived while the LLM was answering: drop this
-            # answer, the newest job answers with the full context.
+            # A newer message arrived while the backend was answering: drop
+            # this answer, the newest job answers with the full context.
             self._finish('skipped', '回覆前有新的訪客訊息，由最新的工作一併回覆')
             commit_step()
             return
         if session._ai_is_paused():
-            # An operator took over while the LLM was answering.
+            # An operator took over while the backend was answering.
             self._finish('skipped', '回覆前真人客服已接手，AI 暫停回覆')
             self._supersede_older()
             commit_step()
             return
-        if result['reply']:
-            reply = channel._create_bot_message(self.env, session, result['reply'])
-            self._finish('done', False, reply_message=reply)
+        if result['error']:
+            self._give_up(result['error'])
+        elif result['skip']:
+            # n8n answered {"skip": true}: the workflow chose not to reply
+            # (or replies later through its own channel).
+            self._finish('done', '後端選擇不回覆（skip）')
+        elif result['replies']:
+            posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            self._finish('done', False, reply_message=posted[0])
         else:
-            self._give_up(result['error'] or 'AI 沒有回覆')
+            self._give_up('AI 沒有回覆')
         self._supersede_older()
         commit_step()
 
@@ -506,8 +512,8 @@ class LivechatAiJob(models.Model):
             bool: True when the job was finished (and committed)
         """
         channel = self.livechat_channel_id
-        if not channel or not channel.ai_enabled or not channel.ai_model or not channel._llm_is_configured():
-            self._finish('skipped', 'AI 已關閉或 LiteLLM 未設定')
+        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
+            self._finish('skipped', 'AI 已關閉或後端連線未設定')
         elif self._has_newer_job():
             self._finish('skipped', '有更新的訪客訊息，由最新的工作一併回覆')
         elif self._already_answered():
@@ -774,7 +780,7 @@ class LivechatAiJob(models.Model):
 
     @api.model
     def _stale_job_count(self, minutes=MONITOR_STALE_MINUTES):
-        """Settings monitoring (P1-6): pending jobs due more than `minutes`
+        """AI tab monitoring (P1-6): pending jobs due more than `minutes`
         ago and jobs running for more than `minutes` (deferred jobs that are
         not due yet are not counted)."""
         cutoff = fields.Datetime.now() - timedelta(minutes=minutes)
@@ -822,8 +828,8 @@ class LivechatAiJob(models.Model):
                              job.id, job.state, job.attempts)
             job_ids = [job.id for job in session_jobs]
             if commit:
-                # One job can take several minutes (up to 4 tool/answer
-                # calls + 2 retries, 45 s each, plus backoff),
+                # One job can take minutes (a call + 2 retries, 45 s
+                # each, plus backoff),
                 # longer than the cron watchdog (limit_time_real), so the
                 # cron only hands the session over to a thread.
                 threading.Thread(
@@ -850,13 +856,17 @@ class LivechatAiJob(models.Model):
             job_id = next_id
 
     @api.model
-    def _cleanup_old_jobs(self, days):
-        """Delete finished jobs older than the log retention."""
+    def _cleanup_old_jobs(self, days, livechat_channel_ids=None):
+        """Delete finished jobs older than `days` (all jobs, or those of the
+        given live chat channels; False in the list: jobs without channel)."""
         cutoff = fields.Datetime.now() - timedelta(days=days)
-        old = self.search([
+        domain = [
             ('state', 'in', ('done', 'failed', 'skipped')),
             ('create_date', '<', cutoff),
-        ])
+        ]
+        if livechat_channel_ids is not None:
+            domain.append(('livechat_channel_id', 'in', list(livechat_channel_ids)))
+        old = self.sudo().search(domain)
         count = len(old)
         if count:
             old.unlink()

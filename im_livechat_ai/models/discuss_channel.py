@@ -14,10 +14,11 @@ _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
 # Prefix of a human operator's message in the LLM history (P1-3).
 OPERATOR_PREFIX = '[真人客服 %s] '
-# Added to the system prompt when the history contains operator messages.
+# Added to the system prompt when the history contains operator messages
+# (operator messages are user turns, as in woow_ai_contact).
 OPERATOR_SYSTEM_NOTE = (
-    '對話中以「[真人客服 姓名]」開頭的 assistant 訊息是真人客服同事的回覆，'
-    '不是你說的；不要推翻、否認或更改同事的說法與承諾，必要時請訪客等候同事處理。'
+    '對話中以「[真人客服 姓名]」開頭的訊息是真人客服同事對訪客說的話，不是訪客說的，也不是你說的；'
+    '不要推翻、否認或更改同事的說法與承諾，必要時請訪客等候同事處理。'
 )
 # Added to the system prompt of a reply sent when a handoff wait ended
 # without an operator (auto-resume, P0-1).
@@ -42,12 +43,47 @@ def _clean_text(body):
     return html_lib.unescape(_HTML_TAG_RE.sub('', body or '')).strip()
 
 
+# Leading user turn that quotes assistant messages which would otherwise
+# start the conversation (same text as woow_ai_contact).
+EARLIER_ASSISTANT_PREFIX = '[Messages you (the assistant) sent before this user message]\n'
+
+
+def normalize_turns(turns):
+    """OpenAI chat turns (no system message) that start and end with a user turn.
+
+    Hermes treats the last item as the new input, and Anthropic-style models
+    would continue a trailing assistant turn or reject a leading one:
+
+    - assistant turns before the first user turn (the welcome message) are dropped;
+    - assistant turns after the last user turn (error or notice messages,
+      operator replies) are moved just before it;
+    - if that leaves assistant turns first (only one user turn), they become
+      one user turn quoting them, so their content is not lost.
+    """
+    turns = list(turns)
+    while turns and turns[0]['role'] != 'user':
+        turns.pop(0)
+    last_user = max((i for i, turn in enumerate(turns) if turn['role'] == 'user'), default=None)
+    if last_user is None:
+        return turns
+    if last_user < len(turns) - 1:
+        turns = turns[:last_user] + turns[last_user + 1:] + [turns[last_user]]
+    lead = 0
+    while turns[lead]['role'] != 'user':
+        lead += 1
+    if lead:
+        quoted = '\n\n'.join(turn['content'] or '' for turn in turns[:lead])
+        turns = [{'role': 'user', 'content': EARLIER_ASSISTANT_PREFIX + quoted}] + turns[lead:]
+    return turns
+
+
 class DiscussChannel(models.Model):
     """
     Extend discuss.channel to intercept livechat messages and trigger AI responses.
 
-    This extension hooks into the message notification pipeline to call
-    OpenAI-compatible LLM APIs when visitors send messages in livechat sessions.
+    This extension hooks into the message notification pipeline to queue AI
+    replies (sent to the channel's backend) when visitors write in live chat
+    sessions.
     """
     _inherit = 'discuss.channel'
 
@@ -239,8 +275,8 @@ class DiscussChannel(models.Model):
             ids.add(odoobot.id)
         return ids
 
-    def _ai_visitor_partner(self):
-        """Partner of the session's visitor member, or an empty recordset.
+    def _ai_visitor_member(self):
+        """The session's visitor member (partner or guest), or an empty recordset.
 
         Odoo creates the operator's member first and then, in the same
         transaction, the visitor's (a logged-in visitor's partner, or a guest
@@ -259,8 +295,13 @@ class DiscussChannel(models.Model):
             partner = member.partner_id
             if partner and (partner == operator or partner.id in bot_ids):
                 continue
-            return partner
-        return self.env['res.partner']
+            return member
+        return self.env['discuss.channel.member']
+
+    def _ai_visitor_partner(self):
+        """Partner of the session's visitor member, or an empty recordset."""
+        self.ensure_one()
+        return self._ai_visitor_member().partner_id
 
     def _ai_author_kind(self, message, visitor_partner=None):
         """
@@ -336,17 +377,120 @@ class DiscussChannel(models.Model):
         user = author.with_context(active_test=False).user_ids.filtered(lambda u: not u.share)[:1]
         return (user.livechat_username if user else '') or author.name or ''
 
-    def _build_llm_messages(self, livechat_channel, recent_messages=None, resume=False):
-        """
-        Build the messages array for an OpenAI-compatible chat completions API.
+    # --- What the backend receives ---
 
-        Fetches the most recent N messages from this discuss.channel,
-        determines the role for each (visitor: user; AI bot and human
-        operators: assistant, operators marked "[真人客服 name]" with the
-        name visitors see) and prepends the system message: the fixed
-        identity block (P1-8), the channel prompt, a note about operator
-        messages when there are any, the resume note for a reply sent after
-        an unanswered handoff wait, and the fixed product rules.
+    def _ai_installed_lang(self, *codes):
+        """First of `codes` that is an installed language, else ''."""
+        installed = {code for code, _name in self.env['res.lang'].get_installed()}
+        return next((code for code in codes if code and code in installed), '')
+
+    def _ai_session_lang(self):
+        """Language of the website conversation (website_livechat), else the
+        session operator's."""
+        self.ensure_one()
+        session = self.sudo()
+        if 'livechat_visitor_id' in session._fields and session.livechat_visitor_id.lang_id:
+            return session.livechat_visitor_id.lang_id.code
+        return session.livechat_operator_id.lang or ''
+
+    def _ai_visitor_kind(self):
+        """guest, portal, employee, partner (no user) or public."""
+        self.ensure_one()
+        partner = self._ai_visitor_member().partner_id
+        if not partner:
+            return 'guest'
+        users = partner.sudo().with_context(active_test=False).user_ids
+        if not users:
+            return 'partner'
+        if all(user._is_public() for user in users):
+            return 'public'
+        if any(not user.share for user in users):
+            return 'employee'
+        return 'portal'
+
+    def _ai_visitor_identity(self):
+        """Who the AI talks to (woow_ai_contact docs/LIVECHAT.md visitor table).
+
+        Never the IP address, visited pages, website.visitor tracking, phone
+        or address. The email is only part of the n8n JSON, never of the
+        text the model sees (openai metadata leaves it out).
+        """
+        self.ensure_one()
+        session = self.sudo()
+        member = self._ai_visitor_member()
+        partner = member.partner_id
+        guest = member.guest_id
+        fallback_lang = self._ai_installed_lang(self._ai_session_lang(), session.livechat_operator_id.lang)
+        identity = {
+            'user_id': None, 'partner_id': None, 'guest_id': None, 'name': '', 'email': '',
+            'lang': fallback_lang or '', 'tz': '', 'is_portal': False, 'is_guest': True,
+            'company_id': None, 'visitor_key': '',
+        }
+        if partner:
+            users = partner.with_context(active_test=False).user_ids
+            if users and all(user._is_public() for user in users):
+                # The public user's partner is shared by the whole site: no identity.
+                identity['visitor_key'] = 'public'
+                return identity
+            user = users[:1]
+            identity.update({
+                'user_id': user.id or None,
+                'partner_id': partner.id,
+                'name': partner.name or '',
+                'email': partner.email or '',
+                'lang': self._ai_installed_lang((user.lang if user else partner.lang), fallback_lang),
+                'tz': (user.tz if user else partner.tz) or '',
+                'is_portal': bool(user and user._is_portal()),
+                'is_guest': False,
+                'company_id': user.company_id.id if user else None,
+                'visitor_key': 'partner:%s' % partner.id,
+            })
+            return identity
+        if guest:
+            identity.update({
+                'guest_id': guest.id,
+                'name': guest.name or session.anonymous_name or '',
+                'lang': self._ai_installed_lang(guest.lang, fallback_lang),
+                'tz': guest.timezone or '',
+                'visitor_key': 'guest:%s' % guest.id,
+            })
+        else:
+            identity['name'] = session.anonymous_name or ''
+        return identity
+
+    def _ai_channel_info(self):
+        """``channel`` of the n8n payload."""
+        self.ensure_one()
+        session = self.sudo()
+        livechat_channel = session.livechat_channel_id
+        operator = session.livechat_operator_id
+        name = livechat_channel.name or ''
+        return {
+            'id': session.id,
+            'type': 'livechat',
+            'livechat': {
+                # woow_ai_contact_livechat names, and the short aliases
+                'livechat_channel_id': livechat_channel.id,
+                'livechat_channel_name': name,
+                'channel_id': livechat_channel.id,
+                'channel_name': name,
+                'operator_name': self._ai_operator_name(operator) if operator else '',
+                'country_code': (session.country_id.code or '') if session.country_id else '',
+                'visitor_kind': self._ai_visitor_kind(),
+            },
+        }
+
+    def _ai_conversation(self, livechat_channel, recent_messages=None, resume=False):
+        """
+        What the backend gets for one reply, independent of the protocol.
+
+        History roles (woow_ai_contact protocol): visitor -> user; AI bot ->
+        assistant; human operator -> user marked "[真人客服 name]" (the name
+        visitors see), so the model treats it as a colleague's words and
+        never as its own. Odoo adds no persona:
+        only the channel's optional system prompt and conversation events
+        (facts): operator replies in the history, and the end of a handoff
+        wait that no operator answered.
 
         Args:
             livechat_channel (im_livechat.channel): The livechat channel config
@@ -355,17 +499,15 @@ class DiscussChannel(models.Model):
             resume (bool): the reply ends a handoff wait no operator answered
 
         Returns:
-            list: List of dicts with 'role' and 'content' keys
+            dict: history (list of {role, text, message_id, kind}, oldest
+                first; kind: visitor / operator / bot),
+                system_prompt (str), events (list of {time, kind, text})
         """
         if recent_messages is None:
             recent_messages = self._ai_context_messages(livechat_channel)
         visitor_partner = self._ai_visitor_partner()
-
-        # Roles (P1-3): visitor -> user; AI bot -> assistant; human operator
-        # -> assistant marked "[真人客服 name]" so the model treats it as a
-        # colleague's reply instead of a visitor request.
         history = []
-        has_operator = False
+        first_operator_date = None
         for msg in recent_messages:
             clean_body = _clean_text(msg.body)
             if not clean_body:
@@ -374,20 +516,34 @@ class DiscussChannel(models.Model):
             if kind == AUTHOR_VISITOR:
                 role = 'user'
             elif kind == AUTHOR_OPERATOR:
-                role = 'assistant'
-                has_operator = True
+                role = 'user'
+                first_operator_date = first_operator_date or msg.date
                 clean_body = (OPERATOR_PREFIX % self._ai_operator_name(msg.author_id)) + clean_body
             else:
                 role = 'assistant'
-            history.append({'role': role, 'content': clean_body})
-
-        # The product rules (package E, P1-8) are always appended: prices,
-        # specifications and stock only come from the product tools.
-        parts = [livechat_channel._ai_identity_block(), livechat_channel.ai_system_prompt or '']
-        if has_operator:
-            parts.append(OPERATOR_SYSTEM_NOTE)
+            history.append({'role': role, 'text': clean_body, 'message_id': msg.id, 'kind': kind})
+        events = []
+        if first_operator_date:
+            events.append({'time': first_operator_date, 'kind': 'operator', 'text': OPERATOR_SYSTEM_NOTE})
         if resume:
-            parts.append(RESUME_SYSTEM_NOTE)
-        parts.append(livechat_channel._ai_product_guard())
-        system_prompt = '\n\n'.join(p.strip() for p in parts if p and p.strip())
-        return [{'role': 'system', 'content': system_prompt}] + history
+            events.append({'time': fields.Datetime.now(), 'kind': 'resume', 'text': RESUME_SYSTEM_NOTE})
+        return {
+            'history': history,
+            'system_prompt': (livechat_channel.sudo().ai_system_prompt or '').strip(),
+            'events': events,
+        }
+
+    @staticmethod
+    def _ai_openai_messages(conversation):
+        """Chat completion messages: a system message only when there is a
+        prompt or an event note, then the turns, which start and end with a
+        user turn (see normalize_turns)."""
+        parts = [conversation['system_prompt']] + [event['text'] for event in conversation['events']]
+        system = '\n\n'.join(p.strip() for p in parts if p and p.strip())
+        turns = normalize_turns([{'role': e['role'], 'content': e['text']} for e in conversation['history']])
+        return ([{'role': 'system', 'content': system}] if system else []) + turns
+
+    def _build_llm_messages(self, livechat_channel, recent_messages=None, resume=False):
+        """OpenAI chat completion messages of this session (see _ai_conversation)."""
+        return self._ai_openai_messages(
+            self._ai_conversation(livechat_channel, recent_messages=recent_messages, resume=resume))

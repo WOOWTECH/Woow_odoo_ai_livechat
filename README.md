@@ -8,7 +8,7 @@
 
 # Live Chat AI Integration for Odoo 18
 
-**Answer Odoo Live Chat visitors with an LLM through the company LiteLLM gateway: durable reply jobs, human handoff, and product lookup tools that keep prices honest.**
+**Answer Odoo Live Chat visitors through an AI backend chosen per channel (OpenAI compatible such as LiteLLM or Hermes, or an n8n webhook): durable reply jobs and human handoff. Odoo records, forwards and manages; the backend does the rest.**
 
 > [繁體中文版 README](README_zh-TW.md)
 
@@ -17,6 +17,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Upgrading to 18.0.1.2.0](#upgrading-to-180120)
 - [Upgrading from 18.0.1.0.x](#upgrading-from-18010x)
 - [Why Use This Module](#why-use-this-module)
 - [Architecture](#architecture)
@@ -24,6 +25,7 @@
 - [Screenshots](#screenshots)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [AI backends: LiteLLM, Hermes, n8n](#ai-backends-litellm-hermes-n8n)
 - [Module Structure](#module-structure)
 - [Security](#security)
 - [Testing](#testing)
@@ -38,17 +40,44 @@
 
 ## Overview
 
-**im_livechat_ai** is an Odoo 18 module that answers Live Chat visitors with an LLM. When a visitor (a website guest or a logged-in portal customer) writes in an AI-enabled channel, the module queues a reply job in the same transaction as the message, and after commit sends the conversation to the company **LiteLLM** gateway (OpenAI-compatible `/v1/chat/completions`). The answer is posted back into the conversation by the channel's bot partner.
+**im_livechat_ai** is an Odoo 18 module that answers Live Chat visitors through an AI backend. When a visitor (a website guest or a logged-in portal customer) writes in an AI-enabled channel, the module queues a reply job in the same transaction as the message, and after commit sends the conversation to **the channel's backend**. The answer is posted back into the conversation by the channel's bot partner.
 
-The connection (LiteLLM URL and API key) is one system-wide setting that only system administrators can see or change. Each channel only chooses a model from the list LiteLLM reports, plus its prompt and behaviour. Operators stay in control: when an operator replies, or the visitor asks for a human, the AI pauses for that conversation. When the eCommerce module is installed, the AI looks up published products, website prices and links with read-only tools instead of inventing them.
+Every channel has its own backend connection, set by a system administrator on the channel's **AI** tab (Live Chat > Configuration > Channels):
 
-The default gateway is `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` and the default model is `chatgpt-pool/gpt-6-sol` (supports tool calling). Any OpenAI-compatible gateway works the same way.
+| Backend type | Endpoint URL | Access token | Typical backends |
+|---|---|---|---|
+| **OpenAI compatible (LiteLLM, Hermes…)** | base URL ending in `/v1`; `/chat/completions` is appended | API key, sent as `Authorization: Bearer <token>` | LiteLLM, Hermes, any OpenAI-compatible server |
+| **n8n Webhook** | full production webhook URL (also a Chat Trigger's `.../webhook/<id>/chat`) | optional signing secret of `X-Woow-Signature` (HMAC-SHA256), **never sent**; empty = requests are not signed | an n8n workflow (Webhook node + AI Agent + Respond to Webhook, or a Chat Trigger) |
+
+Odoo only **records, forwards and manages** the conversation: the persona, tools (product lookup, Odoo MCP, ...), moderation and permissions all belong to the backend. Operators stay in control: when an operator replies, or the visitor asks for a human, the AI pauses for that conversation. There is no default URL and no default model: AI stays off until an administrator fills in a channel's connection. Nothing of this module appears in the Settings app.
+
+The request formats are compatible with the n8n section of `woow_ai_contact` (docs/PROTOCOL.md): same headers, signature, session id, payload and answers, so an n8n workflow written for this module also works after a later move to `woow_ai_contact`.
+
+---
+
+## Upgrading to 18.0.1.2.0
+
+`-u im_livechat_ai` (or the platform upgrade gate) runs the 18.0.1.2.0 post-migration:
+
+| What | Effect |
+|---|---|
+| Backend type | `OpenAI compatible` on every channel (18.0.1.1.0 only spoke that protocol). |
+| `im_livechat_ai.base_url` / `im_livechat_ai.api_key` (Settings > Live Chat AI) | Copied to **every** channel's Endpoint URL (trailing `/` and `/chat/completions` removed) and Access Token, where the channel has none yet. A key without a URL gets the URL 18.0.1.1.0 used by default. |
+| `im_livechat_ai.log_payload` / `im_livechat_ai.log_retention_days` | Copied to every channel (**Log Conversation Content**, **Log Retention (days)**). |
+| All `im_livechat_ai.*` system parameters | Deleted (the key included; the model cache is no longer used). |
+| **Enable AI Integration**, model | Unchanged: a channel with AI on and copied credentials keeps answering. The model stays as text. |
+| Settings > Live Chat AI, menu Live Chat > Configuration > AI Settings | Removed. |
+| Product lookup tools, Temperature, Max Tokens, model list, identity block | Removed: the backend does this now. |
+
+The server log has one WARNING line with counts only (channels, URLs and tokens copied, parameters deleted, AI-enabled channels with a connection), never values. The script is idempotent: once the parameters are gone a re-run changes nothing, and values already on a channel are never overwritten. A database without these parameters (and with AI off) is left as it is.
+
+After the upgrade, a channel that relied on the Odoo product tools answers without them: point it at a backend that has its own product data tools (for example Hermes or n8n with the Odoo MCP server), or keep AI off there.
 
 ---
 
 ## Upgrading from 18.0.1.0.x
 
-> **AI replies are OFF after the upgrade until an administrator configures LiteLLM.**
+> **AI replies are OFF after the upgrade until an administrator configures each channel's backend.**
 
 Upgrading to 18.0.1.1.0 (`-u im_livechat_ai`, or the platform upgrade gate, which runs it when the manifest version changes) does the following automatically:
 
@@ -64,16 +93,15 @@ Upgrading to 18.0.1.1.0 (`-u im_livechat_ai`, or the platform upgrade gate, whic
 
 Every row above except the API URL/key columns (turning AI off, Max Retries, error message, handoff keywords, bot partners and avatars, log scrub) only happens when the pre-migration finds the 18.0.1.0.x columns (`ai_api_key`, `ai_api_base_url` or `ai_retry_delay`); it passes that to the post-migration in the temporary system parameter `im_livechat_ai.migration_1_1_0_legacy`, which the post-migration deletes. Running the 18.0.1.1.0 scripts again on an already migrated database changes nothing, also not values an administrator cleared or changed after the upgrade (an emptied bot name or error message, an unarchived bot partner).
 
-#### Rollout: replies after a restart or deploy
+### Rollout: replies after a restart or deploy
 
-AI replies are normally sent by a thread of the Odoo process that received the visitor's message. Replies that were in progress when that process stopped (restart, deploy, worker recycled), and the AI answers sent when a handoff wait ends without an operator, are sent by the scheduled action **Live Chat AI: Recover Reply Jobs** (every 2 minutes), so they can take **about 1-2 minutes**. A **cron process is required**: run Odoo with `max_cron_threads >= 1` (or a separate cron process, e.g. `odoo --no-http --max-cron-threads=1`). Monitor it in **Settings > Live Chat AI > Reply Jobs** (last run of the cron and unfinished jobs older than 5 minutes, with a warning) or in **Live Chat > Configuration > AI Reply Jobs**.
+AI replies are normally sent by a thread of the Odoo process that received the visitor's message. Replies that were in progress when that process stopped (restart, deploy, worker recycled), and the AI answers sent when a handoff wait ends without an operator, are sent by the scheduled action **Live Chat AI: Recover Reply Jobs** (every 2 minutes), so they can take **about 1-2 minutes**. A **cron process is required**: run Odoo with `max_cron_threads >= 1` (or a separate cron process, e.g. `odoo --no-http --max-cron-threads=1`). Monitor it on each channel's **AI** tab (**Reply Jobs**: last run of the cron and unfinished jobs older than 5 minutes, with a warning) or in **Live Chat > Configuration > AI Reply Jobs**.
 
-After the upgrade, a system administrator:
+After an upgrade from 18.0.1.0.x (directly to 18.0.1.2.0 the 18.0.1.1.0 and 18.0.1.2.0 scripts both run), a system administrator:
 
-1. Opens **Settings > Live Chat AI** (or **Live Chat > Configuration > AI Settings**).
-2. Enters the **LiteLLM Base URL** and the dedicated **LiteLLM API Key** (`odoo-livechat`), saves.
-3. Clicks **Fetch Available Models**, then **Test Connection**.
-4. Re-enables AI on each channel (**Live Chat > Configuration > Channels > AI Integration**) and picks the model.
+1. Opens **Live Chat > Configuration > Channels**, the channel, tab **AI Integration**.
+2. Chooses the **Backend Type**, enters the **Endpoint URL**, the **Access Token** (and the **Model** for LiteLLM), saves.
+3. Clicks **Test Connection**, then re-enables AI on the channel.
 
 Revoke the old per-channel provider keys at the provider: the upgrade removes them from Odoo, but copies may exist elsewhere (backups, git history, logs).
 
@@ -85,12 +113,12 @@ Revoke the old per-channel provider keys at the provider: the upgrade removes th
 |---|---|---|
 | **Response Time** | Visitors wait for a human agent | AI responds within seconds, 24/7 |
 | **Agent Workload** | Every inquiry requires human attention | AI handles routine questions; operators take over at any time |
-| **Prices and Specs** | Agents look them up | AI quotes only website data returned by the product tools, with links |
+| **Backends** | -- | Per channel: LiteLLM, Hermes or an n8n workflow, each with its own token |
 | **Reliability** | -- | Reply jobs survive restarts; rapid messages get one reply |
 | **Human Handoff** | -- | Operator reply or "真人 / 客服" pauses the AI and notifies operators |
-| **Key Safety** | -- | One admin-only LiteLLM key with budget and rate limits on the gateway |
+| **Key Safety** | -- | Tokens set by system administrators only, write-only, never sent to n8n |
 | **Privacy** | -- | API logs without conversation content by default, admins only |
-| **Infrastructure** | External services, middleware, glue code | Runs inside Odoo; only the LiteLLM gateway is called |
+| **Infrastructure** | External services, middleware, glue code | Odoo records and forwards; the backend owns tools and permissions |
 
 ---
 
@@ -100,18 +128,12 @@ Revoke the old per-channel provider keys at the provider: the upgrade removes th
 
 ```
 ┌─────────────┐   ┌───────────────────┐   ┌───────────────────────┐   ┌──────────────┐
-│   Visitor   │──>│  Odoo Live Chat   │──>│  im_livechat.ai.job   │──>│   LiteLLM    │
-│  (Browser)  │<──│ (discuss.channel) │<──│ (after commit thread, │<──│  /v1/chat/   │
-└─────────────┘   └───────────────────┘   │  recovery cron)       │   │  completions │
-   Chat UI          _notify_thread():      └──────────┬────────────┘   └──────────────┘
-                    create job in the                 │ tool calls (max 3 calls) 
-                    visitor's transaction             v
-                                           ┌───────────────────────┐
-                                           │ im_livechat.ai.tools  │
-                                           │ search_products,      │
-                                           │ get_product_details   │
-                                           │ (ORM, read-only)      │
-                                           └───────────────────────┘
+│   Visitor   │──>│  Odoo Live Chat   │──>│  im_livechat.ai.job   │──>│ channel backend:   │
+│  (Browser)  │<──│ (discuss.channel) │<──│ (after commit thread, │<──│ openai /v1/chat/   │
+└─────────────┘   └───────────────────┘   │  recovery cron)       │   │ completions, or a  │
+   Chat UI          _notify_thread():      └───────────────────────┘   │ signed n8n webhook │
+                    create job in the                                  └────────────────────┘
+                    visitor's transaction
 ```
 
 ### Sequence Diagram
@@ -121,8 +143,7 @@ sequenceDiagram
     participant V as Visitor (Browser)
     participant O as Odoo Live Chat
     participant J as AI reply job
-    participant T as Product tools (ORM)
-    participant LLM as LiteLLM
+    participant B as Channel backend (openai / n8n)
 
     V->>O: Send chat message
     O->>O: _notify_thread()
@@ -137,15 +158,9 @@ sequenceDiagram
         Note over O,J: COMMIT, then postcommit starts a thread
         J->>J: wait 1.5 s (debounce), take per-session lock
         J->>J: newer job in the session? -> skipped
-        J->>J: _build_llm_messages()
-        loop at most 3 tool rounds
-            J->>LLM: POST /chat/completions (tools)
-            LLM-->>J: tool_calls
-            J->>T: search_products / get_product_details
-            T-->>J: names, website prices, links
-        end
-        J->>LLM: POST /chat/completions
-        LLM-->>J: answer
+        J->>J: _ai_conversation(): history, prompt, events
+        J->>B: POST (openai: Bearer; n8n: signed body)
+        B-->>J: answer (n8n: reply / replies / skip)
         J->>J: still the newest job and not paused?
         J-->>V: post reply as the bot partner
     end
@@ -168,7 +183,7 @@ flowchart TD
     F --> G[After commit: debounce,<br/>per-session lock]
     G --> I{Newer job or paused?}
     I -->|Yes| S[Skipped]
-    I -->|No| J[Call LiteLLM<br/>tool rounds, 45 s timeout]
+    I -->|No| J[Call the channel backend<br/>45 s timeout]
     J --> K{Success?}
     K -->|Yes| L[Post reply]
     K -->|No, retries left| R[Wait 3 s / 10 s] --> J
@@ -187,20 +202,20 @@ flowchart TD
 
 ### Core Capabilities
 
-- **Company LiteLLM gateway** -- One system-wide OpenAI-compatible base URL and API key (Settings > Live Chat AI), managed by system administrators only.
-- **Model dropdown per channel** -- Channels pick a model from the list cached by **Fetch Available Models** (`GET {base}/models`). The value already stored on a channel always stays selectable.
-- **Multi-turn context** -- Recent history (1-200 messages) as system/user/assistant messages. Operator replies are sent as `assistant` messages marked `[真人客服 name]`, and the prompt tells the AI not to contradict them.
+- **Backend per channel** -- OpenAI compatible (LiteLLM, Hermes, ...) or an n8n webhook, with its own endpoint URL and access token, set by system administrators on the channel's AI tab. Live Chat managers see only whether the connection is set.
+- **Free-text model** -- The model is a text field (optional; required to enable AI on an OpenAI compatible backend, since LiteLLM needs it; Hermes ignores it; n8n does not use it). It is only sent when set.
+- **Multi-turn context** -- Recent history (1-200 messages). Visitors are `user` turns, the AI bot is `assistant`, operators are `user` turns marked `[真人客服 name]` (as in `woow_ai_contact`), and a conversation event tells the AI not to contradict them. OpenAI messages always start and end with a user turn.
 - **Visitors and portal customers** -- Guests, logged-in portal customers and the public user are answered, and so is an employee who opens the website chat as the visitor; operators (the session operator and internal users who join) and the bots never trigger the AI. Only visitor chat messages are answered, not the rating/feedback notification.
 
 ### Reliability (job queue)
 
 - **Durable reply jobs** (`im_livechat.ai.job`) -- Created in the same transaction as the visitor message, so a job exists exactly when the message was committed. Processing starts after commit.
 - **One reply for rapid messages** -- 1.5 s debounce, a PostgreSQL advisory lock per conversation (works across prefork workers and the cron process), and a job that has a newer job in the same conversation is skipped; the newest one answers with the full context.
-- **Bounded calls** -- 45 s timeout per call, at most 2 retries (waiting 3 s, then 10 s), at most 3 processing runs per job.
+- **Bounded calls** -- 45 s timeout per call (n8n: 90 s, under Cloudflare's 100 s), at most 2 retries (waiting 3 s, then 10 s), at most 3 processing runs per job. OpenAI compatible calls are retried on any failure; n8n calls only when the connection could not be opened or n8n answered HTTP 429 / 503 -- never after a read timeout (the agent may still be running; a workflow is never started twice).
 - **Recovery cron** -- Every 2 minutes, jobs left pending or running by a restart or crash are run again; a job is never answered twice (it is skipped when the bot already replied after its message). Unfinished jobs older than 30 minutes are given up. The cron also runs the deferred replies of a handoff wait (triggered for the end of the wait). Requires a cron process (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
-- **Monitoring** -- **Settings > Live Chat AI > Reply Jobs** (system administrators) shows the cron's last run and the number of pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck.
+- **Monitoring** -- The **Reply Jobs** block of each channel's AI tab (Live Chat managers) shows the cron's last run and the number of pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck.
 - **Failure handling** -- After the last retry the visitor gets the channel's error message (Traditional Chinese by default) and the operators are notified (OdooBot message and a sticky notification).
-- **Visible queue** -- **Live Chat > Configuration > AI Reply Jobs** shows every job's status, runs, LLM calls and short error.
+- **Visible queue** -- **Live Chat > Configuration > AI Reply Jobs** shows every job's status, runs, backend calls and short error.
 
 ### Human Handoff
 
@@ -208,38 +223,29 @@ Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until
 
 - **Operator replied** (`operator`) -- When an internal user posts in a conversation, the AI stays quiet there for **30 minutes** (**Pause After Human Reply**, per channel, 1-1440). Each further operator post extends the pause to now + 30 minutes (never shortens it). During this pause the AI sends nothing: no reply, no notice.
 - **Visitor asked for a human** (`handoff`) -- Only explicit requests trigger it: `找真人`, `真人客服`, `轉真人`, `轉人工`, `人工客服`, `找客服`, `聯絡客服`, `我要客服`, `human agent`, `talk to a human`, `real person`, `live agent` (configurable). Chinese entries match anywhere in the message; English entries match whole words or phrases, case-insensitive, with any whitespace between the words. Single words such as `客服`, `人工`, `agent` no longer hand over (a question about "客服電話" is answered by the AI). The AI sends the handoff message once ("已幫您通知客服，請稍候。"), notifies the operators and **waits 10 minutes** (**Wait For Human After Handoff Request**, 1-1440).
-- **Waiting notice** -- The first visitor message during that wait gets one fixed reply (**Waiting Notice**, default "已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 10 分鐘後繼續為您服務。"; `%(minutes)s` is replaced with the wait minutes). Once per wait (`discuss.channel.ai_pause_notice_sent`), no LLM call.
+- **Waiting notice** -- The first visitor message during that wait gets one fixed reply (**Waiting Notice**, default "已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 10 分鐘後繼續為您服務。"; `%(minutes)s` is replaced with the wait minutes). Once per wait (`discuss.channel.ai_pause_notice_sent`), no backend call.
 - **Operator takes over** -- An operator post during the wait turns it into an operator pause that ends 30 minutes after that post, even when the wait was set longer (a 120-minute wait does not keep the AI quiet for 120 minutes); the notice and the deferred replies are dropped quietly.
 - **Auto-resume** -- If no operator replied when the wait ends, the AI answers everything the visitor wrote during the wait, without the visitor writing again: each such message gets a deferred reply job due at the end of the wait (`im_livechat.ai.job.deferred`), the recovery cron is triggered for that time, and the newest job answers them all in one reply (the others are skipped). Expect the answer within about a minute after the wait ends (cron wake-up).
 
-### Product Lookup Tools (needs eCommerce)
-
-- **search_products** -- Up to 8 published, sellable products: name (zh_TW when installed), website price range, short description, categories, absolute URL.
-- **get_product_details** -- One product: description, attributes, variants with their website price and URL, optional attributes with extra prices.
-- **Read-only ORM, no MCP** -- Only products published on the channel's website; prices are what a public visitor sees (website pricelist, tax display).
-- **At most 3 tool rounds per reply** (5 calls per round, no new round after 90 s); then the model must answer with what it has.
-- **Fixed price rule** -- The system prompt always says prices, specifications and stock may only come from the tools; without the tools (or with **Allow Product Lookup** off) the AI asks for contact details instead of quoting.
-- **Per-channel switch** -- **Allow Product Lookup** (on by default).
-
 ### Privacy & Operations
 
-- **API logs for Live Chat administrators only** -- Time, model, tokens, duration, status, requested tool names and a short error.
-- **No conversation content by default** -- **Log Conversation Content** (off) stores request/response payloads only while debugging; turning it off erases stored content.
-- **Retention** -- Logs and finished jobs older than **14 days** (configurable) are deleted daily.
+- **AI API logs for Live Chat administrators only** -- Time, backend type, model, tokens, duration, status, HTTP status and a short error.
+- **No conversation content by default** -- **Log Conversation Content** (per channel, system administrators, off) stores request/response bodies only while debugging; turning it off erases that channel's stored content. The token is never part of a stored body.
+- **Retention** -- Logs and finished jobs older than the channel's **Log Retention (days)** (default 14) are deleted daily.
 - **Short errors** -- Test buttons and logs show the HTTP status and one short sentence; full upstream errors go to the server log only.
 
 ### AI Disclosure
 
-- **Welcome message** -- While AI is enabled, the chat window shows the channel's **AI Welcome Message** (default "您好，我是 AI 客服助理，可以先為您解答商品與價格問題；需要真人客服請輸入「找真人」。") instead of the Odoo welcome message.
+- **Welcome message** -- While AI is enabled, the chat window shows the channel's **AI Welcome Message** (default for new channels "您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。") instead of the Odoo welcome message.
 - **Bot avatar** -- AI messages are posted by the bot partner with the name of **Bot Name** and a robot avatar shipped with the module (`static/img/ai_bot.png`).
-- **Identity** -- The system prompt always starts with "你是 {website or company name} 的 AI 客服助理「{bot name}」。被問到身分時就這樣回答；不要自稱 ChatGPT、GPT、Codex、OpenAI 或其他產品／模型名稱。", followed by the channel prompt, the operator note and the product rules.
+- **Identity** -- Odoo no longer adds an identity block: the backend (or the channel's optional system prompt) decides the persona.
 - **Limit** -- The chat window header (and the author of the welcome message) still shows the session's human operator, as Odoo assigns one to every live chat session; the module does not change it.
 
 ### Security & Safety
 
 - **XSS protection** -- AI replies are escaped; only markdown links / bare `http(s)` URLs become links and `**text**` bold.
 - **Loop prevention** -- AI bots, OdooBot and the session operator never trigger the AI.
-- **AI settings for Live Chat managers only** -- The channel's AI fields (prompt, model, handoff keywords, error text, ...) and "Test AI Connection" are restricted to Live Chat managers; operators, employees and portal customers cannot read them. The bot partner is created by the module and cannot be chosen.
+- **AI settings for Live Chat managers only** -- The channel's AI fields (prompt, model, handoff keywords, error text, ...) are restricted to Live Chat managers; operators, employees and portal customers cannot read them. The connection (backend type, endpoint URL, access token, content logging) and **Test Connection** are for system administrators only. The bot partner is created by the module and cannot be chosen.
 - **Links only to the store** -- AI replies only turn URLs of `web.base.url` and the website domains into links; other URLs stay plain text.
 - **Traditional Chinese** -- Visitor/operator texts in Traditional Chinese; full `zh_TW` translation of the interface.
 
@@ -247,7 +253,7 @@ Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until
 
 ## Screenshots
 
-> The screenshots were taken with 18.0.1.0.0. The channel form now has a model dropdown instead of the API URL/key fields, and the connection lives in Settings > Live Chat AI.
+> The screenshots were taken with 18.0.1.0.0. Since 18.0.1.2.0 the AI tab has the **AI Backend Connection** block (backend type, endpoint URL, access token, model) instead.
 
 ### Livechat Channel List
 
@@ -312,9 +318,9 @@ Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until
    - Search for **"Live Chat AI Integration"**
    - Click **Install**
 
-3. **Dependencies**: `im_livechat` (required). Install **eCommerce** (`website_sale`) for the product lookup tools.
+3. **Dependencies**: `im_livechat` (required).
 
-4. **Configure LiteLLM** (see [Configuration](#configuration)); AI stays off until then.
+4. **Configure a backend per channel** (see [Configuration](#configuration)); AI stays off until then.
 
 ### Docker / Podman Deployment
 
@@ -353,50 +359,43 @@ A local development stack is provided in `odoo-ailivechat/`. It mounts the canon
 
 ## Configuration
 
-### Step 1: System-wide LiteLLM connection (system administrators only)
+Everything is on the channel: **Live Chat > Configuration > Channels > (channel) > AI Integration** tab.
 
-Open **Settings > Live Chat AI** (also reachable from **Live Chat > Configuration > AI Settings**). Only `base.group_system` can see or change these settings; values are stored in `ir.config_parameter`.
+### Step 1: Backend connection (system administrators only)
 
-| Setting | Description | Default |
+| Field | Description | Default |
 |---|---|---|
-| **LiteLLM Base URL** (`im_livechat_ai.base_url`) | OpenAI-compatible base URL of the company LiteLLM gateway, ending in `/v1`. | `https://paas-cs-32e92be2-5b2e4e66.woowtech.io/v1` |
-| **LiteLLM API Key** (`im_livechat_ai.api_key`) | Dedicated `odoo-livechat` key. Write-only: never shown again after saving; leave empty to keep the current key. | -- |
-| **Fetch Available Models** | Calls `GET {base}/models` and caches the list used by the channel model dropdown (`im_livechat_ai.model_cache`). | -- |
-| **Test Connection** | Sends a tiny request with the default model; shows only the HTTP status and a short message (details go to the server log). | -- |
-| **Log Conversation Content** (`im_livechat_ai.log_payload`) | Store request/response payloads in the API logs. Turning it off erases stored content. | Off |
-| **Log Retention (days)** (`im_livechat_ai.log_retention_days`) | The daily cleanup deletes older API logs and finished reply jobs. | `14` |
-| **Reply Jobs** (read-only) | Last run of **Live Chat AI: Recover Reply Jobs** and the number of pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck. | -- |
+| **Backend Type** (`ai_backend_type`) | `OpenAI compatible (LiteLLM, Hermes…)` or `n8n Webhook`. Live Chat managers see it read-only. | OpenAI compatible |
+| **Endpoint URL** (`ai_endpoint_url`) | OpenAI compatible: base URL ending in `/v1` (a pasted `/chat/completions` is removed). n8n: the full production webhook URL. `https://` only; `http://` only for `localhost`, `127.0.0.1`, `::1` and hosts ending in `.svc.cluster.local` (a short service name such as `http://hermes:8642/v1` is refused). | *(empty)* |
+| **Access Token** (`ai_api_token`) | OpenAI compatible (required): the API key (`Authorization: Bearer <token>`). n8n (optional): the signing secret (never sent); empty = requests are not signed, e.g. for a public Chat Trigger. Write-only: never shown again after saving (the form says whether one is saved); leave empty to keep it. | *(empty)* |
+| **Model (optional)** (`ai_model`) | Free text. Required to enable AI on an OpenAI compatible backend (LiteLLM needs it); Hermes ignores it; n8n does not use it. Live Chat managers may change it. | *(empty)* |
+| **Test Connection** | OpenAI compatible: a small chat completion with the channel's model. n8n: a `{"event": "ping", ..., "action": "loadPreviousSession"}` POST (signed when a secret is set) that must get HTTP 200; a Chat Trigger answers it without running the agent. Shows the HTTP status and one sentence only. | -- |
+| **Log Conversation Content** (`ai_log_payload`) | Keep request/response bodies in this channel's AI API logs; turning it off erases them. | Off |
 
-Only system administrators get these values: `default_get`/`get_values` of `res.config.settings` drop the `livechat_ai_*` values for everyone else (portal users, Live Chat managers included), the fields are restricted to `base.group_system`, and `set_values` refuses non-administrators.
-
-Recommended LiteLLM key (`odoo-livechat`): restricted to the chosen model, a monthly budget (e.g. USD 20) and a rate limit (e.g. 20 requests per minute), so a leaked key has a bounded cost and its usage shows up in the gateway's spend tracking.
+Live Chat managers see one line instead of these fields: "後端連線已設定（由系統管理員管理）" or "尚未設定後端連線，請系統管理員填寫". They cannot read or write the URL, the token or the content logging, and they can enable AI only when the connection is complete.
 
 ### Step 2: Enable AI on a channel (Live Chat managers)
 
-Navigate to **Live Chat > Configuration > Channels**, select a channel, and open the **AI Integration** tab. Enabling AI requires a model and a configured LiteLLM key; the bot partner is created at that moment.
-
-Validation: every range below is checked on each save, whether AI is on or off, and enabling AI re-checks all of them (values stored by an earlier version must be fixed first). The model must be in the cached LiteLLM list (or be the default `chatgpt-pool/gpt-6-sol`) when it is chosen or changed, or when AI is enabled; an unchanged older value (e.g. `MiniMax-M1`) does not block saving other fields. At reply time Max Tokens, Max History and Temperature are clamped to their ranges again (a stored 0 Max Tokens is sent as 1024).
-
 | Field | Description | Default |
 |---|---|---|
-| **Enable AI Integration** (`ai_enabled`) | Turn AI replies on for this channel. | Off |
-| **Model** (`ai_model`) | Model from the cached LiteLLM list. | `chatgpt-pool/gpt-6-sol` |
-| **Allow Product Lookup** (`ai_product_lookup`) | Let the AI use the product tools (needs eCommerce). | On |
-
-### Step 3: Define AI behaviour
-
-| Field | Description | Default |
-|---|---|---|
-| **System Prompt** (`ai_system_prompt`) | Persona, knowledge scope and style. The product price rule (and the operator note) are always appended. | *(empty)* |
-| **Temperature** (`ai_temperature`) | Randomness, 0.0 - 2.0. | `0.7` |
-| **Max Tokens** (`ai_max_tokens`) | Maximum tokens in the AI's answer, 1 - 8192. | `1024` |
+| **Enable AI Integration** (`ai_enabled`) | Turn AI replies on for this channel. Needs a complete connection (URL; for OpenAI compatible backends also the token and the model); the bot partner is created at that moment. | Off |
+| **System Prompt** (`ai_system_prompt`) | Optional instructions sent with every request. Empty: no system message from Odoo except conversation events (operator replies, end of a handoff wait). | *(empty)* |
 | **Max History Messages** (`ai_max_history`) | Recent messages sent as context, 1 - 200. | `50` |
+
+Validation: every range is checked on each save, whether AI is on or off, and enabling AI re-checks all of them. At reply time Max History is clamped again.
+
+### Step 3: Logs
+
+| Field | Description | Default |
+|---|---|---|
+| **Log Retention (days)** (`ai_log_retention_days`) | The daily cleanup deletes this channel's older AI API logs and finished reply jobs, 1 - 3650. | `14` |
+| **Reply Jobs** (read-only) | Last run of **Live Chat AI: Recover Reply Jobs** and the number of pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck. | -- |
 
 ### Step 4: Reliability and errors
 
 | Field | Description | Default |
 |---|---|---|
-| **Max Retries** (`ai_max_retries`) | Retries after a failed or timed-out call, 0 - 2 (45 s timeout; waits 3 s, then 10 s). | `2` |
+| **Max Retries** (`ai_max_retries`) | Retries after a failed call, 0 - 2 (45 s timeout; waits 3 s, then 10 s). n8n: only when the call could not be delivered or got HTTP 429 / 503. | `2` |
 | **Error Message** (`ai_error_message`) | Sent to the visitor when every retry failed (operators are notified too). | 抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。 |
 
 ### Step 5: Human handoff
@@ -415,16 +414,160 @@ The pause is stored on the conversation: `discuss.channel.ai_paused_until`, `ai_
 
 | Field | Description | Default |
 |---|---|---|
-| **Bot Name** (`ai_bot_name`) | Display name of the AI in the chat (also used in the identity block of the prompt). | `AI 客服助理` |
+| **Bot Name** (`ai_bot_name`) | Display name of the AI in the chat. | `AI 客服助理` |
 | **Bot Partner** (`ai_bot_partner_id`) | Archived `res.partner` tagged "AI 機器人" with the robot avatar, created when AI is enabled. | Auto-created |
-| **AI Welcome Message** (`ai_welcome_message`) | Welcome message of the chat window while AI is enabled. | 您好，我是 AI 客服助理，可以先為您解答商品與價格問題；需要真人客服請輸入「找真人」。 |
+| **AI Welcome Message** (`ai_welcome_message`) | Welcome message of the chat window while AI is enabled. | 您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。 |
 
 ### Step 7: Test & monitor
 
-- **Test AI Connection** (Live Chat managers) checks the channel's model; the result shows the HTTP status and a short message only.
-- **View API Logs** (Live Chat managers) opens this channel's logs: tokens, time, status, requested tools. Conversation content is only present while **Log Conversation Content** is on.
+- **Test Connection** (system administrators) checks the channel's backend; the result shows the HTTP status and a short message only.
+- **AI API Logs** (Live Chat managers) opens this channel's logs: backend, model, tokens, time, status, HTTP status. Conversation content is only present while **Log Conversation Content** is on.
 - **AI Reply Jobs** (Live Chat managers): the queue with filters for pending/running, failed, skipped and handoff jobs; deferred replies of a handoff wait are marked **Deferred** and wait for their **Run After** time.
-- **Settings > Live Chat AI > Reply Jobs** (system administrators): last run of the recovery cron and stuck jobs (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
+- **Reply Jobs** block on the AI tab: last run of the recovery cron and stuck jobs (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
+
+---
+
+## AI backends: LiteLLM, Hermes, n8n
+
+All three are configured the same way on the channel's AI tab (system administrators): **Backend Type**, **Endpoint URL**, **Access Token**, then **Test Connection**, then a Live Chat manager enables AI. Each channel can use a different backend.
+
+### LiteLLM (OpenAI compatible)
+
+| Field | Value |
+|---|---|
+| Backend Type | OpenAI compatible (LiteLLM, Hermes…) |
+| Endpoint URL | `https://litellm.example.com/v1` |
+| Access Token | a LiteLLM virtual key for this channel (`sk-...`), restricted to the model, with a budget and a rate limit |
+| Model | required, e.g. `chatgpt-pool/gpt-6-sol` |
+
+### Hermes (OpenAI compatible)
+
+| Field | Value |
+|---|---|
+| Backend Type | OpenAI compatible (LiteLLM, Hermes…) |
+| Endpoint URL | `http://hermes.<namespace>.svc.cluster.local:8642/v1` (in-cluster), or a public `https://` URL whose proxy lets `/v1` through with Bearer auth |
+| Access Token | Hermes' `API_SERVER_KEY` |
+| Model | any text, e.g. `hermes-agent` (Hermes ignores it and uses its own model; the module needs a value to enable AI on an OpenAI compatible backend) |
+
+Hermes loads its own tools: point Live Chat channels (anonymous visitors) at a Hermes that loads only public, read-only tools.
+
+### Request (OpenAI compatible)
+
+```http
+POST {endpoint}/chat/completions
+Authorization: Bearer <access token>
+Content-Type: application/json
+```
+
+```json
+{
+  "model": "chatgpt-pool/gpt-6-sol",
+  "messages": [
+    {"role": "system", "content": "<channel system prompt and conversation events, only when there are any>"},
+    {"role": "user", "content": "請問營業時間？"}
+  ],
+  "user": "woow-ai-0edfec80-42",
+  "metadata": {"session_id": "woow-ai-0edfec80-42", "odoo_guest_id": "7", "odoo_name": "訪客", "odoo_lang": "zh_TW",
+               "odoo_is_portal": "false", "odoo_is_guest": "true", "livechat_channel": "官網客服"}
+}
+```
+
+- `model` only when set; no `tools`, `temperature`, `max_tokens` or `stream` (the backend decides). Not streamed; 45 s timeout.
+- `messages` start and end with a user turn: the welcome message before the first visitor message is dropped; bot messages after the last visitor message are moved before it (quoted in one leading user turn when they would come first).
+- `user` and `metadata.session_id` = `woow-ai-<first 8 hex of database.uuid>-<discuss.channel id>`: stable for one conversation. `metadata` values are strings; no email.
+- Answer: a normal chat completion, `choices[0].message.content` (text or text parts). `<think>` blocks are removed.
+
+### n8n Webhook
+
+| Field | Value |
+|---|---|
+| Backend Type | n8n Webhook |
+| Endpoint URL | the **production** webhook URL, e.g. `https://n8n.example.com/webhook/livechat-ai` (or `http://n8n.<namespace>.svc.cluster.local:5678/webhook/livechat-ai`) |
+| Access Token | recommended: a random signing secret, e.g. `openssl rand -hex 32`; the same value goes into n8n's environment as `WOOW_AI_SIGNING_SECRET`. Optional: leave empty for a workflow without signature check (requests are then not signed) |
+| Model | not used |
+
+Request (`POST {endpoint}`), compact UTF-8 JSON, **no `Authorization` header**; the two signature headers only when a secret is set:
+
+```http
+Content-Type: application/json
+X-Woow-Timestamp: 1793430000
+X-Woow-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Woow-Timestamp>.<raw body>")>
+```
+
+```json
+{
+  "event": "message",
+  "session_id": "woow-ai-0edfec80-42",
+  "contact": {"id": 3, "name": "官網客服"},
+  "user": {"user_id": null, "partner_id": null, "guest_id": 7, "name": "訪客", "email": "", "lang": "zh_TW",
+           "tz": "Asia/Taipei", "is_portal": false, "is_guest": true, "company_id": null, "visitor_key": "guest:7"},
+  "channel": {"id": 42, "type": "livechat",
+              "livechat": {"livechat_channel_id": 3, "livechat_channel_name": "官網客服", "channel_id": 3,
+                           "channel_name": "官網客服", "operator_name": "客服小明", "country_code": "TW",
+                           "visitor_kind": "guest"}},
+  "system_prompt": "",
+  "message": {"id": 991, "text": "請問營業時間？", "attachments": []},
+  "history": [{"role": "assistant", "text": "您好，有什麼可以幫您？", "attachments": []}],
+  "events": [{"time": "2026-11-01T07:55:00Z", "kind": "operator", "text": "..."}],
+  "action": "sendMessage",
+  "sessionId": "woow-ai-0edfec80-42",
+  "chatInput": "請問營業時間？"
+}
+```
+
+- `action`, `sessionId` and `chatInput` are the fields an n8n **Chat Trigger** reads (same values as `session_id` and `message.text`); a Webhook-node workflow can ignore them.
+- `contact` is the Live Chat channel; `channel` is the conversation (`discuss.channel`). `message` is the visitor message being answered; `history` the rest of the context (operators are `user` entries starting with `[真人客服 name] `). `events` holds facts the model must know (`operator`: operators wrote in the conversation; `resume`: a handoff wait ended without an operator); `[]` when none. Attachments are always `[]`.
+- `user` follows the visitor rows of woow_ai_contact docs/LIVECHAT.md (guest, portal user, employee as visitor, partner without user, public user). Visitors are often anonymous: when `channel.type` is `livechat` or `user.is_guest` is true, give the model public data tools only.
+- The **Test Connection** button sends `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<channel id>"}`; answer HTTP 200 (for example `{"skip": true}`) to any non-`message` event. A Chat Trigger answers `loadPreviousSession` itself, without running the agent.
+
+Answer: HTTP 200 with JSON, within 90 s:
+
+```json
+{"reply": {"text": "markdown 文字"}}
+{"reply": "text"}
+{"replies": [{"text": "第一則"}, {"text": "第二則"}]}
+{"skip": true}
+{"output": "markdown 文字"}
+```
+
+`reply` posts one message, `replies` several (at most 10), `skip` none (the job is done without a message), `output` (the default answer of an n8n AI Agent and of a Chat Trigger) one message. An n8n item list (`[{"reply": ...}]`, `[{"output": ...}]`) is accepted. Anything else (non-200, not JSON, no `reply`/`replies`/`skip`/`output`, empty text) is an error: the visitor gets the channel's error message, the operators are notified and the AI API log keeps the HTTP status. When the agent fails, answer non-200 (e.g. 502). Calls time out after 90 s and are retried only when the connection could not be opened or n8n answered 429 / 503; never after a read timeout (the agent may still be running) or another answer. Redirects are not followed. Reply attachments are not supported (text only).
+
+#### Verify the signature (required)
+
+Verify the **raw bytes** (enable *Raw Body* on the Webhook node), reject a timestamp more than 300 s away and compare in constant time. Code node (needs `NODE_FUNCTION_ALLOW_BUILTIN=crypto`; keep the secret in an environment variable, never in the workflow):
+
+```js
+const crypto = require('crypto');
+const SECRET = $env.WOOW_AI_SIGNING_SECRET;
+const item = $input.first();
+const raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');
+const h = Object.fromEntries(Object.entries(item.json.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+const ts = String(h['x-woow-timestamp'] || '');
+if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) throw new Error('stale');
+const expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(ts + '.' + raw).digest('hex');
+const a = Buffer.from(expected), b = Buffer.from(String(h['x-woow-signature'] || ''));
+if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error('bad signature');
+return [{ json: JSON.parse(raw) }];
+```
+
+#### n8n Chat Trigger (hosted chat) workflows
+
+An existing workflow that starts with a **Chat Trigger** node (public chat, no authentication) can be used as it is, for example the smart-home advisor:
+
+- **Endpoint URL**: `<n8n>/webhook/<webhookId>/chat` (e.g. `https://n8n.example.com/webhook/smart-home-advisor/chat`); **Access Token** empty (a public Chat Trigger checks no signature; if you add a check, set the secret).
+- Odoo sends `action: "sendMessage"`, `sessionId` and `chatInput` (with all the protocol fields); the Chat Trigger answers `{"output": "..."}`, posted as one message (markdown links to the website and `**bold**` are rendered).
+- Agents of this kind take about 20-30 s per answer: the n8n timeout is 90 s and a read timeout is never retried.
+- Limits: such a workflow keeps **its own memory per `sessionId`** and ignores Odoo's `history` and `events`, so it does not see what a human operator wrote during a handoff, and it cannot verify that the request comes from Odoo. For new workflows prefer a **Webhook** node entry with the signature check below.
+
+#### Minimal n8n workflow
+
+1. **Webhook** -- HTTP Method `POST`, Path e.g. `livechat-ai`, Authentication `None`, option *Raw Body* on, Respond `Using 'Respond to Webhook' Node`.
+2. **Code** -- the signature check above (throws on a bad signature, so nothing else runs and n8n answers non-200).
+3. **IF** -- `{{ $json.event }}` equals `message`; the false branch goes to a **Respond to Webhook** node answering `{"skip": true}` (the ping of Test Connection).
+4. **AI Agent** -- Prompt `{{ $json.message.text }}`; system message `{{ ($json.system_prompt || 'You are the customer service assistant of our website.') + ($json.events.length ? '\n\nConversation events (facts, not your words):\n' + $json.events.map(e => '- ' + e.time + ' ' + e.text).join('\n') : '') }}`; a chat model; optional memory keyed by `{{ $json.session_id }}`; public, read-only tools only (product search, opening hours).
+5. **Respond to Webhook** -- Respond With `JSON`, Response Body `{{ JSON.stringify({ reply: { text: $json.output } }) }}`.
+
+Copy the production webhook URL into **Endpoint URL** and the secret into **Access Token**, click **Test Connection** (HTTP 200), then enable AI. n8n keeps the webhook body (the conversation) with each execution: set an execution retention, or do not save successful executions. A workflow that takes longer than 90 s (Cloudflare cuts at about 100 s) should answer `{"skip": true}` at once.
 
 ---
 
@@ -432,40 +575,39 @@ The pause is stored on the conversation: `discuss.channel.ai_paused_until`, `ai_
 
 ```
 im_livechat_ai/
-├── __init__.py
-├── __manifest__.py                      # v18.0.1.1.0
+├── __init__.py                          # uninstall hook (drops the token column)
+├── __manifest__.py                      # v18.0.1.2.0
 ├── models/
-│   ├── im_livechat_channel.py           # Channel AI fields, LiteLLM connection
-│   │                                    #   (_llm_request, _fetch_llm_models),
-│   │                                    #   reply generation with tool rounds and
-│   │                                    #   retries, bot partner, handoff keywords
+│   ├── im_livechat_channel.py           # Channel AI fields, per-channel backend
+│   │                                    #   connection (write-only token column),
+│   │                                    #   openai / n8n requests, signing, answer
+│   │                                    #   parsing, retries, bot partner, handoff
+│   │                                    #   keywords, AI tab monitoring
 │   ├── discuss_channel.py               # _notify_thread hook: pause on operator
 │   │                                    #   post, handoff, job creation; author
-│   │                                    #   classification; _build_llm_messages
+│   │                                    #   classification; visitor identity;
+│   │                                    #   _ai_conversation / _build_llm_messages
 │   ├── livechat_ai_job.py               # im_livechat.ai.job: durable reply queue,
 │   │                                    #   post-commit threads, advisory lock,
 │   │                                    #   recovery cron, operator notification
-│   ├── livechat_ai_tools.py             # im_livechat.ai.tools: search_products,
-│   │                                    #   get_product_details (read-only ORM)
-│   ├── llm_api_log.py                   # llm.api.log: metadata-only API logs,
-│   │                                    #   retention cleanup
-│   └── res_config_settings.py           # Settings > Live Chat AI (admins only)
+│   └── llm_api_log.py                   # llm.api.log: AI API logs (metadata only
+│                                        #   unless enabled), per-channel retention
 ├── views/
 │   ├── im_livechat_channel_views.xml    # "AI Integration" tab on the channel form
-│   ├── llm_api_log_views.xml            # API logs (menu: AI API Logs)
-│   ├── livechat_ai_job_views.xml        # Reply jobs (menu: AI Reply Jobs)
-│   └── res_config_settings_views.xml    # Settings page + menu: AI Settings
+│   ├── llm_api_log_views.xml            # AI API logs (menu: AI API Logs)
+│   └── livechat_ai_job_views.xml        # Reply jobs (menu: AI Reply Jobs)
 ├── data/
 │   └── ai_data.xml                      # "AI 機器人" tag, default bot partner,
 │                                        #   daily log cleanup cron, 2-minute
 │                                        #   job recovery cron
 ├── security/
 │   └── ir.model.access.csv              # Logs and jobs: Live Chat managers (read/delete)
-├── migrations/18.0.1.1.0/
-│   ├── pre-migrate.py                   # Wipe per-channel API URL/key
-│   └── post-migrate.py                  # Drop old columns, AI off, scrub logs,
-│                                        #   Chinese error message, tag bot partners
-├── tests/                               # 373 tests (see Testing)
+├── migrations/
+│   ├── 18.0.1.1.0/                      # From 18.0.1.0.x: wipe per-channel keys,
+│   │                                    #   AI off, scrub logs, bot partners
+│   └── 18.0.1.2.0/post-migrate.py       # System parameters -> every channel,
+│                                        #   then delete im_livechat_ai.* parameters
+├── tests/                               # 336 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -476,13 +618,13 @@ The repository also contains `odoo-ailivechat/` (local Docker stack, mounts the 
 
 ## Security
 
-### LiteLLM key
+### Backend connection and token
 
-The LiteLLM URL and key live in `ir.config_parameter`, which only `base.group_system` can read or write, and every settings field also carries `groups='base.group_system'`. Channels only choose a model, so a Live Chat user or manager can neither read the key nor send it to another URL. The key is write-only in the settings form and is not stored in the transient settings table. Errors shown in the interface or stored in logs never contain upstream response bodies.
+The endpoint URL, the access token and content logging carry `groups='base.group_system'` and are refused on create/write for everyone else; Live Chat managers only see a computed "connection ready" flag and the backend type (read-only). The token lives in an SQL-only column (`ai_api_token_secret`, not an ORM field): no read of the channel ever returns it, the form field is write-only, copies of a channel get no URL and no token, and uninstalling the module drops the column. For n8n the token is optional and only the HMAC key of `X-Woow-Signature`; it is never sent (n8n stores the headers of every execution). Redirects are never followed, so a token is never sent to another host. Errors shown in the interface or stored in logs never contain upstream response bodies.
 
 ### API logs and conversation content
 
-`llm.api.log` and `im_livechat.ai.job` are readable by Live Chat administrators only. By default logs keep no conversation content; **Log Conversation Content** is meant for short debugging sessions, and switching it off erases what was stored. The daily cleanup applies the retention (default 14 days).
+`llm.api.log` and `im_livechat.ai.job` are readable by Live Chat administrators only. By default logs keep no conversation content; **Log Conversation Content** (per channel) is meant for short debugging sessions, and switching it off erases what was stored for that channel. The daily cleanup applies each channel's retention (default 14 days).
 
 ### XSS protection
 
@@ -491,20 +633,15 @@ AI replies are escaped with `markupsafe` before posting. Only markdown links and
 ### Loop prevention and authors
 
 1. **Bot exclusion** -- The channel's `ai_bot_partner_id`, the default AI bot and OdooBot never trigger the AI.
-2. **Operators** -- Partners with an internal (non-share) user are operators: their posts pause the AI and are sent to the LLM as colleague replies.
+2. **Operators** -- Partners with an internal (non-share) user are operators: their posts pause the AI and are sent to the backend as marked colleague replies.
 3. **Session operator** -- The conversation's assigned operator without an internal user (e.g. an Odoo chatbot) is treated as a bot.
 4. **Visitors** -- Guests, portal users and the public user are visitors.
 
-### Product tools
-
-The tools are read-only ORM searches limited to products published on the channel's website and allowed for sale; no MCP or external call is involved, and the number of rounds and calls per reply is capped.
-
 ### Input validation
 
-- The LiteLLM base URL must start with `http://` or `https://`.
-- Temperature (0.0-2.0), max history (1-200), max retries (0-2), pause and wait minutes (1-1440), max tokens (1-8192) and log retention (>= 1 day) are checked on every save, AI on or off, and all of them again when AI is enabled; at reply time max tokens, max history and temperature are clamped.
-- The model must be in the cached LiteLLM list (or the default) when it is chosen or changed, or when AI is enabled.
-- Enabling AI requires a model and a configured system LiteLLM key.
+- The endpoint URL must be `https://`; `http://` only for `localhost`, `127.0.0.1`, `::1` and `*.svc.cluster.local` hosts (checked on save and again before every call).
+- Max history (1-200), max retries (0-2), pause and wait minutes (1-1440) and log retention (1-3650 days) are checked on every save, AI on or off, and again when AI is enabled; at reply time max history is clamped.
+- Enabling AI requires the endpoint URL, the token and, for OpenAI compatible backends, a model.
 
 ---
 
@@ -512,20 +649,19 @@ The tools are read-only ORM searches limited to products published on the channe
 
 ### Test Suite Overview
 
-The module has **373 automated tests**. All HTTP calls are mocked: no LiteLLM key or network access is needed.
+The module has **336 automated tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
-| `test_im_livechat_ai.py` | 25 | Channel fields, constraints, LLM call, bot messages, logs |
+| `test_im_livechat_ai.py` | 22 | Channel fields and defaults, constraints, backend call, connection test, logs |
 | `test_discuss_channel.py` | 18 | Message interception, visitor detection, context building |
-| `test_integration.py` | 9 | End-to-end flow, multi-turn, retries, error fallback |
-| `test_edge_cases.py` | 97 | Edge cases: payloads, think tags, XSS, limits, logging |
-| `test_litellm_settings.py` | 42 | Settings access (admin only), write-only key, model list, privacy, migration |
+| `test_integration.py` | 9 | End-to-end flow, retries, error fallback, per-channel connection |
+| `test_edge_cases.py` | 97 | Edge cases: payloads, HTTP errors, think tags, XSS, limits, logging |
+| `test_backend.py` | 47 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`, 90 s timeout), 18.0.1.2.0 and 18.0.1.1.0 migrations |
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
-| `test_product_tools.py` | 37 | search_products / get_product_details, published-only, prices, tool rounds and limits |
-| `test_review_fixes.py` | 20 | Branch review fixes: AI config access, bot partner protection, which messages trigger, no open transaction during LLM calls, retries migration |
-| `test_pause_disclosure.py` | 44 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume (deferred jobs), range/model validation, settings privacy, job monitoring, AI disclosure, identity block, idempotent migration |
+| `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
+| `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
 ### Running the Tests
 
@@ -547,7 +683,7 @@ Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai
 
 ### E2E Testing
 
-The 15-scenario end-to-end plan of 18.0.1.0.0 is kept in `docs/plans/`. For 18.0.1.1.0, verify on a test database with the real LiteLLM key: three rapid messages give one reply, an operator reply pauses the AI, "我要找真人" pauses and notifies, and a product price question returns the website price with a link.
+The 15-scenario end-to-end plan of 18.0.1.0.0 is kept in `docs/plans/`. For 18.0.1.2.0, verify on a test database with a real backend per type: **Test Connection** succeeds, three rapid messages give one reply, an operator reply pauses the AI, "我要找真人" pauses and notifies, and an n8n workflow sees a valid signature.
 
 ---
 
@@ -555,32 +691,30 @@ The 15-scenario end-to-end plan of 18.0.1.0.0 is kept in `docs/plans/`. For 18.0
 
 ### AI is not responding to visitor messages
 
-1. **After an upgrade from 18.0.1.0.x** AI is off on every channel: configure LiteLLM and re-enable the channels (see [Upgrading](#upgrading-from-18010x)).
-2. **LiteLLM configured?** Settings > Live Chat AI shows "A key is configured"; **Test Connection** succeeds.
+1. **After an upgrade from 18.0.1.0.x** AI is off on every channel: configure the backend and re-enable the channels (see [Upgrading](#upgrading-from-18010x)).
+2. **Backend configured?** The channel's AI tab says "後端連線已設定（由系統管理員管理）"; **Test Connection** (system administrators) succeeds.
 3. **Paused?** An operator replied less than the pause time ago (default 30 minutes), or the visitor asked for a human and the wait (default 10 minutes) is not over: the AI answers when the wait ends, through the recovery cron.
-4. **Cron process** -- Settings > Live Chat AI > Reply Jobs warns when **Live Chat AI: Recover Reply Jobs** has not run for 5 minutes: start a cron process (`max_cron_threads >= 1`).
+4. **Cron process** -- The **Reply Jobs** block of the AI tab warns when **Live Chat AI: Recover Reply Jobs** has not run for 5 minutes: start a cron process (`max_cron_threads >= 1`).
 5. **Author** -- Messages from internal users (e.g. an administrator testing in the widget while logged in) pause the AI instead of being answered; test as a guest or portal user.
 6. **AI Reply Jobs** -- Look at the job of the message: `skipped` (a newer message answered), `failed` (see Error), or still `pending` (is the recovery cron active?).
 7. **Server log** -- Search for `odoo.addons.im_livechat_ai`.
 
-### The model I want is not in the dropdown
-
-Click **Fetch Available Models** in Settings > Live Chat AI. The list is what the LiteLLM key may use.
-
 ### The AI does not know product prices
 
-Product lookup needs the eCommerce module, **Allow Product Lookup** on the channel, and the product published on the channel's website. Without the tools the AI asks the visitor for contact details instead of quoting.
+Odoo no longer looks up products (18.0.1.2.0). Give the backend its own product tools (for example the Odoo MCP server in Hermes or n8n), limited to public data for Live Chat visitors.
 
 ### API returns errors
 
 | Error | Cause | Solution |
 |---|---|---|
-| `HTTP 401` | Key invalid or revoked | Enter a valid key in Settings > Live Chat AI |
-| `HTTP 403` | Key may not use this model | Allow the model for the key in LiteLLM, or choose another model |
-| `HTTP 404` | Wrong base URL or model | The base URL must end in `/v1`; fetch the model list again |
+| `HTTP 401` | Key invalid or revoked (n8n: signature rejected) | Enter a valid token on the channel's AI tab; for n8n use the same secret in the workflow |
+| `HTTP 403` | Key may not use this model | Allow the model for the key in LiteLLM, or change the model |
+| `HTTP 404` | Wrong URL or model | OpenAI compatible: the URL must end in `/v1`; n8n: use the production webhook URL and activate the workflow |
+| `HTTP 3xx` | The URL redirects (e.g. a login proxy) | Redirects are not followed: use the final URL, or an in-cluster `*.svc.cluster.local` URL |
 | `HTTP 429` | Rate limit or budget reached | Check the key's limits and spend in LiteLLM |
-| `HTTP 5xx` | Gateway or provider issue | Retried automatically (3 s, 10 s); check LiteLLM status |
-| Timeout / connection | Network or firewall | Odoo must reach the LiteLLM URL; calls time out after 45 s |
+| `HTTP 5xx` | Backend or provider issue | OpenAI compatible: retried (3 s, 10 s); n8n: only 503 is retried; check the backend |
+| Timeout / connection | Network or firewall | Odoo must reach the endpoint URL; calls time out after 45 s |
+| `回應格式不正確` | n8n answered without `reply` / `replies` / `skip` | Return `{"reply": {"text": ...}}` from the Respond to Webhook node |
 
 ### Bot messages show raw HTML
 
@@ -596,7 +730,6 @@ AI replies are escaped on purpose; only links and bold are rendered. Ask the mod
 |---|---|---|
 | `im_livechat` | Required | Odoo's built-in Live Chat module (base for livechat channels) |
 | `mail` | Required | `discuss.channel`, `mail.message` and messaging |
-| `website_sale` | Optional | Product lookup tools (published products, website prices) |
 
 ### Python Packages
 
@@ -604,13 +737,13 @@ All required Python packages are part of the standard Odoo 18 distribution:
 
 | Package | Purpose |
 |---|---|
-| `requests` | HTTP client for LiteLLM calls |
+| `requests` | HTTP client for backend calls |
 | `markupsafe` | XSS protection for bot responses |
 | `psycopg2` | PostgreSQL adapter (READ COMMITTED job cursors) |
 
 ### External service
 
-A LiteLLM (or other OpenAI-compatible) gateway with `/v1/chat/completions` and `/v1/models`; tool calling is needed for the product tools.
+Per channel: an OpenAI-compatible server with `/v1/chat/completions` (LiteLLM, Hermes, ...) or an n8n instance with a webhook workflow.
 
 ---
 
@@ -624,6 +757,16 @@ A LiteLLM (or other OpenAI-compatible) gateway with `/v1/chat/completions` and `
 ---
 
 ## Changelog
+
+### v18.0.1.2.0
+
+- **All settings on the Live Chat channel**: nothing of the module in the Settings app any more (Settings > Live Chat AI and the AI Settings menu removed).
+- **Generic backend per channel**: Backend Type (OpenAI compatible or n8n Webhook), Endpoint URL and Access Token on every channel, set by system administrators only (write-only token in an SQL-only column; https only, http for local and in-cluster hosts). Live Chat managers see whether the connection is set. Test Connection (system administrators): a small chat completion, or a signed n8n ping.
+- **n8n protocol** of woow_ai_contact: `X-Woow-Timestamp` / `X-Woow-Signature` HMAC signing (optional secret, never sent), session id `woow-ai-<db8>-<conversation>`, `user` identity per visitor kind, `channel.livechat`, `events`; answers `reply` / `replies` / `skip`; retried only when not delivered or on 429 / 503. **n8n Chat Trigger** workflows work too: `action` / `sessionId` / `chatInput` in the body, `{"output": ...}` answers, no secret needed, 90 s timeout.
+- **OpenAI requests**: `model` only when set, messages that start and end with a user turn, `user` and string `metadata`; no tools, temperature or max_tokens. Operators are user turns marked `[真人客服 name]`.
+- **Removed**: product lookup tools and Allow Product Lookup, Temperature, Max Tokens, the LiteLLM model list and its cache, the default URL and model, the identity block and product rules in the system prompt. The backend does all of this.
+- **Per-channel logs**: Log Conversation Content and Log Retention (days) per channel; AI API logs record the backend type and the HTTP status; the AI tab shows the recovery cron monitoring.
+- **Migration**: the 18.0.1.1.0 system parameters are copied to every channel and then deleted; AI state and models are kept (see [Upgrading to 18.0.1.2.0](#upgrading-to-180120)).
 
 ### v18.0.1.1.0
 

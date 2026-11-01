@@ -23,6 +23,12 @@ Features:
   hosts ending in .svc.cluster.local)
 * Conversation history context for multi-turn dialogue, the channel's
   optional system prompt, a stable session id and the visitor identity
+* Visitor images and files go to the backend as they are (no text
+  extraction): OpenAI compatible backends get images as image_url data URIs
+  and documents as file parts ("Visitor Files" = Attach the file) or signed
+  download links (Download link only, e.g. Hermes); n8n gets signed download
+  URLs (/im_livechat_ai/attachment/..., valid 1 hour, live chat attachments
+  only). Dangerous types are links only; size, count and 7 MB limits
 * Per-channel bot partner with custom name
 * Durable reply jobs: queued in the visitor's transaction, processed after
   commit, one at a time per conversation (rapid messages get one reply),

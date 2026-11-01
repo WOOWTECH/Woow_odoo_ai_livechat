@@ -19,6 +19,13 @@ woow_ai_contact docs/PROTOCOL.md:
   also carries the n8n Chat Trigger fields ``action`` / ``sessionId`` /
   ``chatInput``. The answer is ``reply`` / ``replies`` / ``skip``, or the
   AI Agent's ``output``.
+
+Visitor attachments (owner decision 39) go to the backend as they are, no
+text extraction: openai gets images as ``image_url`` data URIs and, in the
+channel's 'file' document mode, documents as ``file`` parts (original bytes
+and mimetype); everything else, and n8n always, gets signed download URLs
+(``/im_livechat_ai/attachment/<id>/<expires>.<hmac>``, valid 1 hour). See
+discuss_channel.py for the limits.
 """
 
 import base64
@@ -38,6 +45,8 @@ from urllib3.exceptions import MaxRetryError, NewConnectionError
 from odoo import api, fields, models, tools, _
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tools import SQL
+
+from .discuss_channel import DOCUMENT_MODE_FILE, DOCUMENT_MODE_LINK, redact_base64
 
 _logger = logging.getLogger(__name__)
 
@@ -359,6 +368,19 @@ class ImLivechatChannel(models.Model):
         help='OpenAI compatible backends: the model name the backend expects (LiteLLM '
              'needs it, for example chatgpt-pool/gpt-6-sol; Hermes ignores it). '
              'Not sent when empty. Not used by n8n.',
+    )
+    ai_document_mode = fields.Selection(
+        selection=[
+            (DOCUMENT_MODE_FILE, 'Attach the file (LiteLLM / OpenAI)'),
+            (DOCUMENT_MODE_LINK, 'Download link only (Hermes…)'),
+        ],
+        string='Visitor Files',
+        groups=AI_CONFIG_GROUP,
+        default=DOCUMENT_MODE_FILE,
+        help='Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly. '
+             'Download link only: for Hermes and other backends that do not take file '
+             'content; the backend downloads the file itself. Images are attached in both '
+             'modes; n8n always gets download links.',
     )
     ai_system_prompt = fields.Text(
         string='System Prompt',
@@ -1040,7 +1062,7 @@ class ImLivechatChannel(models.Model):
         model = (channel.ai_model or '').strip()
         if model:
             payload['model'] = model
-        payload['messages'] = session._ai_openai_messages(conversation)
+        payload['messages'] = session._ai_openai_messages(conversation, livechat_channel=channel)
         payload['user'] = session_id
         payload['metadata'] = self._ai_openai_metadata(session_id, identity, channel.name or '')
         headers['Authorization'] = 'Bearer %s' % token
@@ -1061,9 +1083,17 @@ class ImLivechatChannel(models.Model):
                             and e['kind'] == 'visitor'), None)
         if current is None:
             current = next((e for e in reversed(history) if e['kind'] == 'visitor'), None)
+        # Signed download URLs of the visitor attachments (nothing is inlined).
+        base_url = session._ai_attachment_base_url()
+        now = time.time()
+
+        def attachments(entry):
+            return [session._ai_attachment_info(a, base_url=base_url, now=now)
+                    for a in entry.get('attachments') or []]
+
         message = {'id': None, 'text': '', 'attachments': []}
         if current:
-            message = {'id': current['message_id'], 'text': current['text'], 'attachments': []}
+            message = {'id': current['message_id'], 'text': current['text'], 'attachments': attachments(current)}
         return {
             'event': 'message',
             'session_id': session_id,
@@ -1076,7 +1106,7 @@ class ImLivechatChannel(models.Model):
             'channel': session._ai_channel_info(),
             'system_prompt': conversation['system_prompt'] or '',
             'message': message,
-            'history': [{'role': e['role'], 'text': e['text'], 'attachments': []}
+            'history': [{'role': e['role'], 'text': e['text'], 'attachments': attachments(e)}
                         for e in history if e is not current],
             'events': [{
                 'time': event['time'].replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
@@ -1378,7 +1408,8 @@ class ImLivechatChannel(models.Model):
 
         Conversation content (request and response bodies) is only kept when
         the channel's "Log Conversation Content" is on (default off, P2-1).
-        The access token is never part of a payload.
+        The access token is never part of a payload, and the base64 data of
+        inlined files is replaced by ``<N bytes base64 omitted>``.
         """
         try:
             vals = {
@@ -1402,9 +1433,11 @@ class ImLivechatChannel(models.Model):
             channel = env['im_livechat.channel'].sudo().browse(channel_id).exists() if channel_id else None
             if channel and channel.ai_log_payload:
                 if request_payload:
-                    vals['request_payload'] = json.dumps(request_payload, ensure_ascii=False, default=str)
+                    vals['request_payload'] = json.dumps(redact_base64(request_payload),
+                                                         ensure_ascii=False, default=str)
                 if response_payload:
-                    vals['response_payload'] = json.dumps(response_payload, ensure_ascii=False, default=str)
+                    vals['response_payload'] = json.dumps(redact_base64(response_payload),
+                                                          ensure_ascii=False, default=str)
 
             env['llm.api.log'].sudo().create(vals)
         except Exception as log_error:

@@ -23,6 +23,13 @@
                             <field name="ai_model" invisible="ai_backend_type == 'n8n'"
                                    required="ai_enabled and ai_backend_type == 'openai'"
                                    placeholder="chatgpt-pool/gpt-6-sol"/>
+                            <field name="ai_document_mode" widget="radio"
+                                   invisible="ai_backend_type == 'n8n'"/>
+                            <div colspan="2" class="text-muted" invisible="ai_backend_type == 'n8n'">
+                                Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly.
+                                Download link only: for Hermes and other backends that do not take file
+                                content; the backend downloads the file itself.
+                            </div>
                             <field name="ai_connection_ready" invisible="1"/>
                         </group>
                         <group name="ai_backend_status">

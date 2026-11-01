@@ -9,3 +9,4 @@ from . import test_handoff
 from . import test_review_fixes
 from . import test_pause_disclosure
 from . import test_backend
+from . import test_attachments

@@ -12,7 +12,8 @@ defence.
 Supported (enough for chat replies):
 
 - paragraphs, hard line breaks (a newline inside a paragraph is a ``<br/>``)
-- ``**bold**`` / ``__bold__``, ``*italic*`` / ``_italic_``, ``~~strike~~``
+- ``**bold**`` / ``__bold__``, ``*italic*`` / ``_italic_`` (``<i>``; ``2*3*4`` and
+  ``* item`` bullets stay as they are), ``~~strike~~``
 - inline ``code`` and fenced code blocks (```lang ... ```)
 - headings ``#`` .. ``######``, all rendered as ``h4`` (a chat bubble)
 - unordered (``-``, ``*``, ``+``) and ordered (``1.``) lists, nested by indent
@@ -54,7 +55,9 @@ _INLINE_RE = re.compile(
 )
 _URL_TRAILING_PUNCTUATION = '.,;:!?*\'"'
 _BOLD_RE = re.compile(r'(\*\*|__)(?=\S)(.+?)(?<=\S)\1')
-_ITALIC_STAR_RE = re.compile(r'(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])')
+# Not next to an ASCII letter or digit (2*3*4, a*b*c stay as they are), but
+# next to CJK text (這是*斜體*的) it is italics.
+_ITALIC_STAR_RE = re.compile(r'(?<![A-Za-z0-9_*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![A-Za-z0-9_*])')
 _ITALIC_UNDER_RE = re.compile(r'(?<![\w])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\w])')
 _STRIKE_RE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~')
 
@@ -84,8 +87,8 @@ def _emphasis(escaped):
     text = str(escaped)
     text = _BOLD_RE.sub(r'<strong>\2</strong>', text)
     text = _STRIKE_RE.sub(r'<del>\1</del>', text)
-    text = _ITALIC_STAR_RE.sub(r'<em>\1</em>', text)
-    text = _ITALIC_UNDER_RE.sub(r'<em>\1</em>', text)
+    text = _ITALIC_STAR_RE.sub(r'<i>\1</i>', text)
+    text = _ITALIC_UNDER_RE.sub(r'<i>\1</i>', text)
     return Markup(text)
 
 

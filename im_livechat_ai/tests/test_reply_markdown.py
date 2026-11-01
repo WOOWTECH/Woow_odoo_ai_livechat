@@ -84,6 +84,17 @@ class TestMarkdownRenderer(TransactionCase):
         self.assertIn('&lt;script&gt;', html)
         self.assertIn('<code>&lt;b&gt;</code>', html)
 
+    def test_single_star_italics(self):
+        render = self.render
+        self.assertEqual(render('這是 *斜體* 與 **粗體**'), '<p>這是 <i>斜體</i> 與 <strong>粗體</strong></p>')
+        self.assertEqual(render('這是*斜體*的'), '<p>這是<i>斜體</i>的</p>')
+        self.assertEqual(render('**粗體 *內含斜體* 結尾**'), '<p><strong>粗體 <i>內含斜體</i> 結尾</strong></p>')
+        self.assertEqual(render('***兩者***'), '<p><strong><i>兩者</i></strong></p>')
+        # bullets, arithmetic and lone stars are not italics
+        self.assertEqual(render('* 第一項\n* *第二項*'), '<ul><li>第一項</li><li><i>第二項</i></li></ul>')
+        for text in ('2*3*4 = 24', 'a*b*c', 'a * b * c', '*單邊', '5 * 3'):
+            self.assertEqual(render(text), '<p>%s</p>' % text, text)
+
     def test_empty(self):
         self.assertEqual(self.render(''), '')
         self.assertEqual(self.render('   \n'), '')

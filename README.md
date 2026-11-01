@@ -66,6 +66,7 @@ The request formats are compatible with the n8n section of `woow_ai_contact` (do
 | `im_livechat_ai.log_payload` / `im_livechat_ai.log_retention_days` | Copied to every channel (**Log Conversation Content**, **Log Retention (days)**). |
 | All `im_livechat_ai.*` system parameters | Deleted (the key included; the model cache is no longer used). |
 | **Enable AI Integration**, model | Unchanged: a channel with AI on and copied credentials keeps answering. The model stays as text. |
+| **Visitor Files** (new) | "Download link only" on Hermes channels (model `hermes-agent` or an endpoint URL containing `hermes`), "Attach the file" on the others. A value already set is kept. |
 | Settings > Live Chat AI, menu Live Chat > Configuration > AI Settings | Removed. |
 | Product lookup tools, Temperature, Max Tokens, model list, identity block | Removed: the backend does this now. |
 
@@ -369,6 +370,7 @@ Everything is on the channel: **Live Chat > Configuration > Channels > (channel)
 | **Endpoint URL** (`ai_endpoint_url`) | OpenAI compatible: base URL ending in `/v1` (a pasted `/chat/completions` is removed). n8n: the full production webhook URL. `https://` only; `http://` only for `localhost`, `127.0.0.1`, `::1` and hosts ending in `.svc.cluster.local` (a short service name such as `http://hermes:8642/v1` is refused). | *(empty)* |
 | **Access Token** (`ai_api_token`) | OpenAI compatible (required): the API key (`Authorization: Bearer <token>`). n8n (optional): the signing secret (never sent); empty = requests are not signed, e.g. for a public Chat Trigger. Write-only: never shown again after saving (the form says whether one is saved); leave empty to keep it. | *(empty)* |
 | **Model (optional)** (`ai_model`) | Free text. Required to enable AI on an OpenAI compatible backend (LiteLLM needs it); Hermes ignores it; n8n does not use it. Live Chat managers may change it. | *(empty)* |
+| **Visitor Files** (`ai_document_mode`) | OpenAI compatible backends: **Attach the file (LiteLLM / OpenAI)** sends visitor documents (PDF, Word, Excel, text) as they are; **Download link only (Hermes…)** sends a signed download link instead (the backend downloads the file itself). Images are attached in both modes; n8n always gets links. See [Visitor files](#visitor-files). Live Chat managers may change it. | Attach the file (`link` for Hermes channels after the upgrade) |
 | **Test Connection** | OpenAI compatible: a small chat completion with the channel's model. n8n: a `{"event": "ping", ..., "action": "loadPreviousSession"}` POST (signed when a secret is set) that must get HTTP 200; a Chat Trigger answers it without running the agent. Shows the HTTP status and one sentence only. | -- |
 | **Log Conversation Content** (`ai_log_payload`) | Keep request/response bodies in this channel's AI API logs; turning it off erases them. | Off |
 
@@ -448,6 +450,7 @@ All three are configured the same way on the channel's AI tab (system administra
 | Endpoint URL | `http://hermes.<namespace>.svc.cluster.local:8642/v1` (in-cluster), or a public `https://` URL whose proxy lets `/v1` through with Bearer auth |
 | Access Token | Hermes' `API_SERVER_KEY` |
 | Model | any text, e.g. `hermes-agent` (Hermes ignores it and uses its own model; the module needs a value to enable AI on an OpenAI compatible backend) |
+| Visitor Files | **Download link only (Hermes…)**: Hermes refuses `file` parts; its agent downloads the signed link |
 
 Hermes loads its own tools: point Live Chat channels (anonymous visitors) at a Hermes that loads only public, read-only tools.
 
@@ -476,6 +479,7 @@ Content-Type: application/json
 - `messages` start and end with a user turn: the welcome message before the first visitor message is dropped; bot messages after the last visitor message are moved before it (quoted in one leading user turn when they would come first).
 - `user` and `metadata.session_id` = `woow-ai-<first 8 hex of database.uuid>-<discuss.channel id>`: stable for one conversation. `metadata` values are strings; no email.
 - Answer: a normal chat completion, `choices[0].message.content` (text or text parts). `<think>` blocks are removed.
+- A visitor message with attachments becomes a list of content parts, see [Visitor files](#visitor-files).
 
 ### n8n Webhook
 
@@ -516,7 +520,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(secret, "<X-Woow-Timestamp>.<raw body>
 ```
 
 - `action`, `sessionId` and `chatInput` are the fields an n8n **Chat Trigger** reads (same values as `session_id` and `message.text`); a Webhook-node workflow can ignore them.
-- `contact` is the Live Chat channel; `channel` is the conversation (`discuss.channel`). `message` is the visitor message being answered; `history` the rest of the context (operators are `user` entries starting with `[真人客服 name] `). `events` holds facts the model must know (`operator`: operators wrote in the conversation; `resume`: a handoff wait ended without an operator); `[]` when none. Attachments are always `[]`.
+- `contact` is the Live Chat channel; `channel` is the conversation (`discuss.channel`). `message` is the visitor message being answered; `history` the rest of the context (operators are `user` entries starting with `[真人客服 name] `). `events` holds facts the model must know (`operator`: operators wrote in the conversation; `resume`: a handoff wait ended without an operator); `[]` when none. `attachments` lists the files of visitor messages as `{"id", "name", "mimetype", "size", "url", "expires_at"}` with a signed download URL valid one hour (nothing is inlined); bot and operator entries always have `[]`. See [Visitor files](#visitor-files).
 - `user` follows the visitor rows of woow_ai_contact docs/LIVECHAT.md (guest, portal user, employee as visitor, partner without user, public user). Visitors are often anonymous: when `channel.type` is `livechat` or `user.is_guest` is true, give the model public data tools only.
 - The **Test Connection** button sends `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<channel id>"}`; answer HTTP 200 (for example `{"skip": true}`) to any non-`message` event. A Chat Trigger answers `loadPreviousSession` itself, without running the agent.
 
@@ -571,6 +575,37 @@ Copy the production webhook URL into **Endpoint URL** and the secret into **Acce
 
 ---
 
+### Visitor files
+
+Images and files that **visitors** send in the chat go to the backend as they are: Odoo extracts no text and converts nothing (owner decision 39, same rules as woow_ai_contact). Attachments of bot, OdooBot and operator messages are never sent.
+
+**OpenAI compatible backends** -- the user turn of the message that carried the files becomes a list of parts:
+
+```json
+{"role": "user", "content": [
+  {"type": "text", "text": "請看報價單\n[附件] 報價單.pdf（application/pdf，85.2 KB）：檔案已附在這則訊息"},
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+  {"type": "file", "file": {"filename": "報價單.pdf", "file_data": "data:application/pdf;base64,..."}}
+]}
+```
+
+| What | How it is sent |
+|---|---|
+| Images (png, jpeg, gif, webp; type detected from the content, not the name) | `image_url` data URI, in both modes. Only the 3 most recent visitor messages, at most 4 images, 5 MB each. |
+| Documents (PDF, Word `docx`, Excel `xlsx`/`xls`, `txt`/`md`/`csv`/`tsv`/`json`), **Visitor Files = Attach the file** | `file` part with the original bytes and the original mimetype, plus a line `[附件] <name>（<mimetype>，<size>）：檔案已附在這則訊息`. Only the 5 most recent visitor messages, at most 5 documents, 5 MB each. |
+| Documents in **Download link only** mode, older files, other files (archives, audio, video...) and anything over a limit | a line `[附件] <name>（<mimetype>，<size>）：<signed url>`; a file skipped because of a limit also gets `[附件說明] <name>：<reason>`. |
+| Dangerous or active types: html, svg, xml, javascript, executables and scripts, zip archives with executables, archives Odoo cannot look into (rar, 7z, tar, gz...) | always a link, never inlined (checked on the name, the uploaded type and the content). |
+
+All data URIs of one request share **7 MB** (images first, newest first; Hermes rejects requests over 10 MB). The limits are constants at the top of `models/discuss_channel.py`.
+
+**n8n** -- `message.attachments` and `history[].attachments` carry `{"id", "name", "mimetype", "size", "url", "expires_at"}`; nothing is inlined. The workflow downloads what it needs.
+
+**Signed download URL** (both backends): `GET {web.base.url}/im_livechat_ai/attachment/<id>/<expires>.<hex HMAC-SHA256(database.secret, "im_livechat_ai|<id>|<checksum>|<expires>")>`, valid 1 hour. Only attachments of messages in a live chat session are served, as a download (`Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`); an expired or wrong signature, or any other attachment, is a 404. The URL is built on the system parameter **`web.base.url`**, which must be the public address of the site (the backend downloads from there; with several databases on one server, the URL must reach this database through the db filter).
+
+**Logs**: with Log Conversation Content on, the base64 of every data URI is stored as `<N bytes base64 omitted>`.
+
+---
+
 ## Module Structure
 
 ```
@@ -586,12 +621,16 @@ im_livechat_ai/
 │   ├── discuss_channel.py               # _notify_thread hook: pause on operator
 │   │                                    #   post, handoff, job creation; author
 │   │                                    #   classification; visitor identity;
-│   │                                    #   _ai_conversation / _build_llm_messages
+│   │                                    #   _ai_conversation / _build_llm_messages;
+│   │                                    #   visitor files (limits, signed URLs)
 │   ├── livechat_ai_job.py               # im_livechat.ai.job: durable reply queue,
 │   │                                    #   post-commit threads, advisory lock,
 │   │                                    #   recovery cron, operator notification
 │   └── llm_api_log.py                   # llm.api.log: AI API logs (metadata only
 │                                        #   unless enabled), per-channel retention
+├── controllers/
+│   └── main.py                          # signed download of visitor attachments
+│                                        #   (/im_livechat_ai/attachment/...)
 ├── views/
 │   ├── im_livechat_channel_views.xml    # "AI Integration" tab on the channel form
 │   ├── llm_api_log_views.xml            # AI API logs (menu: AI API Logs)
@@ -605,9 +644,10 @@ im_livechat_ai/
 ├── migrations/
 │   ├── 18.0.1.1.0/                      # From 18.0.1.0.x: wipe per-channel keys,
 │   │                                    #   AI off, scrub logs, bot partners
-│   └── 18.0.1.2.0/post-migrate.py       # System parameters -> every channel,
-│                                        #   then delete im_livechat_ai.* parameters
-├── tests/                               # 336 tests (see Testing)
+│   └── 18.0.1.2.0/                      # System parameters -> every channel,
+│                                        #   then delete im_livechat_ai.* parameters;
+│                                        #   Visitor Files per channel (Hermes: link)
+├── tests/                               # 359 tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -624,7 +664,7 @@ The endpoint URL, the access token and content logging carry `groups='base.group
 
 ### API logs and conversation content
 
-`llm.api.log` and `im_livechat.ai.job` are readable by Live Chat administrators only. By default logs keep no conversation content; **Log Conversation Content** (per channel) is meant for short debugging sessions, and switching it off erases what was stored for that channel. The daily cleanup applies each channel's retention (default 14 days).
+`llm.api.log` and `im_livechat.ai.job` are readable by Live Chat administrators only. By default logs keep no conversation content (and never the base64 of visitor files: `<N bytes base64 omitted>`); **Log Conversation Content** (per channel) is meant for short debugging sessions, and switching it off erases what was stored for that channel. The daily cleanup applies each channel's retention (default 14 days).
 
 ### XSS protection
 
@@ -649,7 +689,7 @@ AI replies are escaped with `markupsafe` before posting. Only markdown links and
 
 ### Test Suite Overview
 
-The module has **336 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **359 automated tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -661,6 +701,7 @@ The module has **336 automated tests**. All HTTP calls are mocked: no key or net
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
+| `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
 | `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
 ### Running the Tests
@@ -766,7 +807,8 @@ Per channel: an OpenAI-compatible server with `/v1/chat/completions` (LiteLLM, H
 - **OpenAI requests**: `model` only when set, messages that start and end with a user turn, `user` and string `metadata`; no tools, temperature or max_tokens. Operators are user turns marked `[真人客服 name]`.
 - **Removed**: product lookup tools and Allow Product Lookup, Temperature, Max Tokens, the LiteLLM model list and its cache, the default URL and model, the identity block and product rules in the system prompt. The backend does all of this.
 - **Per-channel logs**: Log Conversation Content and Log Retention (days) per channel; AI API logs record the backend type and the HTTP status; the AI tab shows the recovery cron monitoring.
-- **Migration**: the 18.0.1.1.0 system parameters are copied to every channel and then deleted; AI state and models are kept (see [Upgrading to 18.0.1.2.0](#upgrading-to-180120)).
+- **Visitor files** (owner decision 39): visitor images go to OpenAI compatible backends as `image_url` data URIs, documents as `file` parts with the original bytes and type (Visitor Files = Attach the file) or as signed download links (Download link only, e.g. Hermes); n8n gets the attachments with signed URLs. Signed download route `/im_livechat_ai/attachment/<id>/<expires>.<hmac>` (1 hour, live chat attachments only). No text extraction. Dangerous types are links only; size, count and 7 MB limits; base64 is not stored in the logs.
+- **Migration**: the 18.0.1.1.0 system parameters are copied to every channel and then deleted; AI state and models are kept; Visitor Files becomes "Download link only" on Hermes channels (model `hermes-agent` or a URL containing `hermes`) and "Attach the file" elsewhere (see [Upgrading to 18.0.1.2.0](#upgrading-to-180120)).
 
 ### v18.0.1.1.0
 

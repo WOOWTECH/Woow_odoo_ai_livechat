@@ -72,6 +72,7 @@ Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查�
 | `im_livechat_ai.log_payload`／`im_livechat_ai.log_retention_days` | 複製到每個頻道（**記錄對話內容**、**日誌保留天數**）。 |
 | 所有 `im_livechat_ai.*` 系統參數 | 刪除（包括金鑰；模型清單快取已不再使用）。 |
 | **啟用 AI 整合**、模型 | 不變：AI 開著且複製到連線的頻道會繼續回覆。模型保留原本的文字。 |
+| **訪客傳的檔案**（新欄位） | Hermes 頻道（模型是 `hermes-agent` 或端點網址含 `hermes`）設為「只給下載連結」，其他頻道「直接附檔」。已有值的不改。 |
 | 設定 → Live Chat AI、選單「即時聊天 → 設定 → AI 設定」 | 移除。 |
 | 商品查詢工具、溫度、Max Tokens、模型清單、身分說明 | 移除：改由後端負責。 |
 
@@ -394,6 +395,7 @@ Woow_odoo_ai_livechat/
 | **端點網址**（`ai_endpoint_url`） | OpenAI 相容：結尾為 `/v1` 的基礎網址（貼上 `/chat/completions` 會自動去掉）。n8n：完整的正式 Webhook 網址。只接受 `https://`；`http://` 只限 `localhost`、`127.0.0.1`、`::1` 與結尾為 `.svc.cluster.local` 的主機（`http://hermes:8642/v1` 這種短名稱會被拒絕） | 空白 |
 | **存取金鑰（Token）**（`ai_api_token`） | OpenAI 相容（必填）：API 金鑰（`Authorization: Bearer <token>`）。n8n（選填）：簽章密鑰（不會送出）；空白則請求不簽章，例如公開的 Chat Trigger。只寫不讀：儲存後不再顯示（表單會顯示是否已儲存），留空即保留 | 空白 |
 | **模型（選填）**（`ai_model`） | 文字欄位。OpenAI 相容後端啟用 AI 時必填（LiteLLM 需要）；Hermes 會忽略；n8n 不使用。即時聊天管理員可以改 | 空白 |
+| **訪客傳的檔案**（`ai_document_mode`） | OpenAI 相容後端：**直接附檔（LiteLLM／OpenAI）** 把訪客的文件（PDF、Word、Excel、文字檔）原封不動附上，LiteLLM／OpenAI 可直接讀；**只給下載連結（Hermes 等）** 改給簽章下載連結，由後端自己下載。圖片兩種模式都直接附上；n8n 一律只給連結。見[訪客傳的檔案](#訪客傳的檔案)。即時聊天管理員可以改 | 直接附檔（升級時 Hermes 頻道設為只給下載連結） |
 | **測試連線** | OpenAI 相容：用頻道的模型送一個小的 chat completion。n8n：送 `{"event": "ping", ..., "action": "loadPreviousSession"}`（有密鑰時會簽章），要回 HTTP 200；Chat Trigger 不會因此執行 agent。只顯示狀態碼和一句說明 | -- |
 | **記錄對話內容**（`ai_log_payload`） | 在這個頻道的 AI API 日誌保存請求與回應內容；關閉時清除 | 關閉 |
 
@@ -414,6 +416,7 @@ Woow_odoo_ai_livechat/
 | `ai_endpoint_url` | Char | -- | 端點網址（只有系統管理員能讀寫） |
 | `ai_api_token` | Char（只寫） | -- | 存取金鑰（只有系統管理員能寫；值存在不屬於 ORM 的 SQL 欄位；n8n 可留空） |
 | `ai_model` | Char | -- | 模型（選填） |
+| `ai_document_mode` | Selection | `file` | 訪客傳的檔案：`file` 直接附檔（LiteLLM／OpenAI）、`link` 只給下載連結（Hermes 等） |
 | `ai_system_prompt` | Text | -- | 選填的系統提示詞；空白時 Odoo 不送 system 訊息，只有對話事件（客服發言、等候真人逾時） |
 | `ai_max_history` | Integer | `50` | 最大歷史訊息數，用於建構對話上下文（1-200） |
 | `ai_max_retries` | Integer | `2` | 呼叫失敗後的重試次數（0-2；每次逾時 45 秒、n8n 90 秒，先等 3 秒、再等 10 秒；n8n 只在連不上或回 429／503 時重試） |
@@ -464,6 +467,7 @@ Woow_odoo_ai_livechat/
 | 端點網址 | `http://hermes.<namespace>.svc.cluster.local:8642/v1`（叢集內），或代理會讓 `/v1` 以 Bearer 通過的公開 `https://` 網址 |
 | 存取金鑰（Token） | Hermes 的 `API_SERVER_KEY` |
 | 模型（選填） | 任意文字，例如 `hermes-agent`（Hermes 會忽略、用自己的模型；但 OpenAI 相容後端啟用 AI 時本模組需要有值） |
+| 訪客傳的檔案 | **只給下載連結（Hermes 等）**：Hermes 不收 `file` 片段，由它的 agent 下載簽章連結 |
 
 Hermes 會載入自己的工具：給即時聊天（匿名訪客）用的頻道，請接只載入公開、唯讀工具的 Hermes。
 
@@ -492,6 +496,7 @@ Content-Type: application/json
 - `messages` 一定以 user 開頭、以 user 結尾：第一則訪客訊息之前的歡迎訊息會拿掉；最後一則訪客訊息之後的機器人訊息會移到它前面（若會變成第一則，就合併成開頭的一則 user 引述）。
 - `user` 與 `metadata.session_id` 是 `woow-ai-<database.uuid 前 8 碼>-<discuss.channel id>`，同一段對話固定不變。`metadata` 的值都是字串，不含 email。
 - 回覆：一般的 chat completion，取 `choices[0].message.content`（文字或文字片段）；`<think>` 區塊會移除。
+- 帶附件的訪客訊息會變成內容片段清單，見[訪客傳的檔案](#訪客傳的檔案)。
 
 ### n8n Webhook
 
@@ -532,7 +537,7 @@ X-Woow-Signature: sha256=<hex HMAC-SHA256(密鑰, "<X-Woow-Timestamp>.<原始 bo
 ```
 
 - `action`、`sessionId`、`chatInput` 是 n8n **Chat Trigger** 會讀的欄位（值同 `session_id` 與 `message.text`）；Webhook 節點的工作流程可以忽略。
-- `contact` 是即時聊天頻道；`channel` 是這段對話（`discuss.channel`）。`message` 是正在回答的訪客訊息；`history` 是其餘上下文（真人客服是開頭為 `[真人客服 姓名] ` 的 `user`）。`events` 是模型必須知道的事實（`operator`：客服在對話中發言過；`resume`：等候真人逾時、沒有客服回覆），沒有時是 `[]`。附件一律是 `[]`。
+- `contact` 是即時聊天頻道；`channel` 是這段對話（`discuss.channel`）。`message` 是正在回答的訪客訊息；`history` 是其餘上下文（真人客服是開頭為 `[真人客服 姓名] ` 的 `user`）。`events` 是模型必須知道的事實（`operator`：客服在對話中發言過；`resume`：等候真人逾時、沒有客服回覆），沒有時是 `[]`。`attachments` 是訪客訊息的檔案：`{"id", "name", "mimetype", "size", "url", "expires_at"}`，附 1 小時有效的簽章下載網址（不內嵌任何內容）；機器人與客服的訊息一律是 `[]`。見[訪客傳的檔案](#訪客傳的檔案)。
 - `user` 依 woow_ai_contact docs/LIVECHAT.md 的訪客表（訪客、入口網站使用者、員工以訪客身分、沒有使用者的聯絡人、公開使用者）。即時聊天訪客多半是匿名的：`channel.type` 是 `livechat` 或 `user.is_guest` 為 true 時，只能給模型公開資料的工具。
 - **測試連線** 會送 `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<頻道 id>"}`；非 `message` 的事件請回 HTTP 200（例如 `{"skip": true}`）。Chat Trigger 會自己回應 `loadPreviousSession`，不會執行 agent。
 
@@ -585,6 +590,35 @@ return [{ json: JSON.parse(raw) }];
 
 把正式 Webhook 網址填進 **端點網址**、密鑰填進 **存取金鑰（Token）**，按 **測試連線**（HTTP 200），再啟用 AI。n8n 每次執行都會保存 Webhook 內容（也就是對話）：請設定執行紀錄保留期限，或不保存成功的執行。超過 90 秒（Cloudflare 約 100 秒就會切斷）的工作流程，請立刻回 `{"skip": true}`。
 
+### 訪客傳的檔案
+
+**訪客**在聊天中傳的圖片與檔案原封不動交給後端：Odoo 不擷取文字、不轉檔（負責人決策 39，與 woow_ai_contact 同一套規則）。機器人、OdooBot 與客服訊息的附件一律不送。
+
+**OpenAI 相容後端**：帶檔案的那則訪客訊息，user 內容會變成片段清單：
+
+```json
+{"role": "user", "content": [
+  {"type": "text", "text": "請看報價單\n[附件] 報價單.pdf（application/pdf，85.2 KB）：檔案已附在這則訊息"},
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+  {"type": "file", "file": {"filename": "報價單.pdf", "file_data": "data:application/pdf;base64,..."}}
+]}
+```
+
+| 檔案 | 怎麼送 |
+|---|---|
+| 圖片（png、jpeg、gif、webp；依內容判斷類型，不看檔名） | `image_url` data URI，兩種模式都一樣。只看最近 3 則訪客訊息，最多 4 張，每張 5 MB 以內。 |
+| 文件（PDF、Word `docx`、Excel `xlsx`／`xls`、`txt`／`md`／`csv`／`tsv`／`json`），**訪客傳的檔案＝直接附檔** | `file` 片段，原始位元組與原始 mimetype，另加一行 `[附件] <檔名>（<mimetype>，<大小>）：檔案已附在這則訊息`。只看最近 5 則訪客訊息，最多 5 個，每個 5 MB 以內。 |
+| **只給下載連結** 模式的文件、較早的檔案、其他檔案（壓縮檔、音訊、影片…）、超過上限的檔案 | 一行 `[附件] <檔名>（<mimetype>，<大小>）：<簽章網址>`；因為上限被略過的檔案再加一行 `[附件說明] <檔名>：<原因>`。 |
+| 危險或會執行的類型：html、svg、xml、javascript、執行檔與腳本、含執行檔的 zip、Odoo 看不到內容的壓縮檔（rar、7z、tar、gz…） | 一律只給連結，不內嵌（檢查檔名、上傳的類型與內容）。 |
+
+同一個請求的 data URI 合計上限 **7 MB**（圖片優先、新的優先；Hermes 會拒絕超過 10 MB 的請求）。上限都是 `models/discuss_channel.py` 開頭的常數。
+
+**n8n**：`message.attachments` 與 `history[].attachments` 是 `{"id", "name", "mimetype", "size", "url", "expires_at"}`，不內嵌內容，工作流程需要時自己下載。
+
+**簽章下載網址**（兩種後端）：`GET {web.base.url}/im_livechat_ai/attachment/<id>/<expires>.<hex HMAC-SHA256(database.secret, "im_livechat_ai|<id>|<checksum>|<expires>")>`，1 小時有效。只提供即時聊天對話中訊息的附件，一律以下載方式回應（`Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`、`Cache-Control: private, no-store`）；過期、簽章錯誤或其他附件都回 404。網址以系統參數 **`web.base.url`** 組成，它必須是網站的公開網址（後端從那裡下載；同一台伺服器有多個資料庫時，這個網址必須經由 db filter 對到這個資料庫）。
+
+**日誌**：開啟「記錄對話內容」時，每個 data URI 的 base64 會存成 `<N bytes base64 omitted>`。
+
 ---
 
 ## 模組結構
@@ -599,11 +633,14 @@ im_livechat_ai/
 │   │                             #   機器人聯絡人、轉真人關鍵字、AI 分頁監看
 │   ├── discuss_channel.py        # _notify_thread 攔截：客服發言暫停、轉真人、
 │   │                             #   建立工作；作者判斷；訪客身分；
-│   │                             #   _ai_conversation／_build_llm_messages
+│   │                             #   _ai_conversation／_build_llm_messages；
+│   │                             #   訪客檔案（上限、簽章網址）
 │   ├── livechat_ai_job.py        # im_livechat.ai.job：回覆佇列、postcommit 執行緒、
 │   │                             #   advisory lock、補救排程、通知客服
 │   └── llm_api_log.py            # llm.api.log：AI API 日誌（預設只存中繼資料）、
 │                                 #   每個頻道的保留天數
+├── controllers/
+│   └── main.py                   # 訪客附件的簽章下載（/im_livechat_ai/attachment/...）
 ├── views/
 │   ├── im_livechat_channel_views.xml  # 頻道表單的「AI 整合」分頁
 │   ├── llm_api_log_views.xml          # AI API 日誌（選單：AI API 日誌）
@@ -615,8 +652,9 @@ im_livechat_ai/
 │   └── ir.model.access.csv       # 日誌與工作：只有即時聊天管理員（讀取／刪除）
 ├── migrations/
 │   ├── 18.0.1.1.0/               # 從 18.0.1.0.x：清空頻道金鑰、關閉 AI、清理日誌
-│   └── 18.0.1.2.0/post-migrate.py  # 系統參數 -> 每個頻道，再刪除 im_livechat_ai.* 參數
-├── tests/                        # 336 項測試（見「測試」）
+│   └── 18.0.1.2.0/               # 系統參數 -> 每個頻道，再刪除 im_livechat_ai.* 參數；
+│                                 #   每個頻道的「訪客傳的檔案」（Hermes：只給連結）
+├── tests/                        # 359 項測試（見「測試」）
 └── i18n/
     └── zh_TW.po                  # 繁體中文翻譯
 ```
@@ -633,7 +671,7 @@ im_livechat_ai/
 
 ### API 日誌與對話內容
 
-`llm.api.log` 與 `im_livechat.ai.job` 只有即時聊天管理員看得到。日誌預設不存對話內容；「記錄對話內容」（每個頻道各自設定）只用於短暫除錯，關閉時會清除這個頻道已保存的內容。每日清理排程依各頻道的保留天數（預設 14 天）刪除舊資料。
+`llm.api.log` 與 `im_livechat.ai.job` 只有即時聊天管理員看得到。日誌預設不存對話內容（訪客檔案的 base64 也一律不存，只留 `<N bytes base64 omitted>`）；「記錄對話內容」（每個頻道各自設定）只用於短暫除錯，關閉時會清除這個頻道已保存的內容。每日清理排程依各頻道的保留天數（預設 14 天）刪除舊資料。
 
 ### XSS 防護
 
@@ -672,7 +710,7 @@ AI 回覆在發送前一律用 `markupsafe` 跳脫。只有 markdown 連結與 `
 
 ### 測試套件總覽
 
-本模組包含 **336 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要金鑰或網路。
+本模組包含 **359 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要金鑰或網路。
 
 | 測試套件 | 檔案 | 測試數 | 說明 |
 |----------|------|:---:|------|
@@ -684,6 +722,7 @@ AI 回覆在發送前一律用 `markupsafe` 跳脫。只有 markdown 連結與 `
 | 回覆工作測試 | `test_ai_job.py` | 38 | 與訊息同交易建立、合併連發、加鎖、略過、重試、補救排程 |
 | 轉真人測試 | `test_handoff.py` | 43 | 入口網站客戶、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人、中文預設 |
 | 分支審查修正 | `test_review_fixes.py` | 20 | AI 設定權限、機器人聯絡人保護、測試連線權限、哪些訊息會觸發、後端呼叫期間不留交易 |
+| 訪客檔案 | `test_attachments.py` | 23 | 圖片成為 `image_url` data URI（依內容判斷類型）、文件成為原始位元組與類型的 `file` 片段、連結模式、危險類型只給連結、大小／數量／時間上限與 7 MB 總量（含 `[附件說明]`）、只用訪客訊息、n8n 附件與簽章網址、簽章下載路由（有效 200 並帶安全標頭；過期、簽章錯誤、非即時聊天附件 404）、日誌不存 base64、升級時的「訪客傳的檔案」規則 |
 | 暫停與身分揭露 | `test_pause_disclosure.py` | 42 | 明確轉真人關鍵字、客服暫停與等候真人、等候通知、逾時自動接回、範圍檢查、文字模型、沒有設定頁、AI 分頁工作監看、AI 身分揭露、18.0.1.1.0 升級腳本可重跑 |
 
 ### 執行測試
@@ -796,7 +835,8 @@ odoo.addons.im_livechat_ai
 - **OpenAI 請求**：有模型才送 `model`，訊息以 user 開頭與結尾，附 `user` 與字串 `metadata`；不送工具、溫度、max_tokens。真人客服改為標記 `[真人客服 姓名]` 的 user。
 - **移除**：商品查詢工具與「允許查詢商品」、溫度、Max Tokens、LiteLLM 模型清單與快取、預設網址與模型、系統提示裡的身分說明與商品規則。這些都交給後端。
 - **每個頻道的日誌設定**：記錄對話內容與日誌保留天數改成每個頻道設定；AI API 日誌記錄後端類型與 HTTP 狀態碼；AI 分頁顯示補救排程監看。
-- **升級**：18.0.1.1.0 的系統參數複製到每個頻道後刪除；AI 開關與模型保留（見[升級到 18.0.1.2.0](#升級到-180120)）。
+- **訪客傳的檔案**（負責人決策 39）：訪客的圖片以 `image_url` data URI 送給 OpenAI 相容後端，文件以原始位元組與類型的 `file` 片段送出（直接附檔），或改給簽章下載連結（只給下載連結，例如 Hermes）；n8n 收到附件與簽章網址。簽章下載路由 `/im_livechat_ai/attachment/<id>/<expires>.<hmac>`（1 小時、只限即時聊天附件）。Odoo 不擷取文字。危險類型只給連結；有大小、數量與 7 MB 總量上限；日誌不存 base64。
+- **升級**：18.0.1.1.0 的系統參數複製到每個頻道後刪除；AI 開關與模型保留；Hermes 頻道的「訪客傳的檔案」設為只給下載連結，其他為直接附檔（見[升級到 18.0.1.2.0](#升級到-180120)）。
 
 ### v18.0.1.1.0
 

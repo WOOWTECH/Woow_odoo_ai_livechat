@@ -1,52 +1,343 @@
-# -*- coding: utf-8 -*-
-"""18.0.1.2.1 pre-migration: delete the 18.0.1.1.0 Settings view before the module loads.
+"""Remove only the retired 1.1.0 Settings view before Odoo validates views.
 
-18.0.1.2.0 moved every setting to the Live Chat channel and removed the Settings
-page, but the database still holds the old view
-`im_livechat_ai.res_config_settings_view_form_livechat_ai`. Odoo removes records
-whose file is gone only after all modules have loaded, and it commits module by
-module. So during the upgrade that old view, which names the removed
-`livechat_ai_*` fields, is part of the res.config.settings form of every module
-loaded later; the first of them that validates its settings view fails and the
-whole upgrade stops (production platform, 2026-11-02).
-
-Deleting the view (and any view that inherits from it) up front lets the upgrade
-run. The removed menu and window action are harmless and are left to Odoo's
-normal cleanup.
+The 1.2.0 source removed its Python settings fields and XML data file. Odoo
+normally removes retired XML records at the end of the module load, which is
+too late for the inherited view that still names livechat_ai_base_url.
 """
 
+import hashlib
+import json
 import logging
+import re
+from pathlib import Path
+from xml.etree import ElementTree
+
+from lxml import etree
 
 _logger = logging.getLogger(__name__)
 
-REMOVED_VIEWS = ('res_config_settings_view_form_livechat_ai',)
+MODULE = 'im_livechat_ai'
+XMLID = 'res_config_settings_view_form_livechat_ai'
+VIEW_NAME = 'res.config.settings.view.form.inherit.im_livechat_ai'
+VIEW_MODEL = 'res.config.settings'
+# The nine res.config.settings fields in the retired 1.1.0 view were all
+# removed in 1.2.0. A sibling referencing any one can break later validation.
+REMOVED_SETTINGS_FIELDS = frozenset({
+    'livechat_ai_api_key', 'livechat_ai_api_key_set', 'livechat_ai_base_url',
+    'livechat_ai_cron_lastcall', 'livechat_ai_job_warning', 'livechat_ai_log_payload',
+    'livechat_ai_log_retention_days', 'livechat_ai_model_list', 'livechat_ai_stale_job_count',
+})
+REMOVED_FIELD_TOKEN = re.compile(
+    r'(?<![A-Za-z0-9_])(?:' + '|'.join(map(re.escape, sorted(REMOVED_SETTINGS_FIELDS)))
+    + r')(?![A-Za-z0-9_])')
+REFERENCE_ATTRIBUTES = frozenset({'name', 'for', 'field', 'data-field', 'data-oe-field'})
+EXPRESSION_ATTRIBUTES = frozenset({
+    'invisible', 'readonly', 'required', 'column_invisible', 'attrs', 'modifiers',
+    'domain', 'context', 'options', 'filter_domain', 't-if', 't-elif', 't-esc', 't-out',
+})
+ARCHIVED_VIEW_PATH = Path(__file__).with_name('legacy-settings-arch-18.0.1.1.0.xml')
+ARCHIVED_VIEW_SHA256 = '40c6b62747f5a1893c224881206b77bb106233faba552c252e479d170f6c2c11'
+MAX_XPATH_LENGTH = 4096
+TRANSLATED_XPATH_ATTRIBUTE = re.compile(
+    r'(?:@|attribute::)\s*(?:string|help|title|placeholder|data-string)\b')
+# Only a direct node selector or a plain form-rooted path can be proven
+# independent when the archived-only probe returns the same elements. Complex
+# predicates could depend on siblings absent from the probe.
+XPATH_TAG = r'(?:[A-Za-z_][\w.:-]*|\*)'
+SAFE_INDEPENDENT_XPATH = re.compile(
+    rf'^//(?:{XPATH_TAG}|form(?:(?:/|//){XPATH_TAG})+)'
+    r'''(?:\[@[A-Za-z_][\w.:-]*\s*=\s*(?:'[^']*'|"[^"]*")\])?$''')
+# An upward path is independent if its first, static attribute selector cannot
+# match any node in the archived extension. Walking only to parents/ancestors
+# from surviving nodes cannot enter a deleted descendant. Odoo 18's portal
+# Settings view uses a numeric button action ID followed by ancestor::setting.
+INDEPENDENT_UPWARD_XPATH = re.compile(
+    rf'^(?P<anchor>//{XPATH_TAG}\[@[A-Za-z_][\w.:-]*\s*=\s*'
+    rf'''(?:[0-9]+|'[^']*'|"[^"]*")\])'''
+    rf'(?:(?://|/)(?:parent|ancestor)::{XPATH_TAG})+$')
+# SHA-256 of the element/attribute tree in v18.0.1.1.0's
+# views/res_config_settings_views.xml, record XMLID above. Human-facing text
+# and Odoo-translated attributes are excluded; executable attributes, element
+# order and every field/button remain exact. Unknown historic shapes stop.
+LEGACY_STRUCTURE_SHA256 = '71c3d579067f26b511f898ed4b758d15d2289027bc541a48216f3d7695feb251'
+DISPLAY_ATTRIBUTES = frozenset({'string', 'help', 'title', 'placeholder', 'data-string'})
+
+
+def _structure(node):
+    """Ignore only display translations and formatting, never extra XML nodes."""
+    if (not isinstance(node.tag, str)
+            or (node.tag != 'div' and (node.text or '').strip())
+            or (node.tail or '').strip()):
+        raise ValueError('unexpected Settings view XML node or text')
+    return [
+        node.tag,
+        sorted((key, value) for key, value in node.attrib.items()
+               if key not in DISPLAY_ATTRIBUTES),
+        [_structure(child) for child in node],
+    ]
+
+
+def _has_expected_legacy_structure(arch_text):
+    """Every stored language must match the frozen 1.1.0 tree exactly."""
+    try:
+        arches = json.loads(arch_text)
+        if not isinstance(arches, dict) or not arches:
+            return False
+        for xml in arches.values():
+            if not isinstance(xml, str):
+                return False
+            root = ElementTree.fromstring(
+                xml, parser=ElementTree.XMLParser(
+                    target=ElementTree.TreeBuilder(insert_comments=True)))
+            shape = json.dumps(_structure(root), ensure_ascii=False, separators=(',', ':'))
+            if hashlib.sha256(shape.encode()).hexdigest() != LEGACY_STRUCTURE_SHA256:
+                return False
+    except (TypeError, ValueError, ElementTree.ParseError):
+        return False
+    return True
+
+
+def _is_expression_attribute(name):
+    return name in EXPRESSION_ATTRIBUTES or name.startswith(
+        ('decoration-', 't-att-', 't-attf-'))
+
+
+def _archived_settings_form():
+    """Build the old extension inside a stable form for XPath comparison."""
+    try:
+        payload = ARCHIVED_VIEW_PATH.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != ARCHIVED_VIEW_SHA256:
+            raise ValueError('archived Settings view checksum changed')
+        archived = etree.fromstring(
+            payload, parser=etree.XMLParser(resolve_entities=False, no_network=True))
+        if archived.tag != 'xpath' or archived.get('expr') != '//form' \
+                or archived.get('position') != 'inside':
+            raise ValueError('archived Settings view is not the frozen extension')
+    except (OSError, ValueError, etree.XMLSyntaxError) as exc:
+        raise RuntimeError('im_livechat_ai: archived Settings view unavailable; '
+                           'manual review required') from exc
+    form = etree.Element('form')
+    for child in list(archived):
+        form.append(child)
+    return form
+
+
+def _upward_xpath_anchor_is_independent(expr, archived_form):
+    """Prove an upward path cannot originate inside the retired extension."""
+    match = INDEPENDENT_UPWARD_XPATH.fullmatch(expr)
+    if not match or TRANSLATED_XPATH_ATTRIBUTE.search(expr):
+        return False
+    return not etree.XPath(match.group('anchor'), smart_strings=False)(archived_form)
+
+
+def _xpath_depends_on_retired_subtree(expr):
+    """Hold selectors whose result changes when the frozen old app is removed.
+
+    The probe deliberately contains only the archived extension, so a dynamic
+    selector that returns the same result in both probes is still uncertain.
+    """
+    if len(expr) > MAX_XPATH_LENGTH:
+        raise RuntimeError('im_livechat_ai: oversized Settings XPath; manual review required')
+    try:
+        selector = etree.XPath(expr, smart_strings=False)
+        form = _archived_settings_form()
+        before = selector(form)
+        if not isinstance(before, list) or any(not isinstance(node, etree._Element) for node in before):
+            raise ValueError('Settings XPath did not select XML elements')
+        independent_upward_path = _upward_xpath_anchor_is_independent(expr, form)
+        for child in list(form):
+            form.remove(child)
+        after = selector(form)
+        if not isinstance(after, list) or any(not isinstance(node, etree._Element) for node in after):
+            raise ValueError('Settings XPath did not select XML elements')
+        if before != after:
+            return True
+        if not independent_upward_path and (
+                not SAFE_INDEPENDENT_XPATH.fullmatch(expr)
+                or TRANSLATED_XPATH_ATTRIBUTE.search(expr)):
+            raise ValueError('Settings XPath cannot be proven independent of archived nodes')
+    except (etree.XPathError, TypeError, ValueError) as exc:
+        raise RuntimeError('im_livechat_ai: uncertain Settings XPath; '
+                           'manual review required') from exc
+    return False
+
+
+def _generic_locator_targets_retired_subtree(node):
+    """Conservatively check Odoo's non-XPath element locator against the archive."""
+    attributes = {key: value for key, value in node.attrib.items()
+                  if key not in {'position', 'version'} | DISPLAY_ATTRIBUTES}
+    return any(
+        archived.tag == node.tag
+        and all(archived.get(key) == value for key, value in attributes.items())
+        for archived in _archived_settings_form().iter())
+
+
+def _node_references_removed_field(node, *, generic_locator=False):
+    """Inspect parsed XML locators, labels, modifiers and attribute changes."""
+    for name, value in node.attrib.items():
+        if name in REFERENCE_ATTRIBUTES and value in REMOVED_SETTINGS_FIELDS:
+            return True
+        if node.tag == 'xpath' and name == 'expr':
+            if REMOVED_FIELD_TOKEN.search(value) or _xpath_depends_on_retired_subtree(value):
+                return True
+            continue
+        is_expression = (node.tag == 'xpath' and name == 'expr') or _is_expression_attribute(name)
+        if is_expression and REMOVED_FIELD_TOKEN.search(value):
+            return True
+    if node.tag == 'attribute':
+        changed_name = node.get('name', '')
+        is_reference_change = changed_name in REFERENCE_ATTRIBUTES or _is_expression_attribute(changed_name)
+        if is_reference_change and any(
+                REMOVED_FIELD_TOKEN.search(value or '') for value in (
+                    node.text, node.get('add'), node.get('remove'))):
+            return True
+    return (generic_locator and node.tag not in {'xpath', 'field', 'attribute'}
+            and _generic_locator_targets_retired_subtree(node))
+
+
+def _contains_removed_settings_field(arch_text, inherited):
+    """Find structural references in every stored Settings view language.
+
+    An exact retired-field token in an XPath or expression may be a quoted
+    display literal rather than a live reference. Hold such cases for manual
+    review rather than risking a broken post-migration Settings form.
+    """
+    try:
+        arches = json.loads(arch_text)
+        if not isinstance(arches, dict) or not arches:
+            raise ValueError('Settings view arch_db is not a language mapping')
+        for xml in arches.values():
+            if not isinstance(xml, str):
+                raise TypeError('Settings view language architecture is not XML text')
+            root = ElementTree.fromstring(xml)
+            for node in root.iter():
+                generic_locator = inherited and (
+                    'position' in node.attrib
+                    or node is root and root.tag not in {'form', 'data', 'odoo'}
+                    or root.tag in {'form', 'data', 'odoo'} and node in root)
+                if _node_references_removed_field(node, generic_locator=generic_locator):
+                    return True
+    except (TypeError, ValueError, ElementTree.ParseError) as exc:
+        raise RuntimeError('im_livechat_ai: unparseable Settings view architecture; '
+                           'manual review required') from exc
+    return False
+
+
+def _assert_no_residual_legacy_view(cr):
+    """Hold any residual reference or unparseable Settings view architecture.
+
+    Scan only the Settings model. This runs when the target XMLID is absent
+    and again after deleting the exact target in the same transaction.
+    """
+    cr.execute('''
+        SELECT v.name, v.arch_db::text, v.inherit_id IS NOT NULL
+          FROM ir_ui_view AS v
+         WHERE v.model = %s
+    ''', (VIEW_MODEL,))
+    for name, arch_text, inherited in cr.fetchall():
+        if name == VIEW_NAME or _contains_removed_settings_field(arch_text, inherited):
+            raise RuntimeError('im_livechat_ai: retired Settings view remains after cleanup; '
+                               'manual review required')
+
+
+def _assert_no_view_fk_references(cr, view_id):
+    """Hold any FK row that deletion could restrict, null, default, or cascade.
+
+    PostgreSQL quotes catalog-sourced identifiers before Python assembles each
+    probe. The target view row is already locked FOR UPDATE by the caller.
+    """
+    cr.execute('''
+        SELECT pg_catalog.format('%I.%I', ns.nspname, tbl.relname),
+               pg_catalog.format('%I', src.attname), dst.attname,
+               array_length(fk.conkey, 1), array_length(fk.confkey, 1)
+          FROM pg_constraint AS fk
+          JOIN pg_class AS tbl ON tbl.oid = fk.conrelid
+          JOIN pg_namespace AS ns ON ns.oid = tbl.relnamespace
+          JOIN pg_attribute AS src ON src.attrelid = fk.conrelid
+                                   AND src.attnum = fk.conkey[1]
+          JOIN pg_attribute AS dst ON dst.attrelid = fk.confrelid
+                                   AND dst.attnum = fk.confkey[1]
+         WHERE fk.contype = 'f' AND fk.confrelid = 'ir_ui_view'::regclass
+         ORDER BY fk.oid
+    ''')
+    for table_sql, column_sql, target_column, source_count, target_count in cr.fetchall():
+        if source_count != 1 or target_count != 1 or target_column != 'id':
+            raise RuntimeError('im_livechat_ai: unsupported Settings view FK; manual review required')
+        cr.execute(f'SELECT 1 FROM {table_sql} WHERE {column_sql} = %s LIMIT 1', (view_id,))
+        if cr.fetchone():
+            raise RuntimeError('im_livechat_ai: retired Settings view has FK references; manual review required')
 
 
 def migrate(cr, version):
-    if not version:
+    if not version:  # new installation has no legacy record
         return
-    cr.execute("""
-        SELECT res_id FROM ir_model_data
-         WHERE module = 'im_livechat_ai' AND model = 'ir.ui.view' AND name IN %s
-    """, (REMOVED_VIEWS,))
-    roots = [row[0] for row in cr.fetchall()]
-    if not roots:
+
+    cr.execute('''
+        SELECT d.id, v.id, v.arch_db::text,
+               v.name = %s AND v.model = %s
+                 AND v.inherit_id = (
+                     SELECT base.res_id FROM ir_model_data AS base
+                      WHERE base.module = 'base'
+                        AND base.name = 'res_config_settings_view_form'
+                        AND base.model = 'ir.ui.view'
+                 ) AS is_legacy_view,
+               v.arch_updated IS TRUE,
+               EXISTS (SELECT 1 FROM ir_ui_view AS child WHERE child.inherit_id = v.id),
+               EXISTS (SELECT 1 FROM ir_model_data AS alias
+                        WHERE alias.model = 'ir.ui.view'
+                          AND alias.res_id = v.id AND alias.id != d.id),
+               EXISTS (SELECT 1 FROM ir_ui_view_custom AS custom
+                        WHERE custom.ref_id = v.id)
+          FROM ir_model_data AS d
+          JOIN ir_ui_view AS v ON v.id = d.res_id
+         WHERE d.module = %s AND d.name = %s AND d.model = 'ir.ui.view'
+         FOR UPDATE OF v
+    ''', (VIEW_NAME, VIEW_MODEL, MODULE, XMLID))
+    target = cr.fetchone()
+    if target is None:
+        _assert_no_residual_legacy_view(cr)
         return
-    cr.execute("""
-        WITH RECURSIVE tree(id) AS (
-            SELECT id FROM ir_ui_view WHERE id IN %s
-            UNION
-            SELECT v.id FROM ir_ui_view v JOIN tree t ON v.inherit_id = t.id
-        )
-        SELECT id FROM tree
-    """, (tuple(roots),))
-    view_ids = tuple(row[0] for row in cr.fetchall())
-    if view_ids:
-        cr.execute("DELETE FROM ir_model_data WHERE model = 'ir.ui.view' AND res_id IN %s", (view_ids,))
-        cr.execute("DELETE FROM ir_ui_view WHERE id IN %s", (view_ids,))
-    cr.execute("""
+
+    (xmlid_id, view_id, arch_text, is_legacy_view, arch_updated,
+     has_children, has_other_xmlids, has_custom_views) = target
+    if not is_legacy_view or not _has_expected_legacy_structure(arch_text):
+        raise RuntimeError('im_livechat_ai: retired Settings XMLID has an unfamiliar view shape; '
+                           'manual review required')
+    if arch_updated or has_children or has_other_xmlids or has_custom_views:
+        raise RuntimeError('im_livechat_ai: retired Settings view was edited or has dependants; manual review required')
+
+    _assert_no_view_fk_references(cr, view_id)
+
+    cr.execute('''
+        DELETE FROM ir_ui_view AS v
+         WHERE v.id = %s AND v.name = %s AND v.model = %s
+           AND v.inherit_id = (
+               SELECT base.res_id FROM ir_model_data AS base
+                WHERE base.module = 'base'
+                  AND base.name = 'res_config_settings_view_form'
+                  AND base.model = 'ir.ui.view'
+           )
+           AND v.arch_db::text = %s
+           AND v.arch_updated IS NOT TRUE
+           AND EXISTS (SELECT 1 FROM ir_model_data AS d
+                        WHERE d.id = %s AND d.module = %s AND d.name = %s
+                          AND d.model = 'ir.ui.view' AND d.res_id = v.id)
+           AND NOT EXISTS (SELECT 1 FROM ir_ui_view AS child WHERE child.inherit_id = v.id)
+           AND NOT EXISTS (SELECT 1 FROM ir_model_data AS alias
+                            WHERE alias.model = 'ir.ui.view' AND alias.res_id = v.id
+                              AND alias.id != %s)
+           AND NOT EXISTS (SELECT 1 FROM ir_ui_view_custom AS custom
+                            WHERE custom.ref_id = v.id)
+    ''', (view_id, VIEW_NAME, VIEW_MODEL, arch_text, xmlid_id, MODULE, XMLID, xmlid_id))
+    if cr.rowcount != 1:
+        raise RuntimeError('im_livechat_ai: retired Settings view changed during pre-migration')
+
+    cr.execute('''
         DELETE FROM ir_model_data
-         WHERE module = 'im_livechat_ai' AND model = 'ir.ui.view' AND name IN %s
-    """, (REMOVED_VIEWS,))
-    _logger.info("im_livechat_ai 18.0.1.2.1 pre-migrate: removed %d legacy Settings view(s) %s",
-                 len(view_ids), list(view_ids))
+         WHERE id = %s AND module = %s AND name = %s
+           AND model = 'ir.ui.view' AND res_id = %s
+    ''', (xmlid_id, MODULE, XMLID, view_id))
+    if cr.rowcount != 1:
+        raise RuntimeError('im_livechat_ai: retired Settings XMLID changed during pre-migration')
+    _assert_no_residual_legacy_view(cr)
+    _logger.info('im_livechat_ai: removed one retired Settings view before view validation')

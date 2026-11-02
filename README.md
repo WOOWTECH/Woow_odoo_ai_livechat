@@ -17,7 +17,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Upgrading to 18.0.1.2.1](#upgrading-to-180121)
+- [Upgrading to 18.0.1.2.2](#upgrading-to-180122)
 - [Upgrading to 18.0.1.2.0](#upgrading-to-180120)
 - [Upgrading from 18.0.1.0.x](#upgrading-from-18010x)
 - [Why Use This Module](#why-use-this-module)
@@ -56,17 +56,45 @@ The request formats are compatible with the n8n section of `woow_ai_contact` (do
 
 ---
 
-## Upgrading to 18.0.1.2.1
+## Upgrading to 18.0.1.2.2
 
-Upgrade straight to 18.0.1.2.1; do not stop at 18.0.1.2.0 when coming from 18.0.1.1.0.
-18.0.1.2.0 removed the Settings page, but the old Settings view stayed in the database until
-the very end of the upgrade. When another installed module also adds to the Settings form and
-loads after this one, its view check sees the old view (which names the removed
-`livechat_ai_*` fields) and the whole upgrade stops with
-`Field "livechat_ai_base_url" does not exist in model "res.config.settings"`.
-The 18.0.1.2.1 pre-migration deletes that view first. It also repairs a database where an
-18.0.1.2.0 upgrade already stopped this way: upgrade it again with 18.0.1.2.1.
-Nothing else changes.
+Upgrade directly to 18.0.1.2.2 from 18.0.1.1.0 or 18.0.1.2.0. Version 18.0.1.2.0
+removed the Settings page, but Odoo can retain its old view until after other modules
+validate the Settings form. The retained view references the removed
+`livechat_ai_base_url` field and can stop the upgrade.
+
+The 18.0.1.2.1 **pre-migration file is kept at the same path** so Odoo runs its corrected
+code when upgrading from 18.0.1.2.0 (or earlier) to 18.0.1.2.2. It removes only the
+exact owned legacy view and XMLID, after checking its XML architecture and that it has
+no manual edits, child views, other XMLIDs, custom views, or foreign-key references.
+Its XML tree must match the retired 18.0.1.1.0 view in every stored language;
+translated labels and display text may differ, but extra fields, nodes, or changed
+functional attributes stop the migration. A missing or mis-modelled XMLID with a
+recognizable residual view also stops instead of silently allowing a broken form.
+After the exact target and XMLID are removed, the script scans Settings views
+again in the same transaction. A reference to any of the nine retired fields in
+a field node, label, XPath selector, modifier expression, or inherited attribute
+change stops the upgrade and rolls back that removal, regardless of view/app
+name or stored language. XPath selectors are also evaluated against the
+checksummed archived 1.1.0 Settings extension before and after removing it;
+selectors whose results change stop, including names assembled with `concat()`
+or selectors that return an ancestor of a removed node. Generic Odoo element
+locators for the retired app or its settings also stop. Unknown XPath functions,
+variables, selectors sensitive to translated display attributes, positional or
+sibling-dependent selectors that cannot be proven safe against the small probe,
+and malformed Settings architectures stop for manual review.
+The scan matches exact field names or identifier tokens; a matching token used
+only as display text inside an XPath/expression may conservatively require
+manual review. It does not delete sibling views or their data.
+If any dependency or unfamiliar shape exists, the upgrade stops for manual review;
+the script does not delete dependants or alter their references. Rehearse the upgrade
+on a database copy before production.
+
+A database **already recorded as 18.0.1.2.1** does not rerun the 18.0.1.2.1 script.
+The 18.0.1.2.2 pre-migration invokes the same guarded cleanup for a residual old view.
+An exact unmodified owned view is removed; a changed or referenced view stops the upgrade
+for manual review. Views or XMLIDs deleted by the original 18.0.1.2.1 script cannot be
+restored by this release; recovery requires a suitable backup.
 
 ## Upgrading to 18.0.1.2.0
 
@@ -669,7 +697,7 @@ im_livechat_ai/
 │   └── 18.0.1.2.0/                      # System parameters -> every channel,
 │                                        #   then delete im_livechat_ai.* parameters;
 │                                        #   Visitor Files per channel (Hermes: link)
-├── tests/                               # 390 tests (see Testing)
+├── tests/                               # 412 Odoo tests + 28 isolated SQL tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -711,7 +739,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **390 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **436 Odoo tests** plus **51 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -719,7 +747,7 @@ The module has **390 automated tests**. All HTTP calls are mocked: no key or net
 | `test_discuss_channel.py` | 18 | Message interception, visitor detection, context building |
 | `test_integration.py` | 9 | End-to-end flow, retries, error fallback, per-channel connection |
 | `test_edge_cases.py` | 97 | Edge cases: payloads, HTTP errors, think tags, XSS, limits, logging |
-| `test_backend.py` | 54 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.2.0 and 18.0.1.1.0 migrations |
+| `test_backend.py` | 98 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.1.0 through 18.0.1.2.2 migrations |
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
@@ -727,6 +755,8 @@ The module has **390 automated tests**. All HTTP calls are mocked: no key or net
 | `test_reply_markdown.py` | 8 | Markdown replies: a real advisor reply (pipe table, bold, shop links, off-site link as text), headings, lists, code, paragraphs, link host allowlist, HTML escaped everywhere |
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
 | `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
+
+The 51 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
 
 ### Running the Tests
 

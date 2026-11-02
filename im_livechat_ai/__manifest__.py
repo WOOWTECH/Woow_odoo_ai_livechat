@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Live Chat AI Integration',
-    'version': '18.0.1.2.1',
+    'version': '18.0.1.2.2',
     'category': 'Website/Live Chat',
     'summary': 'Answer Live Chat visitors through a per-channel AI backend (OpenAI compatible or n8n)',
     'description': """

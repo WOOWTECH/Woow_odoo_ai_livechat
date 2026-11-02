@@ -13,6 +13,7 @@ import importlib.util
 import json
 import time
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -1069,7 +1070,7 @@ class TestRequestTimeout(BackendCase):
 
 
 class TestMigration18121(TransactionCase):
-    """18.0.1.2.1 pre-migration: the 18.0.1.1.0 settings view is removed before the module loads.
+    """PostgreSQL rehearsal of both 1.2.0 and 1.2.1 upgrade paths to 1.2.2.
 
     18.0.1.2.0 dropped the Settings page. Odoo deletes a record whose file is gone only after
     every module has loaded, and it commits module by module, so during `-u` the old view
@@ -1084,22 +1085,41 @@ class TestMigration18121(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.pre = _load_migration('18.0.1.2.1', 'pre-migrate')
+        cls.pre122 = _load_migration('18.0.1.2.2', 'pre-migrate')
 
-    def _legacy_view(self):
+    def _legacy_view(self, arch=None):
         base = self.env.ref('base.res_config_settings_view_form')
-        # Inserted with SQL like the 18.0.1.1.0 view: its arch names a field that no longer exists,
-        # so the ORM would refuse it.
+        # Frozen from the actual v18.0.1.1.0 XML. Insert via SQL because the
+        # removed field makes this legacy view invalid to the current ORM.
+        if arch is None:
+            arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        arch_db = json.dumps({'en_US': arch})
         self.env.cr.execute(
-            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
-            "VALUES ('res.config.settings.view.form.livechat.ai', 'res.config.settings', 'form', "
-            "'extension', 16, true, %s, %s) RETURNING id",
-            (base.id, '{"en_US": "<xpath expr=\\"//form\\" position=\\"inside\\">'
-                       '<field name=\\"livechat_ai_base_url\\"/></xpath>"}'))
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, "
+            "arch_db, arch_updated) "
+            "VALUES ('res.config.settings.view.form.inherit.im_livechat_ai', "
+            "'res.config.settings', 'form', 'extension', 16, true, %s, %s, false) RETURNING id",
+            (base.id, arch_db))
         view_id = self.env.cr.fetchone()[0]
         self.env['ir.model.data'].create({
             'module': 'im_livechat_ai', 'name': self.XMLID, 'model': 'ir.ui.view',
             'res_id': view_id, 'noupdate': False})
         return view_id
+
+    def _raw_view(self, name, model, arch, inherit_id=None):
+        self.env.cr.execute(
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, "
+            "arch_db, arch_updated) VALUES (%s, %s, 'form', %s, 16, true, %s, %s, false) "
+            "RETURNING id",
+            (name, model, 'extension' if inherit_id else 'primary', inherit_id,
+             json.dumps({'en_US': arch})))
+        return self.env.cr.fetchone()[0]
+
+    def _upgrade_from(self, installed_version):
+        if installed_version == '18.0.1.2.0':
+            self.pre.migrate(self.env.cr, installed_version)
+        self.pre122.migrate(self.env.cr, installed_version)
 
     def _exists(self, view_id):
         self.env.flush_all()
@@ -1118,21 +1138,330 @@ class TestMigration18121(TransactionCase):
 
     def test_removes_the_view_and_its_xmlid(self):
         view_id = self._legacy_view()
-        # SQL again: the ORM would validate the child together with its broken parent.
+        self._upgrade_from('18.0.1.2.0')
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(view_id), (0, 0))
+        self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_1_2_1_residual_view_uses_1_2_2_guard(self):
+        view_id = self._legacy_view()
+        self._upgrade_from('18.0.1.2.1')
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(view_id), (0, 0))
+        self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def _assert_portal_style_ancestor_selector_is_independent(self, installed_version):
+        target_id = self._legacy_view()
+        action_id = self.env.ref('base.action_apikeys_admin').id
+        sibling_id = self._raw_view(
+            'portal.style.settings', 'res.config.settings',
+            f'<xpath expr="//button[@name={action_id}]//ancestor::setting" '
+            'position="inside"/>',
+            self.env.ref('base.res_config_settings_view_form').id)
+        self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(target_id), (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_portal_style_ancestor_selector_from_1_2_0(self):
+        self._assert_portal_style_ancestor_selector_is_independent('18.0.1.2.0')
+
+    def test_portal_style_ancestor_selector_from_1_2_1(self):
+        self._assert_portal_style_ancestor_selector_is_independent('18.0.1.2.1')
+
+    def test_translated_legacy_arches_are_cleaned(self):
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        translated = (old_arch.replace('string="Live Chat AI"', 'string="即時聊天 AI"')
+                              .replace('title="LiteLLM Connection"', 'title="LiteLLM 連線"')
+                              .replace('A key is configured (it is never displayed).', '金鑰已設定。'))
+        view_id = self._legacy_view()
+        self.env.cr.execute('UPDATE ir_ui_view SET arch_db = %s WHERE id = %s',
+                            (json.dumps({'en_US': old_arch, 'zh_TW': translated}), view_id))
+        self._upgrade_from('18.0.1.2.1')
+        self.assertEqual(self._exists(view_id), (0, 0))
+
+    def _assert_extra_field_holds(self, installed_version):
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        changed = old_arch.replace('<field name="livechat_ai_base_url"',
+                                   '<field name="custom_field"/><field name="livechat_ai_base_url"')
+        self.assertNotEqual(changed, old_arch)
+        view_id = self._legacy_view(changed)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 1))
+
+    def test_extra_field_holds_from_1_2_0(self):
+        self._assert_extra_field_holds('18.0.1.2.0')
+
+    def test_extra_field_holds_from_1_2_1(self):
+        self._assert_extra_field_holds('18.0.1.2.1')
+
+    def _assert_missing_xmlid_holds(self, installed_version):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+            (self.XMLID,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 0))
+
+    def test_missing_xmlid_holds_from_1_2_0(self):
+        self._assert_missing_xmlid_holds('18.0.1.2.0')
+
+    def test_missing_xmlid_holds_from_1_2_1(self):
+        self._assert_missing_xmlid_holds('18.0.1.2.1')
+
+    def _assert_wrong_model_xmlid_holds(self, installed_version):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "UPDATE ir_model_data SET model = 'ir.actions.act_window' "
+            "WHERE module = 'im_livechat_ai' AND name = %s", (self.XMLID,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 1))
+
+    def test_wrong_model_xmlid_holds_from_1_2_0(self):
+        self._assert_wrong_model_xmlid_holds('18.0.1.2.0')
+
+    def test_wrong_model_xmlid_holds_from_1_2_1(self):
+        self._assert_wrong_model_xmlid_holds('18.0.1.2.1')
+
+    def _assert_sibling_field_rolls_back(self, installed_version, field_name='livechat_ai_base_url'):
+        target_id = self._legacy_view()
+        sibling_arch = ('<xpath expr="//form" position="inside">'
+                        f'<app name="another_app"><field name="{field_name}"/>'
+                        '</app></xpath>')
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings', sibling_arch,
+            self.env.ref('base.res_config_settings_view_form').id)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_sibling_field_rolls_back_from_1_2_0(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.0')
+
+    def test_sibling_field_rolls_back_from_1_2_1(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.1')
+
+    def test_other_retired_settings_field_rolls_back_from_1_2_1(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.1', 'livechat_ai_api_key')
+
+    def _assert_xpath_only_sibling_holds(self, installed_version, target_present):
+        target_id = self._legacy_view()
+        if not target_present:
+            self.env.cr.execute(
+                "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+                (self.XMLID,))
+            self.env.cr.execute('DELETE FROM ir_ui_view WHERE id = %s', (target_id,))
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings',
+            '<xpath expr="//field[@name=\'livechat_ai_base_url\']" position="attributes">'
+            '<attribute name="string">Old setting</attribute></xpath>',
+            self.env.ref('base.res_config_settings_view_form').id)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1) if target_present else (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_xpath_only_sibling_holds_from_1_2_0(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.0', target_present=True)
+
+    def test_xpath_only_sibling_holds_from_1_2_1(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.1', target_present=True)
+
+    def test_xpath_only_residual_holds_without_target_from_1_2_0(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.0', target_present=False)
+
+    def test_xpath_only_residual_holds_without_target_from_1_2_1(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.1', target_present=False)
+
+    def _assert_concat_xpath_holds(self, installed_version, target_present):
+        self._assert_structural_sibling_holds(
+            installed_version,
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]" '
+            'position="attributes"/>', target_present=target_present)
+
+    def test_concat_xpath_holds_with_target_from_1_2_0(self):
+        self._assert_concat_xpath_holds('18.0.1.2.0', True)
+
+    def test_concat_xpath_holds_with_target_from_1_2_1(self):
+        self._assert_concat_xpath_holds('18.0.1.2.1', True)
+
+    def test_concat_xpath_holds_without_target_from_1_2_0(self):
+        self._assert_concat_xpath_holds('18.0.1.2.0', False)
+
+    def test_concat_xpath_holds_without_target_from_1_2_1(self):
+        self._assert_concat_xpath_holds('18.0.1.2.1', False)
+
+    def test_xpath_ancestor_result_holds_after_retired_subtree_removal(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1',
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]/ancestor::form" '
+            'position="attributes"/>')
+
+    def test_translated_display_xpath_holds_without_target(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//setting[@string=\'舊網址\']" position="attributes"/>',
+            target_present=False)
+
+    def test_generic_app_locator_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<app name="im_livechat_ai" position="attributes"/>')
+
+    def test_generic_app_locator_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<app name="im_livechat_ai" position="attributes"/>')
+
+    def _assert_structural_sibling_holds(self, installed_version, arch, *,
+                                         target_present=True, translated_arch=None):
+        target_id = self._legacy_view()
+        if not target_present:
+            self.env.cr.execute(
+                "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+                (self.XMLID,))
+            self.env.cr.execute('DELETE FROM ir_ui_view WHERE id = %s', (target_id,))
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings', arch,
+            self.env.ref('base.res_config_settings_view_form').id)
+        if translated_arch is not None:
+            self.env.cr.execute('UPDATE ir_ui_view SET arch_db = %s WHERE id = %s',
+                                (json.dumps({'en_US': arch, 'zh_TW': translated_arch}), sibling_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1) if target_present else (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_label_for_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_label_for_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_modifier_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><div invisible="not livechat_ai_api_key_set"/></xpath>')
+
+    def test_modifier_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><div invisible="not livechat_ai_api_key_set"/></xpath>')
+
+    def test_attribute_mutation_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath expr="//form" position="attributes">'
+            '<attribute name="invisible">livechat_ai_base_url</attribute></xpath>')
+
+    def test_attribute_mutation_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes">'
+            '<attribute name="invisible">livechat_ai_base_url</attribute></xpath>')
+
+    def test_label_for_retired_field_holds_without_target_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><label for="livechat_ai_base_url"/></xpath>',
+            target_present=False)
+
+    def test_label_for_retired_field_holds_without_target_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><label for="livechat_ai_base_url"/></xpath>',
+            target_present=False)
+
+    def test_nonprimary_translation_retired_label_holds(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes"/>',
+            translated_arch='<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_unparseable_nonprimary_settings_arch_holds(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes"/>',
+            translated_arch='<xpath><field name="other"/>')
+
+    def _assert_renamed_view_and_app_holds(self, installed_version):
+        view_id = self._legacy_view()
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        renamed_arch = old_arch.replace('name="im_livechat_ai"', 'name="another_app"')
+        self.assertNotEqual(renamed_arch, old_arch)
+        self.env.cr.execute(
+            "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+            (self.XMLID,))
+        self.env.cr.execute('UPDATE ir_ui_view SET name = %s, arch_db = %s WHERE id = %s',
+                            ('renamed.settings', json.dumps({'en_US': renamed_arch}), view_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 0))
+
+    def test_renamed_view_and_app_holds_from_1_2_0(self):
+        self._assert_renamed_view_and_app_holds('18.0.1.2.0')
+
+    def test_renamed_view_and_app_holds_from_1_2_1(self):
+        self._assert_renamed_view_and_app_holds('18.0.1.2.1')
+
+    def _assert_unrelated_model_view_is_ignored(self, installed_version):
+        unrelated_id = self._raw_view(
+            'res.config.settings.view.form.inherit.im_livechat_ai', 'res.partner',
+            '<form><field name="livechat_ai_base_url"/></form>')
+        self._upgrade_from(installed_version)
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (unrelated_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_unrelated_model_view_ignored_from_1_2_0(self):
+        self._assert_unrelated_model_view_is_ignored('18.0.1.2.0')
+
+    def test_unrelated_model_view_ignored_from_1_2_1(self):
+        self._assert_unrelated_model_view_is_ignored('18.0.1.2.1')
+
+    def test_child_view_requires_manual_review(self):
+        view_id = self._legacy_view()
         self.env.cr.execute(
             "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
             "VALUES ('child of the legacy view', 'res.config.settings', 'form', 'extension', 16, true, %s, "
             "'{\"en_US\": \"<xpath expr=\\\"//form\\\" position=\\\"inside\\\"/>\"}') RETURNING id",
             (view_id,))
         child_id = self.env.cr.fetchone()[0]
-        self.pre.migrate(self.env.cr, '18.0.1.2.0')
-        self.env.invalidate_all()
-        self.assertEqual(self._exists(view_id), (0, 0))
-        self.assertEqual(self._exists(child_id)[0], 0)
-        self.env.ref('base.res_config_settings_view_form')._check_xml()
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.assertEqual(self._exists(child_id)[0], 1)
+
+    def test_action_view_fk_requires_manual_review_without_nulling(self):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "INSERT INTO ir_act_window_view (view_id, view_mode, sequence) "
+            "VALUES (%s, 'form', 0) RETURNING id", (view_id,))
+        action_view_id = self.env.cr.fetchone()[0]
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.env.cr.execute('SELECT view_id FROM ir_act_window_view WHERE id = %s', (action_view_id,))
+        self.assertEqual(self.env.cr.fetchone()[0], view_id)
+
+    def test_group_relation_fk_requires_manual_review_without_cascade(self):
+        view_id = self._legacy_view()
+        group_id = self.env.ref('base.group_system').id
+        self.env.cr.execute('INSERT INTO ir_ui_view_group_rel (view_id, group_id) VALUES (%s, %s)',
+                            (view_id, group_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view_group_rel WHERE view_id = %s AND group_id = %s',
+                            (view_id, group_id))
+        self.assertIsNotNone(self.env.cr.fetchone())
 
     def test_noop_without_the_view_and_on_fresh_install(self):
-        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self._upgrade_from('18.0.1.2.0')
+        self._upgrade_from('18.0.1.2.1')
         self.pre.migrate(self.env.cr, None)
         self.assertEqual(self._exists(0), (0, 0))
 

@@ -60,6 +60,9 @@ jobs:
           find "$ADDONS_DIR/im_livechat_ai" -name '__pycache__' -prune -exec rm -rf {} +
           odoo --version
 
+      - name: Run isolated legacy migration regressions
+        run: python3 im_livechat_ai/tests/test_legacy_settings_view_migration.py -v
+
       - name: Install and run tests
         run: |
           set -u

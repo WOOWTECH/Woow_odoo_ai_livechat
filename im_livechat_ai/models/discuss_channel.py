@@ -67,7 +67,11 @@ PAUSE_HANDOFF = 'handoff'
 # Author kinds returned by _ai_author_kind
 AUTHOR_VISITOR = 'visitor'
 AUTHOR_OPERATOR = 'operator'  # internal (non-share) user who is not the visitor: a human operator
-AUTHOR_BOT = 'bot'  # AI bot, OdooBot, or a session operator without internal user (chatbot)
+AUTHOR_BOT = 'bot'  # AI bot, OdooBot, a company partner, or a session operator without internal user (chatbot)
+
+# Context key for a message that another automation has already answered (e.g. a LINE keyword
+# auto-reply): it is recorded in the session but never answered, paused or handed off by the AI.
+SKIP_CONTEXT_KEY = 'im_livechat_ai_skip'
 
 
 # --- Visitor attachments (owner decision 39, same limits as woow_ai_contact) ---
@@ -410,8 +414,14 @@ class DiscussChannel(models.Model):
         return rdata
 
     def _ai_handle_new_message(self, message):
-        """Pause, hand off or queue an AI reply for a newly posted message."""
+        """Pause, hand off or queue an AI reply for a newly posted message.
+
+        A message posted with the context key ``im_livechat_ai_skip`` (another
+        automation, e.g. a LINE keyword auto-reply, already answered it) is only
+        recorded: no reply, no pause, no handoff."""
         if len(self) != 1 or not self._ai_session_enabled():
+            return
+        if self.env.context.get(SKIP_CONTEXT_KEY):
             return
         kind = self._ai_author_kind(message)
         if kind == AUTHOR_OPERATOR:
@@ -535,11 +545,14 @@ class DiscussChannel(models.Model):
     # --- Who wrote a message (P1-1) ---
 
     def _ai_bot_ids(self):
-        """Partner ids that are bots: the AI bots and OdooBot."""
+        """Partner ids that are bots: the AI bots, OdooBot and the companies'
+        own partners (automations such as LINE keyword replies post as the
+        company; they are never a visitor to answer)."""
         ids = set(self.env['im_livechat.channel']._ai_bot_partner_ids(self.sudo().livechat_channel_id))
         odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
         if odoobot:
             ids.add(odoobot.id)
+        ids.update(self.env['res.company'].sudo().with_context(active_test=False).search([]).partner_id.ids)
         return ids
 
     def _ai_visitor_member(self):
@@ -577,6 +590,7 @@ class DiscussChannel(models.Model):
         Bot exclusion checks come FIRST to prevent response loops:
         - the channel's AI bot partner and the default AI bot partner
         - OdooBot (base.partner_root)
+        - the companies' own partners (automations posting as the company)
         Then:
         - guest (author_guest_id, e.g. LINE user) or no author: visitor
         - author with an internal (non-share) user: human operator, except

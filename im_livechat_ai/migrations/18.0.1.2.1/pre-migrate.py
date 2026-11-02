@@ -39,6 +39,34 @@ def _has_owned_legacy_field(arch_text):
     return True
 
 
+def _assert_no_view_fk_references(cr, view_id):
+    """Hold any FK row that deletion could restrict, null, default, or cascade.
+
+    PostgreSQL quotes catalog-sourced identifiers before Python assembles each
+    probe. The target view row is already locked FOR UPDATE by the caller.
+    """
+    cr.execute('''
+        SELECT pg_catalog.format('%I.%I', ns.nspname, tbl.relname),
+               pg_catalog.format('%I', src.attname), dst.attname,
+               array_length(fk.conkey, 1), array_length(fk.confkey, 1)
+          FROM pg_constraint AS fk
+          JOIN pg_class AS tbl ON tbl.oid = fk.conrelid
+          JOIN pg_namespace AS ns ON ns.oid = tbl.relnamespace
+          JOIN pg_attribute AS src ON src.attrelid = fk.conrelid
+                                   AND src.attnum = fk.conkey[1]
+          JOIN pg_attribute AS dst ON dst.attrelid = fk.confrelid
+                                   AND dst.attnum = fk.confkey[1]
+         WHERE fk.contype = 'f' AND fk.confrelid = 'ir_ui_view'::regclass
+         ORDER BY fk.oid
+    ''')
+    for table_sql, column_sql, target_column, source_count, target_count in cr.fetchall():
+        if source_count != 1 or target_count != 1 or target_column != 'id':
+            raise RuntimeError('im_livechat_ai: unsupported Settings view FK; manual review required')
+        cr.execute(f'SELECT 1 FROM {table_sql} WHERE {column_sql} = %s LIMIT 1', (view_id,))
+        if cr.fetchone():
+            raise RuntimeError('im_livechat_ai: retired Settings view has FK references; manual review required')
+
+
 def migrate(cr, version):
     if not version:  # new installation has no legacy record
         return
@@ -75,6 +103,8 @@ def migrate(cr, version):
         return
     if arch_updated or has_children or has_other_xmlids or has_custom_views:
         raise RuntimeError('im_livechat_ai: retired Settings view was edited or has dependants; manual review required')
+
+    _assert_no_view_fk_references(cr, view_id)
 
     cr.execute('''
         DELETE FROM ir_ui_view AS v

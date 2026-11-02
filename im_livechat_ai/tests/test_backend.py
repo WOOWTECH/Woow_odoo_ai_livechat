@@ -1069,7 +1069,7 @@ class TestRequestTimeout(BackendCase):
 
 
 class TestMigration18121(TransactionCase):
-    """18.0.1.2.1 pre-migration: the 18.0.1.1.0 settings view is removed before the module loads.
+    """18.0.1.2.1 pre-migration: only the unreferenced owned legacy view is removed.
 
     18.0.1.2.0 dropped the Settings page. Odoo deletes a record whose file is gone only after
     every module has loaded, and it commits module by module, so during `-u` the old view
@@ -1089,12 +1089,17 @@ class TestMigration18121(TransactionCase):
         base = self.env.ref('base.res_config_settings_view_form')
         # Inserted with SQL like the 18.0.1.1.0 view: its arch names a field that no longer exists,
         # so the ORM would refuse it.
+        arch = json.dumps({'en_US': '<xpath expr="//form" position="inside">'
+                                    '<app name="im_livechat_ai" string="Live Chat AI">'
+                                    '<block name="livechat_ai_connection" title="LiteLLM Connection">'
+                                    '<setting id="livechat_ai_base_url_setting" string="LiteLLM Base URL">'
+                                    '<field name="livechat_ai_base_url"/>'
+                                    '</setting></block></app></xpath>'})
         self.env.cr.execute(
             "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
-            "VALUES ('res.config.settings.view.form.livechat.ai', 'res.config.settings', 'form', "
-            "'extension', 16, true, %s, %s) RETURNING id",
-            (base.id, '{"en_US": "<xpath expr=\\"//form\\" position=\\"inside\\">'
-                       '<field name=\\"livechat_ai_base_url\\"/></xpath>"}'))
+            "VALUES ('res.config.settings.view.form.inherit.im_livechat_ai', "
+            "'res.config.settings', 'form', 'extension', 16, true, %s, %s) RETURNING id",
+            (base.id, arch))
         view_id = self.env.cr.fetchone()[0]
         self.env['ir.model.data'].create({
             'module': 'im_livechat_ai', 'name': self.XMLID, 'model': 'ir.ui.view',
@@ -1118,18 +1123,47 @@ class TestMigration18121(TransactionCase):
 
     def test_removes_the_view_and_its_xmlid(self):
         view_id = self._legacy_view()
-        # SQL again: the ORM would validate the child together with its broken parent.
+        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(view_id), (0, 0))
+        self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_child_view_requires_manual_review(self):
+        view_id = self._legacy_view()
         self.env.cr.execute(
             "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
             "VALUES ('child of the legacy view', 'res.config.settings', 'form', 'extension', 16, true, %s, "
             "'{\"en_US\": \"<xpath expr=\\\"//form\\\" position=\\\"inside\\\"/>\"}') RETURNING id",
             (view_id,))
         child_id = self.env.cr.fetchone()[0]
-        self.pre.migrate(self.env.cr, '18.0.1.2.0')
-        self.env.invalidate_all()
-        self.assertEqual(self._exists(view_id), (0, 0))
-        self.assertEqual(self._exists(child_id)[0], 0)
-        self.env.ref('base.res_config_settings_view_form')._check_xml()
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.assertEqual(self._exists(child_id)[0], 1)
+
+    def test_action_view_fk_requires_manual_review_without_nulling(self):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "INSERT INTO ir_act_window_view (view_id, view_mode, sequence) "
+            "VALUES (%s, 'form', 0) RETURNING id", (view_id,))
+        action_view_id = self.env.cr.fetchone()[0]
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.env.cr.execute('SELECT view_id FROM ir_act_window_view WHERE id = %s', (action_view_id,))
+        self.assertEqual(self.env.cr.fetchone()[0], view_id)
+
+    def test_group_relation_fk_requires_manual_review_without_cascade(self):
+        view_id = self._legacy_view()
+        group_id = self.env.ref('base.group_system').id
+        self.env.cr.execute('INSERT INTO ir_ui_view_group_rel (view_id, group_id) VALUES (%s, %s)',
+                            (view_id, group_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.assertEqual(self._exists(view_id), (1, 1))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view_group_rel WHERE view_id = %s AND group_id = %s',
+                            (view_id, group_id))
+        self.assertIsNotNone(self.env.cr.fetchone())
 
     def test_noop_without_the_view_and_on_fresh_install(self):
         self.pre.migrate(self.env.cr, '18.0.1.2.0')

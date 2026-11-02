@@ -17,7 +17,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Upgrading to 18.0.1.2.1](#upgrading-to-180121)
+- [Upgrading to 18.0.1.2.2](#upgrading-to-180122)
 - [Upgrading to 18.0.1.2.0](#upgrading-to-180120)
 - [Upgrading from 18.0.1.0.x](#upgrading-from-18010x)
 - [Why Use This Module](#why-use-this-module)
@@ -56,17 +56,26 @@ The request formats are compatible with the n8n section of `woow_ai_contact` (do
 
 ---
 
-## Upgrading to 18.0.1.2.1
+## Upgrading to 18.0.1.2.2
 
-Upgrade straight to 18.0.1.2.1; do not stop at 18.0.1.2.0 when coming from 18.0.1.1.0.
-18.0.1.2.0 removed the Settings page, but the old Settings view stayed in the database until
-the very end of the upgrade. When another installed module also adds to the Settings form and
-loads after this one, its view check sees the old view (which names the removed
-`livechat_ai_*` fields) and the whole upgrade stops with
-`Field "livechat_ai_base_url" does not exist in model "res.config.settings"`.
-The 18.0.1.2.1 pre-migration deletes that view first. It also repairs a database where an
-18.0.1.2.0 upgrade already stopped this way: upgrade it again with 18.0.1.2.1.
-Nothing else changes.
+Upgrade directly to 18.0.1.2.2 from 18.0.1.1.0 or 18.0.1.2.0. Version 18.0.1.2.0
+removed the Settings page, but Odoo can retain its old view until after other modules
+validate the Settings form. The retained view references the removed
+`livechat_ai_base_url` field and can stop the upgrade.
+
+The 18.0.1.2.1 **pre-migration file is kept at the same path** so Odoo runs its corrected
+code when upgrading from 18.0.1.2.0 (or earlier) to 18.0.1.2.2. It removes only the
+exact owned legacy view and XMLID, after checking its XML architecture and that it has
+no manual edits, child views, other XMLIDs, custom views, or foreign-key references.
+If any dependency or unfamiliar shape exists, the upgrade stops for manual review;
+the script does not delete dependants or alter their references. Rehearse the upgrade
+on a database copy before production.
+
+A database **already recorded as 18.0.1.2.1** does not rerun the 18.0.1.2.1 script.
+It can upgrade to 18.0.1.2.2 normally if the old view is gone. If the old view remains,
+this release will not remove it automatically; inspect it and plan a separate controlled
+repair. Views or XMLIDs deleted by the original 18.0.1.2.1 script cannot be restored by
+this release; recovery requires a suitable backup.
 
 ## Upgrading to 18.0.1.2.0
 

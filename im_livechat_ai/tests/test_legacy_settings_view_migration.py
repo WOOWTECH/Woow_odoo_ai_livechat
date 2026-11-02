@@ -1,12 +1,13 @@
 """Isolated SQL reproduction for the removed 1.1.0 Settings view.
 
-SQLite runs the portable migration SQL in a disposable database. This checks
-record identity and ordering, while a full Odoo/PostgreSQL upgrade remains a
-separate gate.
+SQLite runs the migration SQL in a disposable database; the adapter rewrites
+PostgreSQL's JSONB-to-text cast, row lock and placeholders. This checks record
+identity and ordering, while a full Odoo/PostgreSQL upgrade remains a separate gate.
 """
 
 import ast
 import importlib.util
+import json
 import sqlite3
 import unittest
 from pathlib import Path
@@ -14,7 +15,12 @@ from pathlib import Path
 MODULE = Path(__file__).resolve().parents[1]
 LEGACY_VIEW = 6510
 LEGACY_XMLID = 510
-ARCH = '<form><field name="livechat_ai_base_url"/></form>'
+ARCH = ('<xpath expr="//form" position="inside"><app name="im_livechat_ai">'
+        '<setting><field name="livechat_ai_base_url"/></setting></app></xpath>')
+
+
+def arch_json(*xml_values):
+    return json.dumps({f'lang_{index}': xml for index, xml in enumerate(xml_values or (ARCH,))})
 
 
 class Cursor:
@@ -23,14 +29,22 @@ class Cursor:
         self.result = None
         self.rowcount = -1
         self.queries = []
+        self.after_fetch = None
 
     def execute(self, query, params=()):
         self.queries.append((query, params))
-        self.result = self.connection.execute(query.replace('%s', '?'), params)
+        self.result = self.connection.execute(
+            query.replace('v.arch_db::text', 'v.arch_db').replace('FOR UPDATE OF v', '').replace('%s', '?'),
+            params,
+        )
         self.rowcount = self.result.rowcount
 
     def fetchone(self):
-        return self.result.fetchone()
+        result = self.result.fetchone()
+        if self.after_fetch:
+            callback, self.after_fetch = self.after_fetch, None
+            callback()
+        return result
 
 
 def version(value):
@@ -62,24 +76,29 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.db.executescript('''
             CREATE TABLE ir_ui_view (
                 id INTEGER PRIMARY KEY, name TEXT, model TEXT, inherit_id INTEGER,
-                arch_db TEXT, FOREIGN KEY(inherit_id) REFERENCES ir_ui_view(id)
+                arch_db TEXT, arch_updated INTEGER,
+                FOREIGN KEY(inherit_id) REFERENCES ir_ui_view(id)
             );
             CREATE TABLE ir_model_data (
                 id INTEGER PRIMARY KEY, module TEXT, name TEXT, model TEXT,
                 res_id INTEGER, UNIQUE(module, name)
             );
+            CREATE TABLE ir_ui_view_custom (
+                id INTEGER PRIMARY KEY, ref_id INTEGER NOT NULL,
+                FOREIGN KEY(ref_id) REFERENCES ir_ui_view(id) ON DELETE CASCADE
+            );
         ''')
-        self.db.execute("INSERT INTO ir_ui_view VALUES (1, 'base.settings', 'res.config.settings', NULL, '<form/>')")
+        self.db.execute("INSERT INTO ir_ui_view VALUES (1, 'base.settings', 'res.config.settings', NULL, '<form/>', NULL)")
         self.db.execute("INSERT INTO ir_model_data VALUES (1, 'base', 'res_config_settings_view_form', 'ir.ui.view', 1)")
-        self.db.execute('INSERT INTO ir_ui_view VALUES (?, ?, ?, 1, ?)', (
+        self.db.execute('INSERT INTO ir_ui_view VALUES (?, ?, ?, 1, ?, NULL)', (
             LEGACY_VIEW, 'res.config.settings.view.form.inherit.im_livechat_ai',
-            'res.config.settings', ARCH,
+            'res.config.settings', arch_json(ARCH, ARCH),
         ))
         self.db.execute('INSERT INTO ir_model_data VALUES (?, ?, ?, ?, ?)', (
             LEGACY_XMLID, 'im_livechat_ai', 'res_config_settings_view_form_livechat_ai',
             'ir.ui.view', LEGACY_VIEW,
         ))
-        self.db.execute("INSERT INTO ir_ui_view VALUES (6520, 'unrelated', 'res.config.settings', 1, '<form/>')")
+        self.db.execute("INSERT INTO ir_ui_view VALUES (6520, 'unrelated', 'res.config.settings', 1, '<form/>', NULL)")
         self.db.execute("INSERT INTO ir_model_data VALUES (520, 'other_module', 'unrelated_settings', 'ir.ui.view', 6520)")
         self.cursor = Cursor(self.db)
 
@@ -138,11 +157,11 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
     def test_repurposed_view_shape_is_not_deleted(self):
         changes = (
             ('name', 'custom.settings'), ('model', 'res.partner'),
-            ('inherit_id', None), ('arch_db', '<form><field name="name"/></form>'),
+            ('inherit_id', None), ('arch_db', arch_json('<form><field name="name"/></form>')),
         )
         originals = {
             'name': 'res.config.settings.view.form.inherit.im_livechat_ai',
-            'model': 'res.config.settings', 'inherit_id': 1, 'arch_db': ARCH,
+            'model': 'res.config.settings', 'inherit_id': 1, 'arch_db': arch_json(ARCH, ARCH),
         }
         for column, value in changes:
             with self.subTest(column=column):
@@ -154,7 +173,7 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
                                 (originals[column], LEGACY_VIEW))
 
     def test_child_view_or_second_xmlid_requires_manual_review(self):
-        self.db.execute("INSERT INTO ir_ui_view VALUES (6600, 'child', 'res.config.settings', 6510, '<form/>')")
+        self.db.execute("INSERT INTO ir_ui_view VALUES (6600, 'child', 'res.config.settings', 6510, '<form/>', NULL)")
         with self.assertRaisesRegex(RuntimeError, 'manual review required'):
             run_view_pre_migrations(self.cursor, '18.0.1.2.0')
         self.assert_target_remains()
@@ -167,6 +186,68 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
     def test_same_version_does_not_replay_a_versioned_migration(self):
         run_view_pre_migrations(self.cursor, '18.0.1.2.1')
         self.assert_target_remains()
+
+    def test_comment_or_unrelated_app_does_not_authorize_deletion(self):
+        other_arches = (
+            '<xpath><app name="im_livechat_ai"><!-- <field name="livechat_ai_base_url"/> --></app></xpath>',
+            '<xpath><app name="other"><field name="livechat_ai_base_url"/></app></xpath>',
+            '<xpath><field name="livechat_ai_base_url"/><app name="im_livechat_ai"/></xpath>',
+            '<xpath><app name="im_livechat_ai"><field name="livechatXaiXbaseXurl"/></app></xpath>',
+            '<xpath><app name="im_livechat_ai"><field name="livechat_ai_base_url"></xpath>',
+        )
+        for xml in other_arches:
+            with self.subTest(xml=xml):
+                self.db.execute('UPDATE ir_ui_view SET arch_db = ? WHERE id = ?',
+                                (arch_json(xml), LEGACY_VIEW))
+                run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+                self.assert_target_remains()
+
+    def test_every_language_arch_must_have_real_field_in_owned_app(self):
+        self.db.execute('UPDATE ir_ui_view SET arch_db = ? WHERE id = ?', (
+            arch_json(ARCH, '<xpath><app name="im_livechat_ai"><!-- livechat_ai_base_url --></app></xpath>'),
+            LEGACY_VIEW,
+        ))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+
+    def test_arch_updated_requires_manual_review(self):
+        self.db.execute('UPDATE ir_ui_view SET arch_updated = 1 WHERE id = ?', (LEGACY_VIEW,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+
+    def test_custom_view_requires_manual_review_and_remains(self):
+        self.db.execute('INSERT INTO ir_ui_view_custom VALUES (8000, ?)', (LEGACY_VIEW,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+        self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view_custom WHERE id = 8000').fetchone())
+
+    def test_arch_changed_between_read_and_delete_aborts_without_deleting(self):
+        changed_arch = arch_json(ARCH.replace('<setting>', '<setting id="changed">'))
+        self.cursor.after_fetch = lambda: self.db.execute(
+            'UPDATE ir_ui_view SET arch_db = ? WHERE id = ?', (changed_arch, LEGACY_VIEW),
+        )
+        with self.assertRaisesRegex(RuntimeError, 'changed during pre-migration'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+
+    def test_manual_edit_between_read_and_delete_aborts_without_deleting(self):
+        self.cursor.after_fetch = lambda: self.db.execute(
+            'UPDATE ir_ui_view SET arch_updated = 1 WHERE id = ?', (LEGACY_VIEW,),
+        )
+        with self.assertRaisesRegex(RuntimeError, 'changed during pre-migration'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+
+    def test_custom_view_added_between_read_and_delete_is_preserved(self):
+        self.cursor.after_fetch = lambda: self.db.execute(
+            'INSERT INTO ir_ui_view_custom VALUES (8000, ?)', (LEGACY_VIEW,),
+        )
+        with self.assertRaisesRegex(RuntimeError, 'changed during pre-migration'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+        self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view_custom WHERE id = 8000').fetchone())
 
 
 if __name__ == '__main__':

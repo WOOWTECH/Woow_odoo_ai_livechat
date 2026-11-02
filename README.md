@@ -17,6 +17,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Upgrading to 18.0.1.2.1](#upgrading-to-180121)
 - [Upgrading to 18.0.1.2.0](#upgrading-to-180120)
 - [Upgrading from 18.0.1.0.x](#upgrading-from-18010x)
 - [Why Use This Module](#why-use-this-module)
@@ -54,6 +55,18 @@ Odoo only **records, forwards and manages** the conversation: the persona, tools
 The request formats are compatible with the n8n section of `woow_ai_contact` (docs/PROTOCOL.md): same headers, signature, session id, payload and answers, so an n8n workflow written for this module also works after a later move to `woow_ai_contact`.
 
 ---
+
+## Upgrading to 18.0.1.2.1
+
+Upgrade straight to 18.0.1.2.1; do not stop at 18.0.1.2.0 when coming from 18.0.1.1.0.
+18.0.1.2.0 removed the Settings page, but the old Settings view stayed in the database until
+the very end of the upgrade. When another installed module also adds to the Settings form and
+loads after this one, its view check sees the old view (which names the removed
+`livechat_ai_*` fields) and the whole upgrade stops with
+`Field "livechat_ai_base_url" does not exist in model "res.config.settings"`.
+The 18.0.1.2.1 pre-migration deletes that view first. It also repairs a database where an
+18.0.1.2.0 upgrade already stopped this way: upgrade it again with 18.0.1.2.1.
+Nothing else changes.
 
 ## Upgrading to 18.0.1.2.0
 

@@ -1066,3 +1066,77 @@ class TestRequestTimeout(BackendCase):
         self.assertEqual(jobs.MAX_RUN_SECONDS, longest)
         self.assertGreater(jobs.JOB_MAX_AGE_MINUTES * 60, longest)
         self.assertEqual(MAX_REQUEST_TIMEOUT, 300)
+
+
+class TestMigration18121(TransactionCase):
+    """18.0.1.2.1 pre-migration: the 18.0.1.1.0 settings view is removed before the module loads.
+
+    18.0.1.2.0 dropped the Settings page. Odoo deletes a record whose file is gone only after
+    every module has loaded, and it commits module by module, so during `-u` the old view
+    (still active, still pointing at the removed livechat_ai_* fields) took part in the
+    res.config.settings form of every module loaded after this one. Validating such a view
+    (woow_paas_platform on production, 2026-11-02) failed and aborted the whole upgrade.
+    """
+
+    XMLID = 'res_config_settings_view_form_livechat_ai'
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.pre = _load_migration('18.0.1.2.1', 'pre-migrate')
+
+    def _legacy_view(self):
+        base = self.env.ref('base.res_config_settings_view_form')
+        # Inserted with SQL like the 18.0.1.1.0 view: its arch names a field that no longer exists,
+        # so the ORM would refuse it.
+        self.env.cr.execute(
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
+            "VALUES ('res.config.settings.view.form.livechat.ai', 'res.config.settings', 'form', "
+            "'extension', 16, true, %s, %s) RETURNING id",
+            (base.id, '{"en_US": "<xpath expr=\\"//form\\" position=\\"inside\\">'
+                       '<field name=\\"livechat_ai_base_url\\"/></xpath>"}'))
+        view_id = self.env.cr.fetchone()[0]
+        self.env['ir.model.data'].create({
+            'module': 'im_livechat_ai', 'name': self.XMLID, 'model': 'ir.ui.view',
+            'res_id': view_id, 'noupdate': False})
+        return view_id
+
+    def _exists(self, view_id):
+        self.env.flush_all()
+        self.env.cr.execute("SELECT count(*) FROM ir_ui_view WHERE id = %s", (view_id,))
+        views = self.env.cr.fetchone()[0]
+        self.env.cr.execute("SELECT count(*) FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+                            (self.XMLID,))
+        return views, self.env.cr.fetchone()[0]
+
+    def test_legacy_view_breaks_the_settings_form(self):
+        """Guard for the scenario itself: with the old view present the combined form is invalid."""
+        self._legacy_view()
+        self.env.invalidate_all()
+        with self.assertRaises(ValidationError):
+            self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_removes_the_view_and_its_xmlid(self):
+        view_id = self._legacy_view()
+        # SQL again: the ORM would validate the child together with its broken parent.
+        self.env.cr.execute(
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
+            "VALUES ('child of the legacy view', 'res.config.settings', 'form', 'extension', 16, true, %s, "
+            "'{\"en_US\": \"<xpath expr=\\\"//form\\\" position=\\\"inside\\\"/>\"}') RETURNING id",
+            (view_id,))
+        child_id = self.env.cr.fetchone()[0]
+        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(view_id), (0, 0))
+        self.assertEqual(self._exists(child_id)[0], 0)
+        self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_noop_without_the_view_and_on_fresh_install(self):
+        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.pre.migrate(self.env.cr, None)
+        self.assertEqual(self._exists(0), (0, 0))
+
+    def test_fresh_install_leaves_a_view_alone(self):
+        view_id = self._legacy_view()
+        self.pre.migrate(self.env.cr, None)
+        self.assertEqual(self._exists(view_id), (1, 1))

@@ -67,6 +67,10 @@ The 18.0.1.2.1 **pre-migration file is kept at the same path** so Odoo runs its 
 code when upgrading from 18.0.1.2.0 (or earlier) to 18.0.1.2.2. It removes only the
 exact owned legacy view and XMLID, after checking its XML architecture and that it has
 no manual edits, child views, other XMLIDs, custom views, or foreign-key references.
+Its XML tree must match the retired 18.0.1.1.0 view in every stored language;
+translated labels and display text may differ, but extra fields, nodes, or changed
+functional attributes stop the migration. A missing or mis-modelled XMLID with a
+recognizable residual view also stops instead of silently allowing a broken form.
 If any dependency or unfamiliar shape exists, the upgrade stops for manual review;
 the script does not delete dependants or alter their references. Rehearse the upgrade
 on a database copy before production.
@@ -678,7 +682,7 @@ im_livechat_ai/
 │   └── 18.0.1.2.0/                      # System parameters -> every channel,
 │                                        #   then delete im_livechat_ai.* parameters;
 │                                        #   Visitor Files per channel (Hermes: link)
-├── tests/                               # 390 tests (see Testing)
+├── tests/                               # 405 Odoo tests + 23 isolated SQL tests (see Testing)
 └── i18n/
     └── zh_TW.po                         # Traditional Chinese translation
 ```
@@ -720,7 +724,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **390 automated tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **405 Odoo tests** plus **23 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -728,7 +732,7 @@ The module has **390 automated tests**. All HTTP calls are mocked: no key or net
 | `test_discuss_channel.py` | 18 | Message interception, visitor detection, context building |
 | `test_integration.py` | 9 | End-to-end flow, retries, error fallback, per-channel connection |
 | `test_edge_cases.py` | 97 | Edge cases: payloads, HTTP errors, think tags, XSS, limits, logging |
-| `test_backend.py` | 54 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.2.0 and 18.0.1.1.0 migrations |
+| `test_backend.py` | 69 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.1.0 through 18.0.1.2.2 migrations |
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
@@ -736,6 +740,8 @@ The module has **390 automated tests**. All HTTP calls are mocked: no key or net
 | `test_reply_markdown.py` | 8 | Markdown replies: a real advisor reply (pipe table, bold, shop links, off-site link as text), headings, lists, code, paragraphs, link host allowlist, HTML escaped everywhere |
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
 | `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
+
+The 23 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
 
 ### Running the Tests
 

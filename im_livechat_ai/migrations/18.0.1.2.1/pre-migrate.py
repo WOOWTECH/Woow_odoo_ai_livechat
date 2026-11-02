@@ -5,6 +5,7 @@ normally removes retired XML records at the end of the module load, which is
 too late for the inherited view that still names livechat_ai_base_url.
 """
 
+import hashlib
 import json
 import logging
 from xml.etree import ElementTree
@@ -16,10 +17,30 @@ XMLID = 'res_config_settings_view_form_livechat_ai'
 VIEW_NAME = 'res.config.settings.view.form.inherit.im_livechat_ai'
 VIEW_MODEL = 'res.config.settings'
 LEGACY_FIELD = 'livechat_ai_base_url'
+# SHA-256 of the element/attribute tree in v18.0.1.1.0's
+# views/res_config_settings_views.xml, record XMLID above. Human-facing text
+# and Odoo-translated attributes are excluded; executable attributes, element
+# order and every field/button remain exact. Unknown historic shapes stop.
+LEGACY_STRUCTURE_SHA256 = '71c3d579067f26b511f898ed4b758d15d2289027bc541a48216f3d7695feb251'
+DISPLAY_ATTRIBUTES = frozenset({'string', 'help', 'title', 'placeholder', 'data-string'})
 
 
-def _has_owned_legacy_field(arch_text):
-    """Require the real field under our app in every stored language arch."""
+def _structure(node):
+    """Ignore only display translations and formatting, never extra XML nodes."""
+    if (not isinstance(node.tag, str)
+            or (node.tag != 'div' and (node.text or '').strip())
+            or (node.tail or '').strip()):
+        raise ValueError('unexpected Settings view XML node or text')
+    return [
+        node.tag,
+        sorted((key, value) for key, value in node.attrib.items()
+               if key not in DISPLAY_ATTRIBUTES),
+        [_structure(child) for child in node],
+    ]
+
+
+def _has_expected_legacy_structure(arch_text):
+    """Every stored language must match the frozen 1.1.0 tree exactly."""
     try:
         arches = json.loads(arch_text)
         if not isinstance(arches, dict) or not arches:
@@ -27,16 +48,52 @@ def _has_owned_legacy_field(arch_text):
         for xml in arches.values():
             if not isinstance(xml, str):
                 return False
-            root = ElementTree.fromstring(xml)
-            if not any(
-                field.get('name') == LEGACY_FIELD
-                for app in root.iter('app') if app.get('name') == MODULE
-                for field in app.iter('field')
-            ):
+            root = ElementTree.fromstring(
+                xml, parser=ElementTree.XMLParser(
+                    target=ElementTree.TreeBuilder(insert_comments=True)))
+            shape = json.dumps(_structure(root), ensure_ascii=False, separators=(',', ':'))
+            if hashlib.sha256(shape.encode()).hexdigest() != LEGACY_STRUCTURE_SHA256:
                 return False
     except (TypeError, ValueError, ElementTree.ParseError):
         return False
     return True
+
+
+def _contains_owned_legacy_field(arch_text):
+    """Recognize a residual view without authorizing its deletion."""
+    try:
+        arches = json.loads(arch_text)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(arches, dict):
+        return False
+    for xml in arches.values():
+        if not isinstance(xml, str):
+            continue
+        try:
+            root = ElementTree.fromstring(xml)
+        except ElementTree.ParseError:
+            continue
+        if any(
+            field.get('name') == LEGACY_FIELD
+            for app in root.iter('app') if app.get('name') == MODULE
+            for field in app.iter('field')
+        ):
+            return True
+    return False
+
+
+def _assert_no_residual_legacy_view(cr):
+    """Missing/mis-modelled XMLIDs must not hide a still-invalid old view."""
+    cr.execute('''
+        SELECT v.name, v.arch_db::text
+          FROM ir_ui_view AS v
+         WHERE v.model = %s OR v.name = %s
+    ''', (VIEW_MODEL, VIEW_NAME))
+    for name, arch_text in cr.fetchall():
+        if name == VIEW_NAME or _contains_owned_legacy_field(arch_text):
+            raise RuntimeError('im_livechat_ai: retired Settings view has no valid XMLID; '
+                               'manual review required')
 
 
 def _assert_no_view_fk_references(cr, view_id):
@@ -94,11 +151,12 @@ def migrate(cr, version):
     ''', (VIEW_NAME, VIEW_MODEL, MODULE, XMLID))
     target = cr.fetchone()
     if target is None:
+        _assert_no_residual_legacy_view(cr)
         return
 
     (xmlid_id, view_id, arch_text, is_legacy_view, arch_updated,
      has_children, has_other_xmlids, has_custom_views) = target
-    if not is_legacy_view or not _has_owned_legacy_field(arch_text):
+    if not is_legacy_view or not _has_expected_legacy_structure(arch_text):
         raise RuntimeError('im_livechat_ai: retired Settings XMLID has an unfamiliar view shape; '
                            'manual review required')
     if arch_updated or has_children or has_other_xmlids or has_custom_views:

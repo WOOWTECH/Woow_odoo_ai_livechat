@@ -16,8 +16,7 @@ from pathlib import Path
 MODULE = Path(__file__).resolve().parents[1]
 LEGACY_VIEW = 6510
 LEGACY_XMLID = 510
-ARCH = ('<xpath expr="//form" position="inside"><app name="im_livechat_ai">'
-        '<setting><field name="livechat_ai_base_url"/></setting></app></xpath>')
+ARCH = (MODULE / 'tests/fixtures/legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
 
 
 def arch_json(*xml_values):
@@ -197,7 +196,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             with self.subTest(column=column):
                 self.db.execute(f'UPDATE ir_model_data SET {column} = ? WHERE id = ?',
                                 (value, LEGACY_XMLID))
-                run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                    run_view_pre_migrations(self.cursor, '18.0.1.2.0')
                 self.assert_target_remains()
                 original = {'module': 'im_livechat_ai',
                             'name': 'res_config_settings_view_form_livechat_ai',
@@ -240,6 +240,37 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.assertIsNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
         self.assertIsNone(self.db.execute('SELECT 1 FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,)).fetchone())
         self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6520').fetchone())
+
+    def test_extra_field_holds_on_both_upgrade_paths(self):
+        extra = ARCH.replace('<field name="livechat_ai_base_url"',
+                             '<field name="unrelated_custom_field"/><field name="livechat_ai_base_url"')
+        self.assertNotEqual(extra, ARCH)
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed):
+                self.db.execute('UPDATE ir_ui_view SET arch_db = ?, arch_updated = 0 WHERE id = ?',
+                                (arch_json(ARCH, extra), LEGACY_VIEW))
+                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                    run_view_pre_migrations(self.cursor, installed)
+                self.assert_target_remains()
+
+    def test_nontranslated_attribute_change_holds(self):
+        changed = ARCH.replace('invisible="not livechat_ai_api_key_set"', 'invisible="0"')
+        self.assertNotEqual(changed, ARCH)
+        self.db.execute('UPDATE ir_ui_view SET arch_db = ?, arch_updated = 0 WHERE id = ?',
+                        (arch_json(changed), LEGACY_VIEW))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assert_target_remains()
+
+    def test_translated_labels_keep_exact_structure(self):
+        translated = (ARCH.replace('string="Live Chat AI"', 'string="即時聊天 AI"')
+                         .replace('title="LiteLLM Connection"', 'title="LiteLLM 連線"')
+                         .replace('A key is configured (it is never displayed).', '金鑰已設定。'))
+        self.assertNotEqual(translated, ARCH)
+        self.db.execute('UPDATE ir_ui_view SET arch_db = ? WHERE id = ?',
+                        (arch_json(ARCH, translated), LEGACY_VIEW))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        self.assertIsNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
 
     def test_installed_1_2_1_without_legacy_view_upgrades_to_1_2_2_without_cleanup(self):
         self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
@@ -288,7 +319,7 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view_custom WHERE id = 8000').fetchone())
 
     def test_arch_changed_between_read_and_delete_aborts_without_deleting(self):
-        changed_arch = arch_json(ARCH.replace('<setting>', '<setting id="changed">'))
+        changed_arch = arch_json(ARCH.replace('id="livechat_ai_base_url_setting"', 'id="changed"'))
         self.cursor.after_fetch = lambda: self.db.execute(
             'UPDATE ir_ui_view SET arch_db = ? WHERE id = ?', (changed_arch, LEGACY_VIEW),
         )
@@ -341,12 +372,22 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.assert_target_remains()
         self.assertIsNotNone(self.db.execute('SELECT 1 FROM "quote"" table" WHERE id = 1').fetchone())
 
-    def test_missing_target_does_not_inspect_catalog_or_delete_other_views(self):
+    def test_missing_xmlid_with_residual_view_holds(self):
         self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
-        run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed), self.assertRaisesRegex(
+                    RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, installed)
         self.assertFalse(any('FROM pg_constraint AS fk' in query for query, _ in self.cursor.queries))
         self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
         self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view WHERE id = 6520').fetchone())
+
+    def test_renamed_residual_view_without_xmlid_holds(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute("UPDATE ir_ui_view SET name = 'renamed legacy view' WHERE id = ?", (LEGACY_VIEW,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
 
 
 if __name__ == '__main__':

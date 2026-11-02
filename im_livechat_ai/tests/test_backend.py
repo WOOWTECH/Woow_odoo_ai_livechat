@@ -13,6 +13,7 @@ import importlib.util
 import json
 import time
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -1069,7 +1070,7 @@ class TestRequestTimeout(BackendCase):
 
 
 class TestMigration18121(TransactionCase):
-    """18.0.1.2.1 pre-migration: only the unreferenced owned legacy view is removed.
+    """PostgreSQL rehearsal of both 1.2.0 and 1.2.1 upgrade paths to 1.2.2.
 
     18.0.1.2.0 dropped the Settings page. Odoo deletes a record whose file is gone only after
     every module has loaded, and it commits module by module, so during `-u` the old view
@@ -1086,26 +1087,30 @@ class TestMigration18121(TransactionCase):
         cls.pre = _load_migration('18.0.1.2.1', 'pre-migrate')
         cls.pre122 = _load_migration('18.0.1.2.2', 'pre-migrate')
 
-    def _legacy_view(self):
+    def _legacy_view(self, arch=None):
         base = self.env.ref('base.res_config_settings_view_form')
-        # Inserted with SQL like the 18.0.1.1.0 view: its arch names a field that no longer exists,
-        # so the ORM would refuse it.
-        arch = json.dumps({'en_US': '<xpath expr="//form" position="inside">'
-                                    '<app name="im_livechat_ai" string="Live Chat AI">'
-                                    '<block name="livechat_ai_connection" title="LiteLLM Connection">'
-                                    '<setting id="livechat_ai_base_url_setting" string="LiteLLM Base URL">'
-                                    '<field name="livechat_ai_base_url"/>'
-                                    '</setting></block></app></xpath>'})
+        # Frozen from the actual v18.0.1.1.0 XML. Insert via SQL because the
+        # removed field makes this legacy view invalid to the current ORM.
+        if arch is None:
+            arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        arch_db = json.dumps({'en_US': arch})
         self.env.cr.execute(
-            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, arch_db) "
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, "
+            "arch_db, arch_updated) "
             "VALUES ('res.config.settings.view.form.inherit.im_livechat_ai', "
-            "'res.config.settings', 'form', 'extension', 16, true, %s, %s) RETURNING id",
-            (base.id, arch))
+            "'res.config.settings', 'form', 'extension', 16, true, %s, %s, false) RETURNING id",
+            (base.id, arch_db))
         view_id = self.env.cr.fetchone()[0]
         self.env['ir.model.data'].create({
             'module': 'im_livechat_ai', 'name': self.XMLID, 'model': 'ir.ui.view',
             'res_id': view_id, 'noupdate': False})
         return view_id
+
+    def _upgrade_from(self, installed_version):
+        if installed_version == '18.0.1.2.0':
+            self.pre.migrate(self.env.cr, installed_version)
+        self.pre122.migrate(self.env.cr, installed_version)
 
     def _exists(self, view_id):
         self.env.flush_all()
@@ -1124,17 +1129,76 @@ class TestMigration18121(TransactionCase):
 
     def test_removes_the_view_and_its_xmlid(self):
         view_id = self._legacy_view()
-        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self._upgrade_from('18.0.1.2.0')
         self.env.invalidate_all()
         self.assertEqual(self._exists(view_id), (0, 0))
         self.env.ref('base.res_config_settings_view_form')._check_xml()
 
     def test_1_2_1_residual_view_uses_1_2_2_guard(self):
         view_id = self._legacy_view()
-        self.pre122.migrate(self.env.cr, '18.0.1.2.1')
+        self._upgrade_from('18.0.1.2.1')
         self.env.invalidate_all()
         self.assertEqual(self._exists(view_id), (0, 0))
         self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_translated_legacy_arches_are_cleaned(self):
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        translated = (old_arch.replace('string="Live Chat AI"', 'string="即時聊天 AI"')
+                              .replace('title="LiteLLM Connection"', 'title="LiteLLM 連線"')
+                              .replace('A key is configured (it is never displayed).', '金鑰已設定。'))
+        view_id = self._legacy_view()
+        self.env.cr.execute('UPDATE ir_ui_view SET arch_db = %s WHERE id = %s',
+                            (json.dumps({'en_US': old_arch, 'zh_TW': translated}), view_id))
+        self._upgrade_from('18.0.1.2.1')
+        self.assertEqual(self._exists(view_id), (0, 0))
+
+    def _assert_extra_field_holds(self, installed_version):
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        changed = old_arch.replace('<field name="livechat_ai_base_url"',
+                                   '<field name="custom_field"/><field name="livechat_ai_base_url"')
+        self.assertNotEqual(changed, old_arch)
+        view_id = self._legacy_view(changed)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 1))
+
+    def test_extra_field_holds_from_1_2_0(self):
+        self._assert_extra_field_holds('18.0.1.2.0')
+
+    def test_extra_field_holds_from_1_2_1(self):
+        self._assert_extra_field_holds('18.0.1.2.1')
+
+    def _assert_missing_xmlid_holds(self, installed_version):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+            (self.XMLID,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 0))
+
+    def test_missing_xmlid_holds_from_1_2_0(self):
+        self._assert_missing_xmlid_holds('18.0.1.2.0')
+
+    def test_missing_xmlid_holds_from_1_2_1(self):
+        self._assert_missing_xmlid_holds('18.0.1.2.1')
+
+    def _assert_wrong_model_xmlid_holds(self, installed_version):
+        view_id = self._legacy_view()
+        self.env.cr.execute(
+            "UPDATE ir_model_data SET model = 'ir.actions.act_window' "
+            "WHERE module = 'im_livechat_ai' AND name = %s", (self.XMLID,))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 1))
+
+    def test_wrong_model_xmlid_holds_from_1_2_0(self):
+        self._assert_wrong_model_xmlid_holds('18.0.1.2.0')
+
+    def test_wrong_model_xmlid_holds_from_1_2_1(self):
+        self._assert_wrong_model_xmlid_holds('18.0.1.2.1')
 
     def test_child_view_requires_manual_review(self):
         view_id = self._legacy_view()
@@ -1174,7 +1238,8 @@ class TestMigration18121(TransactionCase):
         self.assertIsNotNone(self.env.cr.fetchone())
 
     def test_noop_without_the_view_and_on_fresh_install(self):
-        self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self._upgrade_from('18.0.1.2.0')
+        self._upgrade_from('18.0.1.2.1')
         self.pre.migrate(self.env.cr, None)
         self.assertEqual(self._exists(0), (0, 0))
 

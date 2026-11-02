@@ -1233,6 +1233,104 @@ class TestMigration18121(TransactionCase):
     def test_other_retired_settings_field_rolls_back_from_1_2_1(self):
         self._assert_sibling_field_rolls_back('18.0.1.2.1', 'livechat_ai_api_key')
 
+    def _assert_xpath_only_sibling_holds(self, installed_version, target_present):
+        target_id = self._legacy_view()
+        if not target_present:
+            self.env.cr.execute(
+                "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+                (self.XMLID,))
+            self.env.cr.execute('DELETE FROM ir_ui_view WHERE id = %s', (target_id,))
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings',
+            '<xpath expr="//field[@name=\'livechat_ai_base_url\']" position="attributes">'
+            '<attribute name="string">Old setting</attribute></xpath>',
+            self.env.ref('base.res_config_settings_view_form').id)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1) if target_present else (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_xpath_only_sibling_holds_from_1_2_0(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.0', target_present=True)
+
+    def test_xpath_only_sibling_holds_from_1_2_1(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.1', target_present=True)
+
+    def test_xpath_only_residual_holds_without_target_from_1_2_0(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.0', target_present=False)
+
+    def test_xpath_only_residual_holds_without_target_from_1_2_1(self):
+        self._assert_xpath_only_sibling_holds('18.0.1.2.1', target_present=False)
+
+    def _assert_structural_sibling_holds(self, installed_version, arch, *,
+                                         target_present=True, translated_arch=None):
+        target_id = self._legacy_view()
+        if not target_present:
+            self.env.cr.execute(
+                "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+                (self.XMLID,))
+            self.env.cr.execute('DELETE FROM ir_ui_view WHERE id = %s', (target_id,))
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings', arch,
+            self.env.ref('base.res_config_settings_view_form').id)
+        if translated_arch is not None:
+            self.env.cr.execute('UPDATE ir_ui_view SET arch_db = %s WHERE id = %s',
+                                (json.dumps({'en_US': arch, 'zh_TW': translated_arch}), sibling_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1) if target_present else (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_label_for_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_label_for_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_modifier_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><div invisible="not livechat_ai_api_key_set"/></xpath>')
+
+    def test_modifier_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><div invisible="not livechat_ai_api_key_set"/></xpath>')
+
+    def test_attribute_mutation_retired_field_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath expr="//form" position="attributes">'
+            '<attribute name="invisible">livechat_ai_base_url</attribute></xpath>')
+
+    def test_attribute_mutation_retired_field_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes">'
+            '<attribute name="invisible">livechat_ai_base_url</attribute></xpath>')
+
+    def test_label_for_retired_field_holds_without_target_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<xpath><label for="livechat_ai_base_url"/></xpath>',
+            target_present=False)
+
+    def test_label_for_retired_field_holds_without_target_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath><label for="livechat_ai_base_url"/></xpath>',
+            target_present=False)
+
+    def test_nonprimary_translation_retired_label_holds(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes"/>',
+            translated_arch='<xpath><label for="livechat_ai_base_url"/></xpath>')
+
+    def test_unparseable_nonprimary_settings_arch_holds(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//form" position="attributes"/>',
+            translated_arch='<xpath><field name="other"/>')
+
     def _assert_renamed_view_and_app_holds(self, installed_version):
         view_id = self._legacy_view()
         old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'

@@ -8,6 +8,7 @@ too late for the inherited view that still names livechat_ai_base_url.
 import hashlib
 import json
 import logging
+import re
 from xml.etree import ElementTree
 
 _logger = logging.getLogger(__name__)
@@ -22,6 +23,14 @@ REMOVED_SETTINGS_FIELDS = frozenset({
     'livechat_ai_api_key', 'livechat_ai_api_key_set', 'livechat_ai_base_url',
     'livechat_ai_cron_lastcall', 'livechat_ai_job_warning', 'livechat_ai_log_payload',
     'livechat_ai_log_retention_days', 'livechat_ai_model_list', 'livechat_ai_stale_job_count',
+})
+REMOVED_FIELD_TOKEN = re.compile(
+    r'(?<![A-Za-z0-9_])(?:' + '|'.join(map(re.escape, sorted(REMOVED_SETTINGS_FIELDS)))
+    + r')(?![A-Za-z0-9_])')
+REFERENCE_ATTRIBUTES = frozenset({'name', 'for', 'field', 'data-field', 'data-oe-field'})
+EXPRESSION_ATTRIBUTES = frozenset({
+    'invisible', 'readonly', 'required', 'column_invisible', 'attrs', 'modifiers',
+    'domain', 'context', 'options', 'filter_domain', 't-if', 't-elif', 't-esc', 't-out',
 })
 # SHA-256 of the element/attribute tree in v18.0.1.1.0's
 # views/res_config_settings_views.xml, record XMLID above. Human-facing text
@@ -65,28 +74,54 @@ def _has_expected_legacy_structure(arch_text):
     return True
 
 
-def _contains_removed_settings_field(arch_text):
-    """Find an actual removed field node, regardless of view or app name."""
-    try:
-        arches = json.loads(arch_text)
-    except (TypeError, ValueError):
-        return False
-    if not isinstance(arches, dict):
-        return False
-    for xml in arches.values():
-        if not isinstance(xml, str):
-            continue
-        try:
-            root = ElementTree.fromstring(xml)
-        except ElementTree.ParseError:
-            continue
-        if any(field.get('name') in REMOVED_SETTINGS_FIELDS for field in root.iter('field')):
+def _is_expression_attribute(name):
+    return name in EXPRESSION_ATTRIBUTES or name.startswith(
+        ('decoration-', 't-att-', 't-attf-'))
+
+
+def _node_references_removed_field(node):
+    """Inspect parsed XML locators, labels, modifiers and attribute changes."""
+    for name, value in node.attrib.items():
+        if name in REFERENCE_ATTRIBUTES and value in REMOVED_SETTINGS_FIELDS:
+            return True
+        is_expression = (node.tag == 'xpath' and name == 'expr') or _is_expression_attribute(name)
+        if is_expression and REMOVED_FIELD_TOKEN.search(value):
+            return True
+    if node.tag == 'attribute':
+        changed_name = node.get('name', '')
+        is_reference_change = changed_name in REFERENCE_ATTRIBUTES or _is_expression_attribute(changed_name)
+        if is_reference_change and any(
+                REMOVED_FIELD_TOKEN.search(value or '') for value in (
+                    node.text, node.get('add'), node.get('remove'))):
             return True
     return False
 
 
+def _contains_removed_settings_field(arch_text):
+    """Find structural references in every stored Settings view language.
+
+    An exact retired-field token in an XPath or expression may be a quoted
+    display literal rather than a live reference. Hold such cases for manual
+    review rather than risking a broken post-migration Settings form.
+    """
+    try:
+        arches = json.loads(arch_text)
+        if not isinstance(arches, dict) or not arches:
+            raise ValueError('Settings view arch_db is not a language mapping')
+        for xml in arches.values():
+            if not isinstance(xml, str):
+                raise TypeError('Settings view language architecture is not XML text')
+            root = ElementTree.fromstring(xml)
+            if any(_node_references_removed_field(node) for node in root.iter()):
+                return True
+    except (TypeError, ValueError, ElementTree.ParseError) as exc:
+        raise RuntimeError('im_livechat_ai: unparseable Settings view architecture; '
+                           'manual review required') from exc
+    return False
+
+
 def _assert_no_residual_legacy_view(cr):
-    """Hold any remaining Settings view using the removed field.
+    """Hold any residual reference or unparseable Settings view architecture.
 
     Scan only the Settings model. This runs when the target XMLID is absent
     and again after deleting the exact target in the same transaction.

@@ -72,9 +72,13 @@ translated labels and display text may differ, but extra fields, nodes, or chang
 functional attributes stop the migration. A missing or mis-modelled XMLID with a
 recognizable residual view also stops instead of silently allowing a broken form.
 After the exact target and XMLID are removed, the script scans Settings views
-again in the same transaction. Any real field node for the nine retired Settings
-fields, including `livechat_ai_base_url`, stops the upgrade and rolls back that
-removal regardless of view or app name.
+again in the same transaction. A reference to any of the nine retired fields in
+a field node, label, XPath selector, modifier expression, or inherited attribute
+change stops the upgrade and rolls back that removal, regardless of view/app
+name or stored language. An unparseable Settings view architecture also stops.
+The scan matches exact field names or identifier tokens; a matching token used
+only as display text inside an XPath/expression may conservatively require
+manual review. It does not delete sibling views or their data.
 If any dependency or unfamiliar shape exists, the upgrade stops for manual review;
 the script does not delete dependants or alter their references. Rehearse the upgrade
 on a database copy before production.
@@ -728,7 +732,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **412 Odoo tests** plus **28 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **426 Odoo tests** plus **38 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -736,7 +740,7 @@ The module has **412 Odoo tests** plus **28 isolated SQL migration tests**. All 
 | `test_discuss_channel.py` | 18 | Message interception, visitor detection, context building |
 | `test_integration.py` | 9 | End-to-end flow, retries, error fallback, per-channel connection |
 | `test_edge_cases.py` | 97 | Edge cases: payloads, HTTP errors, think tags, XSS, limits, logging |
-| `test_backend.py` | 76 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.1.0 through 18.0.1.2.2 migrations |
+| `test_backend.py` | 90 | Connection access (manager vs system admin), write-only token, URL rule, OpenAI request shape, n8n signing / payload / answers, retry policy per backend, per-channel log settings, n8n Chat Trigger (no secret, `output`), Backend Reply Timeout per channel, 18.0.1.1.0 through 18.0.1.2.2 migrations |
 | `test_ai_job.py` | 38 | Job creation in the visitor transaction, debounce, lock, skip, retries, recovery cron |
 | `test_handoff.py` | 43 | Portal visitors, operator pause, handoff keywords, operator roles, bot partner, Chinese defaults |
 | `test_review_fixes.py` | 20 | AI config access, bot partner protection, connection test permission, which messages trigger, no open transaction during backend calls |
@@ -745,7 +749,7 @@ The module has **412 Odoo tests** plus **28 isolated SQL migration tests**. All 
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
 | `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
-The 28 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
+The 38 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
 
 ### Running the Tests
 

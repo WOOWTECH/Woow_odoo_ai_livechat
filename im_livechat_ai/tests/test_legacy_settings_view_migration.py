@@ -137,7 +137,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
                 FOREIGN KEY(view_id) REFERENCES ir_ui_view(id) ON DELETE CASCADE
             );
         ''')
-        self.db.execute("INSERT INTO ir_ui_view VALUES (1, 'base.settings', 'res.config.settings', NULL, '<form/>', NULL)")
+        self.db.execute('INSERT INTO ir_ui_view VALUES (1, ?, ?, NULL, ?, NULL)',
+                        ('base.settings', 'res.config.settings', arch_json('<form/>')))
         self.db.execute("INSERT INTO ir_model_data VALUES (1, 'base', 'res_config_settings_view_form', 'ir.ui.view', 1)")
         self.db.execute('INSERT INTO ir_ui_view VALUES (?, ?, ?, 1, ?, NULL)', (
             LEGACY_VIEW, 'res.config.settings.view.form.inherit.im_livechat_ai',
@@ -147,7 +148,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             LEGACY_XMLID, 'im_livechat_ai', 'res_config_settings_view_form_livechat_ai',
             'ir.ui.view', LEGACY_VIEW,
         ))
-        self.db.execute("INSERT INTO ir_ui_view VALUES (6520, 'unrelated', 'res.config.settings', 1, '<form/>', NULL)")
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6520, ?, ?, 1, ?, NULL)',
+                        ('unrelated', 'res.config.settings', arch_json('<form/>')))
         self.db.execute("INSERT INTO ir_model_data VALUES (520, 'other_module', 'unrelated_settings', 'ir.ui.view', 6520)")
         self.cursor = Cursor(self.db)
 
@@ -422,6 +424,155 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
         self.db.execute('RELEASE SAVEPOINT migration_attempt')
         self.assert_target_remains()
+
+    def test_xpath_only_sibling_rolls_back_cleanup_on_both_paths(self):
+        # The removed field occurs only in an XPath expression, not a field node.
+        sibling_arch = arch_json(
+            '<xpath expr="//field[@name=\'livechat_ai_base_url\']" position="attributes">'
+            '<attribute name="string">Old setting</attribute></xpath>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', sibling_arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed):
+                self.db.execute('SAVEPOINT migration_attempt')
+                start = len(self.cursor.queries)
+                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                    run_view_pre_migrations(self.cursor, installed)
+                queries = [query for query, _ in self.cursor.queries[start:]]
+                deleted_xmlid_at = next(index for index, query in enumerate(queries)
+                                        if 'DELETE FROM ir_model_data' in query)
+                residual_scan_at = next(index for index, query in enumerate(queries)
+                                        if 'SELECT v.name, v.arch_db::text' in query)
+                self.assertLess(deleted_xmlid_at, residual_scan_at)
+                self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                self.assert_target_remains()
+                self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_xpath_only_residual_holds_when_target_is_absent_on_both_paths(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        sibling_arch = arch_json(
+            '<xpath expr="//field[@name=\'livechat_ai_api_key\']" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', sibling_arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed), self.assertRaisesRegex(
+                    RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, installed)
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_xpath_similar_literal_and_comment_do_not_hold(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        decoy = arch_json(
+            '<xpath expr="//field[@name=\'livechat_ai_base_url_extra\']" position="attributes"/>'
+            '<!-- //field[@name=\'livechat_ai_base_url\'] -->')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('decoy.settings', 'res.config.settings', decoy))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_structural_references_hold_on_both_upgrade_paths(self):
+        cases = (
+            ('label', '<xpath><label for="livechat_ai_base_url"/></xpath>'),
+            ('modifier', '<xpath><div invisible="not livechat_ai_api_key_set"/></xpath>'),
+            ('attribute_mutation', ('<xpath expr="//form" position="attributes">'
+                                    '<attribute name="invisible">livechat_ai_base_url</attribute></xpath>')),
+            ('attribute_add', ('<xpath expr="//form" position="attributes">'
+                               '<attribute name="invisible" add="not livechat_ai_base_url"/></xpath>')),
+            ('modifiers', ('<xpath><div modifiers="{&quot;invisible&quot;: '
+                           '[[&quot;livechat_ai_base_url&quot;, &quot;=&quot;, true]]}"/></xpath>')),
+            ('xpath_double_quotes',
+             '<xpath expr=\'//field[@name="livechat_ai_base_url"]\' position="attributes"/>'),
+        )
+        for case, xml in cases:
+            with self.subTest(case=case):
+                self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                                ('sibling.settings', 'res.config.settings', arch_json(xml)))
+                try:
+                    for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+                        with self.subTest(installed=installed):
+                            self.db.execute('SAVEPOINT migration_attempt')
+                            try:
+                                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                                    run_view_pre_migrations(self.cursor, installed)
+                            finally:
+                                self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                                self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                            self.assert_target_remains()
+                finally:
+                    self.db.execute('DELETE FROM ir_ui_view WHERE id = 6600')
+
+    def test_nonprimary_translation_structural_reference_holds(self):
+        translated = arch_json('<xpath expr="//form" position="attributes"/>',
+                               '<xpath><label for="livechat_ai_base_url"/></xpath>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', translated))
+        self.db.execute('SAVEPOINT migration_attempt')
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        finally:
+            self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+            self.db.execute('RELEASE SAVEPOINT migration_attempt')
+        self.assert_target_remains()
+
+    def test_unparseable_settings_arch_holds_before_commit(self):
+        malformed = ('not-json', arch_json('<form/>', '<xpath><field name="other"/>'))
+        for arch_text in malformed:
+            with self.subTest(arch_text=arch_text[:12]):
+                self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                                ('sibling.settings', 'res.config.settings', arch_text))
+                self.db.execute('SAVEPOINT migration_attempt')
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+                finally:
+                    self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                    self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                self.assert_target_remains()
+                self.db.execute('DELETE FROM ir_ui_view WHERE id = 6600')
+
+    def test_similar_structural_names_do_not_hold_without_target(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        decoy = arch_json('<xpath><label for="livechat_ai_base_url_extra"/>'
+                          '<div invisible="not livechat_ai_api_key_set_extra"/>'
+                          '<attribute name="help">livechat_ai_base_url</attribute></xpath>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('decoy.settings', 'res.config.settings', decoy))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_xpath_literal_in_other_predicate_conservatively_holds(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        arch = arch_json('<xpath expr="//div[@data-name=\'livechat_ai_base_url\']" '
+                         'position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+
+    def test_unparseable_settings_arch_holds_without_target(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        arch = arch_json('<form/>', 42)
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed), self.assertRaisesRegex(
+                    RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, installed)
+
+    def test_unparseable_unrelated_model_arch_is_outside_scan(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, NULL, ?, 0)',
+                        ('unrelated', 'res.partner', 'not-json'))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
 
     def test_missing_xmlid_renamed_view_and_app_with_removed_field_holds(self):
         self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))

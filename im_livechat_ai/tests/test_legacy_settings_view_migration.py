@@ -462,6 +462,166 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
                 run_view_pre_migrations(self.cursor, installed)
         self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
 
+    def test_xpath_concat_selector_holds_with_or_without_target_on_both_paths(self):
+        sibling_arch = arch_json(
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]" '
+            'position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', sibling_arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            for target_present in (True, False):
+                with self.subTest(installed=installed, target_present=target_present):
+                    self.db.execute('SAVEPOINT migration_attempt')
+                    try:
+                        if not target_present:
+                            self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+                            self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+                        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                            run_view_pre_migrations(self.cursor, installed)
+                    finally:
+                        self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                        self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                    self.assert_target_remains()
+
+    def test_xpath_translated_display_selector_holds_when_archive_is_unknown(self):
+        translated = ARCH.replace('string="LiteLLM Base URL"', 'string="舊網址"')
+        self.assertNotEqual(translated, ARCH)
+        self.db.execute('UPDATE ir_ui_view SET arch_db = ? WHERE id = ?',
+                        (arch_json(ARCH, translated), LEGACY_VIEW))
+        sibling_arch = arch_json(
+            '<xpath expr="//setting[@string=\'舊網址\']" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', sibling_arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            for target_present in (True, False):
+                with self.subTest(installed=installed, target_present=target_present):
+                    self.db.execute('SAVEPOINT migration_attempt')
+                    try:
+                        if not target_present:
+                            self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+                            self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+                        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                            run_view_pre_migrations(self.cursor, installed)
+                    finally:
+                        self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                        self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                    self.assert_target_remains()
+
+    def test_xpath_ancestor_result_changes_when_retired_subtree_disappears(self):
+        arch = arch_json(
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]/ancestor::form" '
+            'position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        self.db.execute('SAVEPOINT migration_attempt')
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        finally:
+            self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+            self.db.execute('RELEASE SAVEPOINT migration_attempt')
+        self.assert_target_remains()
+
+    def test_xpath_archived_app_selector_without_retired_field_literal_holds(self):
+        arch = arch_json('<xpath expr="//app[@name=\'im_livechat_ai\']" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        self.db.execute('SAVEPOINT migration_attempt')
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        finally:
+            self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+            self.db.execute('RELEASE SAVEPOINT migration_attempt')
+        self.assert_target_remains()
+
+    def test_unknown_xpath_function_holds_instead_of_allowing_cleanup(self):
+        arch = arch_json('<xpath expr="//field[unknown_function(@name)]" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        self.db.execute('SAVEPOINT migration_attempt')
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        finally:
+            self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+            self.db.execute('RELEASE SAVEPOINT migration_attempt')
+        self.assert_target_remains()
+
+    def test_xpath_depending_on_unmodelled_base_siblings_holds(self):
+        # The probe has only the retired app. The real base form may have
+        # preceding apps, so an empty synthetic result cannot prove safety.
+        expressions = ('//form/app[3]', "//app[@name='other']/following-sibling::app",
+                       "//app[@name='other']/../app", "//form[app[@name='other']]/app")
+        for expr in expressions:
+            with self.subTest(expr=expr):
+                arch = arch_json(f'<xpath expr="{expr}" position="attributes"/>')
+                self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                                ('sibling.settings', 'res.config.settings', arch))
+                self.db.execute('SAVEPOINT migration_attempt')
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+                finally:
+                    self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                    self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                    self.db.execute('DELETE FROM ir_ui_view WHERE id = 6600')
+                self.assert_target_remains()
+
+    def test_stable_form_selector_is_allowed_without_a_retired_target(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        arch = arch_json('<xpath expr="//form" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_unrelated_direct_form_child_selector_is_allowed(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        arch = arch_json('<xpath expr="//form/app[@name=\'unrelated\']" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
+    def test_generic_locator_for_retired_app_or_setting_holds(self):
+        locators = ('<app name="im_livechat_ai" position="attributes"/>',
+                    '<setting id="livechat_ai_base_url_setting" position="attributes"/>')
+        for locator in locators:
+            with self.subTest(locator=locator):
+                self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                                ('sibling.settings', 'res.config.settings', arch_json(locator)))
+                self.db.execute('SAVEPOINT migration_attempt')
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                        run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+                finally:
+                    self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                    self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                    self.db.execute('DELETE FROM ir_ui_view WHERE id = 6600')
+                self.assert_target_remains()
+
+    def test_generic_root_locator_default_position_holds_without_target(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings',
+                         arch_json('<app name="im_livechat_ai"/>')))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+
+    def test_new_app_inserted_under_xpath_is_not_a_generic_locator(self):
+        self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+        self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+        arch = arch_json('<xpath expr="//form" position="inside">'
+                         '<app name="im_livechat_ai"/></xpath>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        run_view_pre_migrations(self.cursor, '18.0.1.2.1')
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+
     def test_xpath_similar_literal_and_comment_do_not_hold(self):
         self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
         self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))

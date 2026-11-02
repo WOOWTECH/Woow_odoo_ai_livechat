@@ -9,7 +9,10 @@ import hashlib
 import json
 import logging
 import re
+from pathlib import Path
 from xml.etree import ElementTree
+
+from lxml import etree
 
 _logger = logging.getLogger(__name__)
 
@@ -32,6 +35,18 @@ EXPRESSION_ATTRIBUTES = frozenset({
     'invisible', 'readonly', 'required', 'column_invisible', 'attrs', 'modifiers',
     'domain', 'context', 'options', 'filter_domain', 't-if', 't-elif', 't-esc', 't-out',
 })
+ARCHIVED_VIEW_PATH = Path(__file__).with_name('legacy-settings-arch-18.0.1.1.0.xml')
+ARCHIVED_VIEW_SHA256 = '40c6b62747f5a1893c224881206b77bb106233faba552c252e479d170f6c2c11'
+MAX_XPATH_LENGTH = 4096
+TRANSLATED_XPATH_ATTRIBUTE = re.compile(
+    r'(?:@|attribute::)\s*(?:string|help|title|placeholder|data-string)\b')
+# Only a direct node selector or a plain form-rooted path can be proven
+# independent when the archived-only probe returns the same elements. Complex
+# predicates could depend on siblings absent from the probe.
+XPATH_TAG = r'(?:[A-Za-z_][\w.:-]*|\*)'
+SAFE_INDEPENDENT_XPATH = re.compile(
+    rf'^//(?:{XPATH_TAG}|form(?:(?:/|//){XPATH_TAG})+)'
+    r'''(?:\[@[A-Za-z_][\w.:-]*\s*=\s*(?:'[^']*'|"[^"]*")\])?$''')
 # SHA-256 of the element/attribute tree in v18.0.1.1.0's
 # views/res_config_settings_views.xml, record XMLID above. Human-facing text
 # and Odoo-translated attributes are excluded; executable attributes, element
@@ -79,11 +94,74 @@ def _is_expression_attribute(name):
         ('decoration-', 't-att-', 't-attf-'))
 
 
-def _node_references_removed_field(node):
+def _archived_settings_form():
+    """Build the old extension inside a stable form for XPath comparison."""
+    try:
+        payload = ARCHIVED_VIEW_PATH.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != ARCHIVED_VIEW_SHA256:
+            raise ValueError('archived Settings view checksum changed')
+        archived = etree.fromstring(
+            payload, parser=etree.XMLParser(resolve_entities=False, no_network=True))
+        if archived.tag != 'xpath' or archived.get('expr') != '//form' \
+                or archived.get('position') != 'inside':
+            raise ValueError('archived Settings view is not the frozen extension')
+    except (OSError, ValueError, etree.XMLSyntaxError) as exc:
+        raise RuntimeError('im_livechat_ai: archived Settings view unavailable; '
+                           'manual review required') from exc
+    form = etree.Element('form')
+    for child in list(archived):
+        form.append(child)
+    return form
+
+
+def _xpath_depends_on_retired_subtree(expr):
+    """Hold selectors whose result changes when the frozen old app is removed.
+
+    The probe deliberately contains only the archived extension, so a dynamic
+    selector that returns the same result in both probes is still uncertain.
+    """
+    if len(expr) > MAX_XPATH_LENGTH:
+        raise RuntimeError('im_livechat_ai: oversized Settings XPath; manual review required')
+    try:
+        selector = etree.XPath(expr, smart_strings=False)
+        form = _archived_settings_form()
+        before = selector(form)
+        if not isinstance(before, list) or any(not isinstance(node, etree._Element) for node in before):
+            raise ValueError('Settings XPath did not select XML elements')
+        for child in list(form):
+            form.remove(child)
+        after = selector(form)
+        if not isinstance(after, list) or any(not isinstance(node, etree._Element) for node in after):
+            raise ValueError('Settings XPath did not select XML elements')
+        if before != after:
+            return True
+        if not SAFE_INDEPENDENT_XPATH.fullmatch(expr) or TRANSLATED_XPATH_ATTRIBUTE.search(expr):
+            raise ValueError('Settings XPath cannot be proven independent of archived nodes')
+    except (etree.XPathError, TypeError, ValueError) as exc:
+        raise RuntimeError('im_livechat_ai: uncertain Settings XPath; '
+                           'manual review required') from exc
+    return False
+
+
+def _generic_locator_targets_retired_subtree(node):
+    """Conservatively check Odoo's non-XPath element locator against the archive."""
+    attributes = {key: value for key, value in node.attrib.items()
+                  if key not in {'position', 'version'} | DISPLAY_ATTRIBUTES}
+    return any(
+        archived.tag == node.tag
+        and all(archived.get(key) == value for key, value in attributes.items())
+        for archived in _archived_settings_form().iter())
+
+
+def _node_references_removed_field(node, *, generic_locator=False):
     """Inspect parsed XML locators, labels, modifiers and attribute changes."""
     for name, value in node.attrib.items():
         if name in REFERENCE_ATTRIBUTES and value in REMOVED_SETTINGS_FIELDS:
             return True
+        if node.tag == 'xpath' and name == 'expr':
+            if REMOVED_FIELD_TOKEN.search(value) or _xpath_depends_on_retired_subtree(value):
+                return True
+            continue
         is_expression = (node.tag == 'xpath' and name == 'expr') or _is_expression_attribute(name)
         if is_expression and REMOVED_FIELD_TOKEN.search(value):
             return True
@@ -94,10 +172,11 @@ def _node_references_removed_field(node):
                 REMOVED_FIELD_TOKEN.search(value or '') for value in (
                     node.text, node.get('add'), node.get('remove'))):
             return True
-    return False
+    return (generic_locator and node.tag not in {'xpath', 'field', 'attribute'}
+            and _generic_locator_targets_retired_subtree(node))
 
 
-def _contains_removed_settings_field(arch_text):
+def _contains_removed_settings_field(arch_text, inherited):
     """Find structural references in every stored Settings view language.
 
     An exact retired-field token in an XPath or expression may be a quoted
@@ -112,8 +191,13 @@ def _contains_removed_settings_field(arch_text):
             if not isinstance(xml, str):
                 raise TypeError('Settings view language architecture is not XML text')
             root = ElementTree.fromstring(xml)
-            if any(_node_references_removed_field(node) for node in root.iter()):
-                return True
+            for node in root.iter():
+                generic_locator = inherited and (
+                    'position' in node.attrib
+                    or node is root and root.tag not in {'form', 'data', 'odoo'}
+                    or root.tag in {'form', 'data', 'odoo'} and node in root)
+                if _node_references_removed_field(node, generic_locator=generic_locator):
+                    return True
     except (TypeError, ValueError, ElementTree.ParseError) as exc:
         raise RuntimeError('im_livechat_ai: unparseable Settings view architecture; '
                            'manual review required') from exc
@@ -127,12 +211,12 @@ def _assert_no_residual_legacy_view(cr):
     and again after deleting the exact target in the same transaction.
     """
     cr.execute('''
-        SELECT v.name, v.arch_db::text
+        SELECT v.name, v.arch_db::text, v.inherit_id IS NOT NULL
           FROM ir_ui_view AS v
          WHERE v.model = %s
     ''', (VIEW_MODEL,))
-    for name, arch_text in cr.fetchall():
-        if name == VIEW_NAME or _contains_removed_settings_field(arch_text):
+    for name, arch_text, inherited in cr.fetchall():
+        if name == VIEW_NAME or _contains_removed_settings_field(arch_text, inherited):
             raise RuntimeError('im_livechat_ai: retired Settings view remains after cleanup; '
                                'manual review required')
 

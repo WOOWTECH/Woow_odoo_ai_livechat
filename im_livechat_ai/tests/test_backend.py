@@ -1264,6 +1264,43 @@ class TestMigration18121(TransactionCase):
     def test_xpath_only_residual_holds_without_target_from_1_2_1(self):
         self._assert_xpath_only_sibling_holds('18.0.1.2.1', target_present=False)
 
+    def _assert_concat_xpath_holds(self, installed_version, target_present):
+        self._assert_structural_sibling_holds(
+            installed_version,
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]" '
+            'position="attributes"/>', target_present=target_present)
+
+    def test_concat_xpath_holds_with_target_from_1_2_0(self):
+        self._assert_concat_xpath_holds('18.0.1.2.0', True)
+
+    def test_concat_xpath_holds_with_target_from_1_2_1(self):
+        self._assert_concat_xpath_holds('18.0.1.2.1', True)
+
+    def test_concat_xpath_holds_without_target_from_1_2_0(self):
+        self._assert_concat_xpath_holds('18.0.1.2.0', False)
+
+    def test_concat_xpath_holds_without_target_from_1_2_1(self):
+        self._assert_concat_xpath_holds('18.0.1.2.1', False)
+
+    def test_xpath_ancestor_result_holds_after_retired_subtree_removal(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1',
+            '<xpath expr="//field[@name=concat(\'livechat_ai_base_\',\'url\')]/ancestor::form" '
+            'position="attributes"/>')
+
+    def test_translated_display_xpath_holds_without_target(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<xpath expr="//setting[@string=\'舊網址\']" position="attributes"/>',
+            target_present=False)
+
+    def test_generic_app_locator_holds_from_1_2_0(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.0', '<app name="im_livechat_ai" position="attributes"/>')
+
+    def test_generic_app_locator_holds_from_1_2_1(self):
+        self._assert_structural_sibling_holds(
+            '18.0.1.2.1', '<app name="im_livechat_ai" position="attributes"/>')
+
     def _assert_structural_sibling_holds(self, installed_version, arch, *,
                                          target_present=True, translated_arch=None):
         target_id = self._legacy_view()

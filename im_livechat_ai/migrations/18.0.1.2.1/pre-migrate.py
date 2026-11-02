@@ -99,8 +99,8 @@ def migrate(cr, version):
     (xmlid_id, view_id, arch_text, is_legacy_view, arch_updated,
      has_children, has_other_xmlids, has_custom_views) = target
     if not is_legacy_view or not _has_owned_legacy_field(arch_text):
-        _logger.warning('im_livechat_ai: retired Settings XMLID has a different view shape; leaving it intact')
-        return
+        raise RuntimeError('im_livechat_ai: retired Settings XMLID has an unfamiliar view shape; '
+                           'manual review required')
     if arch_updated or has_children or has_other_xmlids or has_custom_views:
         raise RuntimeError('im_livechat_ai: retired Settings view was edited or has dependants; manual review required')
 

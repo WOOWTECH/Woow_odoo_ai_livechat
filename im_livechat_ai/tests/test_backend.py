@@ -1084,6 +1084,7 @@ class TestMigration18121(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.pre = _load_migration('18.0.1.2.1', 'pre-migrate')
+        cls.pre122 = _load_migration('18.0.1.2.2', 'pre-migrate')
 
     def _legacy_view(self):
         base = self.env.ref('base.res_config_settings_view_form')
@@ -1124,6 +1125,13 @@ class TestMigration18121(TransactionCase):
     def test_removes_the_view_and_its_xmlid(self):
         view_id = self._legacy_view()
         self.pre.migrate(self.env.cr, '18.0.1.2.0')
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(view_id), (0, 0))
+        self.env.ref('base.res_config_settings_view_form')._check_xml()
+
+    def test_1_2_1_residual_view_uses_1_2_2_guard(self):
+        view_id = self._legacy_view()
+        self.pre122.migrate(self.env.cr, '18.0.1.2.1')
         self.env.invalidate_all()
         self.assertEqual(self._exists(view_id), (0, 0))
         self.env.ref('base.res_config_settings_view_form')._check_xml()

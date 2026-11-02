@@ -182,11 +182,12 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         self.assertIsNotNone(self.db.execute('SELECT id FROM ir_ui_view WHERE id = 6520').fetchone())
 
     def test_new_install_does_not_query_or_delete(self):
-        path = MODULE / 'migrations/18.0.1.2.1/pre-migrate.py'
-        spec = importlib.util.spec_from_file_location('legacy_view_new_install', path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.migrate(self.cursor, None)
+        for version in ('18.0.1.2.1', '18.0.1.2.2'):
+            path = MODULE / 'migrations' / version / 'pre-migrate.py'
+            spec = importlib.util.spec_from_file_location('legacy_view_new_install', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.migrate(self.cursor, None)
         self.assertEqual(self.cursor.queries, [])
         self.assert_target_remains()
 
@@ -217,7 +218,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             with self.subTest(column=column):
                 self.db.execute(f'UPDATE ir_ui_view SET {column} = ? WHERE id = ?',
                                 (value, LEGACY_VIEW))
-                run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                    run_view_pre_migrations(self.cursor, '18.0.1.2.0')
                 self.assert_target_remains()
                 self.db.execute(f'UPDATE ir_ui_view SET {column} = ? WHERE id = ?',
                                 (originals[column], LEGACY_VIEW))
@@ -233,16 +235,17 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             run_view_pre_migrations(self.cursor, '18.0.1.2.0')
         self.assert_target_remains()
 
-    def test_installed_1_2_1_does_not_replay_the_1_2_1_migration(self):
+    def test_installed_1_2_1_residual_view_runs_guarded_1_2_2_migration(self):
         run_view_pre_migrations(self.cursor, '18.0.1.2.1')
-        self.assertEqual(self.cursor.queries, [])
-        self.assert_target_remains()
+        self.assertIsNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
+        self.assertIsNone(self.db.execute('SELECT 1 FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,)).fetchone())
+        self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6520').fetchone())
 
     def test_installed_1_2_1_without_legacy_view_upgrades_to_1_2_2_without_cleanup(self):
         self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
         self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
         run_view_pre_migrations(self.cursor, '18.0.1.2.1')
-        self.assertEqual(self.cursor.queries, [])
+        self.assertFalse(any('DELETE' in query.upper() for query, _ in self.cursor.queries))
         self.assertIsNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,)).fetchone())
         self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6520').fetchone())
 
@@ -258,7 +261,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             with self.subTest(xml=xml):
                 self.db.execute('UPDATE ir_ui_view SET arch_db = ? WHERE id = ?',
                                 (arch_json(xml), LEGACY_VIEW))
-                run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+                with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                    run_view_pre_migrations(self.cursor, '18.0.1.2.0')
                 self.assert_target_remains()
 
     def test_every_language_arch_must_have_real_field_in_owned_app(self):
@@ -266,7 +270,8 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
             arch_json(ARCH, '<xpath><app name="im_livechat_ai"><!-- livechat_ai_base_url --></app></xpath>'),
             LEGACY_VIEW,
         ))
-        run_view_pre_migrations(self.cursor, '18.0.1.2.0')
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            run_view_pre_migrations(self.cursor, '18.0.1.2.0')
         self.assert_target_remains()
 
     def test_arch_updated_requires_manual_review(self):

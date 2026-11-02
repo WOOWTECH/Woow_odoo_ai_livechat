@@ -72,10 +72,10 @@ the script does not delete dependants or alter their references. Rehearse the up
 on a database copy before production.
 
 A database **already recorded as 18.0.1.2.1** does not rerun the 18.0.1.2.1 script.
-It can upgrade to 18.0.1.2.2 normally if the old view is gone. If the old view remains,
-this release will not remove it automatically; inspect it and plan a separate controlled
-repair. Views or XMLIDs deleted by the original 18.0.1.2.1 script cannot be restored by
-this release; recovery requires a suitable backup.
+The 18.0.1.2.2 pre-migration invokes the same guarded cleanup for a residual old view.
+An exact unmodified owned view is removed; a changed or referenced view stops the upgrade
+for manual review. Views or XMLIDs deleted by the original 18.0.1.2.1 script cannot be
+restored by this release; recovery requires a suitable backup.
 
 ## Upgrading to 18.0.1.2.0
 

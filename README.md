@@ -56,6 +56,15 @@ The request formats are compatible with the n8n section of `woow_ai_contact` (do
 
 ---
 
+## Messages answered by another automation (18.0.1.3.0)
+
+A message posted with the context key `im_livechat_ai_skip` is recorded in the
+session but never answered, paused or handed off by the AI. The LINE bridge
+(`woow_odoo_line_liff` 18.0.3.4.0, and the BNI keyword menu) posts a visitor's
+message this way when its keyword auto-reply has already answered it, so the
+visitor does not get two answers. Messages written as a company's own partner
+(automations posting as the company) count as the bot, never as a visitor.
+
 ## Upgrading to 18.0.1.2.1
 
 Upgrade straight to 18.0.1.2.1; do not stop at 18.0.1.2.0 when coming from 18.0.1.1.0.

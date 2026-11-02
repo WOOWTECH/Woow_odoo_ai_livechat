@@ -1150,6 +1150,25 @@ class TestMigration18121(TransactionCase):
         self.assertEqual(self._exists(view_id), (0, 0))
         self.env.ref('base.res_config_settings_view_form')._check_xml()
 
+    def _assert_portal_style_ancestor_selector_is_independent(self, installed_version):
+        target_id = self._legacy_view()
+        action_id = self.env.ref('base.action_apikeys_admin').id
+        sibling_id = self._raw_view(
+            'portal.style.settings', 'res.config.settings',
+            f'<xpath expr="//button[@name={action_id}]//ancestor::setting" '
+            'position="inside"/>',
+            self.env.ref('base.res_config_settings_view_form').id)
+        self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(target_id), (0, 0))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_portal_style_ancestor_selector_from_1_2_0(self):
+        self._assert_portal_style_ancestor_selector_is_independent('18.0.1.2.0')
+
+    def test_portal_style_ancestor_selector_from_1_2_1(self):
+        self._assert_portal_style_ancestor_selector_is_independent('18.0.1.2.1')
+
     def test_translated_legacy_arches_are_cleaned(self):
         old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
                     / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()

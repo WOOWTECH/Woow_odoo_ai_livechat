@@ -586,6 +586,48 @@ class TestLegacySettingsViewMigration(unittest.TestCase):
         run_view_pre_migrations(self.cursor, '18.0.1.2.1')
         self.assertIsNotNone(self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
 
+    def test_independent_numeric_anchor_with_ancestor_axis_is_allowed(self):
+        # Odoo 18 portal's Settings extension locates the API-key button by
+        # numeric action ID, then walks up to its setting. Neither the button
+        # nor its name can be supplied by the frozen retired Live Chat view.
+        arch = arch_json(
+            '<xpath expr="//button[@name=123]//ancestor::setting" position="inside"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('portal.settings', 'res.config.settings', arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            for target_present in (True, False):
+                with self.subTest(installed=installed, target_present=target_present):
+                    self.db.execute('SAVEPOINT migration_attempt')
+                    try:
+                        if not target_present:
+                            self.db.execute('DELETE FROM ir_model_data WHERE id = ?', (LEGACY_XMLID,))
+                            self.db.execute('DELETE FROM ir_ui_view WHERE id = ?', (LEGACY_VIEW,))
+                        run_view_pre_migrations(self.cursor, installed)
+                        self.assertIsNotNone(
+                            self.db.execute('SELECT 1 FROM ir_ui_view WHERE id = 6600').fetchone())
+                    finally:
+                        self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                        self.db.execute('RELEASE SAVEPOINT migration_attempt')
+
+    def test_upward_xpath_from_archived_button_still_holds_when_result_is_empty(self):
+        # An upward selector may return nothing in the synthetic form while
+        # still depending on a node removed with the old Live Chat app.
+        arch = arch_json(
+            '<xpath expr="//button[@name=\'action_livechat_ai_fetch_models\']'
+            '/ancestor::body" position="attributes"/>')
+        self.db.execute('INSERT INTO ir_ui_view VALUES (6600, ?, ?, 1, ?, 0)',
+                        ('sibling.settings', 'res.config.settings', arch))
+        for installed in ('18.0.1.2.0', '18.0.1.2.1'):
+            with self.subTest(installed=installed):
+                self.db.execute('SAVEPOINT migration_attempt')
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+                        run_view_pre_migrations(self.cursor, installed)
+                finally:
+                    self.db.execute('ROLLBACK TO SAVEPOINT migration_attempt')
+                    self.db.execute('RELEASE SAVEPOINT migration_attempt')
+                self.assert_target_remains()
+
     def test_generic_locator_for_retired_app_or_setting_holds(self):
         locators = ('<app name="im_livechat_ai" position="attributes"/>',
                     '<setting id="livechat_ai_base_url_setting" position="attributes"/>')

@@ -739,7 +739,7 @@ AI replies are rendered by `tools/markdown.py` (the dependency-free renderer of 
 
 ### Test Suite Overview
 
-The module has **434 Odoo tests** plus **49 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
+The module has **436 Odoo tests** plus **51 isolated SQL migration tests**. All HTTP calls are mocked: no key or network access is needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
@@ -756,7 +756,7 @@ The module has **434 Odoo tests** plus **49 isolated SQL migration tests**. All 
 | `test_attachments.py` | 23 | Visitor files: images as `image_url` data URIs (type from the content), documents as `file` parts with the original bytes and type, link mode, dangerous types link-only, size / count / age limits and the 7 MB budget with `[附件說明]`, visitor messages only, n8n attachments with signed URLs, the signed download route (200 with security headers; expired, wrong signature, non-live-chat attachment -> 404), base64 removed from the log payload, Visitor Files upgrade rule |
 | `test_pause_disclosure.py` | 42 | Explicit handoff keywords, operator pause vs handoff wait, waiting notice, auto-resume, range validation, free-text model, no Settings page, job monitoring on the AI tab, AI disclosure, idempotent 18.0.1.1.0 migration |
 
-The 49 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
+The 51 tests in `test_legacy_settings_view_migration.py` run separately with SQLite; the Odoo `TransactionCase` migration tests in `test_backend.py` use PostgreSQL when the Odoo CI job runs.
 
 ### Running the Tests
 

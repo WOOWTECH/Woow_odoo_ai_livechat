@@ -47,6 +47,14 @@ XPATH_TAG = r'(?:[A-Za-z_][\w.:-]*|\*)'
 SAFE_INDEPENDENT_XPATH = re.compile(
     rf'^//(?:{XPATH_TAG}|form(?:(?:/|//){XPATH_TAG})+)'
     r'''(?:\[@[A-Za-z_][\w.:-]*\s*=\s*(?:'[^']*'|"[^"]*")\])?$''')
+# An upward path is independent if its first, static attribute selector cannot
+# match any node in the archived extension. Walking only to parents/ancestors
+# from surviving nodes cannot enter a deleted descendant. Odoo 18's portal
+# Settings view uses a numeric button action ID followed by ancestor::setting.
+INDEPENDENT_UPWARD_XPATH = re.compile(
+    rf'^(?P<anchor>//{XPATH_TAG}\[@[A-Za-z_][\w.:-]*\s*=\s*'
+    rf'''(?:[0-9]+|'[^']*'|"[^"]*")\])'''
+    rf'(?:(?://|/)(?:parent|ancestor)::{XPATH_TAG})+$')
 # SHA-256 of the element/attribute tree in v18.0.1.1.0's
 # views/res_config_settings_views.xml, record XMLID above. Human-facing text
 # and Odoo-translated attributes are excluded; executable attributes, element
@@ -114,6 +122,14 @@ def _archived_settings_form():
     return form
 
 
+def _upward_xpath_anchor_is_independent(expr, archived_form):
+    """Prove an upward path cannot originate inside the retired extension."""
+    match = INDEPENDENT_UPWARD_XPATH.fullmatch(expr)
+    if not match or TRANSLATED_XPATH_ATTRIBUTE.search(expr):
+        return False
+    return not etree.XPath(match.group('anchor'), smart_strings=False)(archived_form)
+
+
 def _xpath_depends_on_retired_subtree(expr):
     """Hold selectors whose result changes when the frozen old app is removed.
 
@@ -128,6 +144,7 @@ def _xpath_depends_on_retired_subtree(expr):
         before = selector(form)
         if not isinstance(before, list) or any(not isinstance(node, etree._Element) for node in before):
             raise ValueError('Settings XPath did not select XML elements')
+        independent_upward_path = _upward_xpath_anchor_is_independent(expr, form)
         for child in list(form):
             form.remove(child)
         after = selector(form)
@@ -135,7 +152,9 @@ def _xpath_depends_on_retired_subtree(expr):
             raise ValueError('Settings XPath did not select XML elements')
         if before != after:
             return True
-        if not SAFE_INDEPENDENT_XPATH.fullmatch(expr) or TRANSLATED_XPATH_ATTRIBUTE.search(expr):
+        if not independent_upward_path and (
+                not SAFE_INDEPENDENT_XPATH.fullmatch(expr)
+                or TRANSLATED_XPATH_ATTRIBUTE.search(expr)):
             raise ValueError('Settings XPath cannot be proven independent of archived nodes')
     except (etree.XPathError, TypeError, ValueError) as exc:
         raise RuntimeError('im_livechat_ai: uncertain Settings XPath; '

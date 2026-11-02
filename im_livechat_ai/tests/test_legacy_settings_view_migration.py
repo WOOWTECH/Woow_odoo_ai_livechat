@@ -13,15 +13,6 @@ import sqlite3
 import unittest
 from pathlib import Path
 
-try:
-    from odoo.tests import tagged
-except ModuleNotFoundError as exc:
-    if exc.name != 'odoo':
-        raise
-
-    def tagged(*_tags):
-        return lambda case: case
-
 MODULE = Path(__file__).resolve().parents[1]
 LEGACY_VIEW = 6510
 LEGACY_XMLID = 510
@@ -120,7 +111,6 @@ def run_view_pre_migrations(cursor, installed_version):
             module.migrate(cursor, installed_version)
 
 
-@tagged('standard', 'at_install')
 class TestLegacySettingsViewMigration(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(':memory:')

@@ -12,4 +12,3 @@ from . import test_backend
 from . import test_attachments
 from . import test_reply_markdown
 from . import test_backend_handoff
-from . import test_legacy_settings_view_migration

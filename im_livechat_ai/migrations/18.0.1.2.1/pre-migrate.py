@@ -16,7 +16,13 @@ MODULE = 'im_livechat_ai'
 XMLID = 'res_config_settings_view_form_livechat_ai'
 VIEW_NAME = 'res.config.settings.view.form.inherit.im_livechat_ai'
 VIEW_MODEL = 'res.config.settings'
-LEGACY_FIELD = 'livechat_ai_base_url'
+# The nine res.config.settings fields in the retired 1.1.0 view were all
+# removed in 1.2.0. A sibling referencing any one can break later validation.
+REMOVED_SETTINGS_FIELDS = frozenset({
+    'livechat_ai_api_key', 'livechat_ai_api_key_set', 'livechat_ai_base_url',
+    'livechat_ai_cron_lastcall', 'livechat_ai_job_warning', 'livechat_ai_log_payload',
+    'livechat_ai_log_retention_days', 'livechat_ai_model_list', 'livechat_ai_stale_job_count',
+})
 # SHA-256 of the element/attribute tree in v18.0.1.1.0's
 # views/res_config_settings_views.xml, record XMLID above. Human-facing text
 # and Odoo-translated attributes are excluded; executable attributes, element
@@ -59,8 +65,8 @@ def _has_expected_legacy_structure(arch_text):
     return True
 
 
-def _contains_owned_legacy_field(arch_text):
-    """Recognize a residual view without authorizing its deletion."""
+def _contains_removed_settings_field(arch_text):
+    """Find an actual removed field node, regardless of view or app name."""
     try:
         arches = json.loads(arch_text)
     except (TypeError, ValueError):
@@ -74,25 +80,25 @@ def _contains_owned_legacy_field(arch_text):
             root = ElementTree.fromstring(xml)
         except ElementTree.ParseError:
             continue
-        if any(
-            field.get('name') == LEGACY_FIELD
-            for app in root.iter('app') if app.get('name') == MODULE
-            for field in app.iter('field')
-        ):
+        if any(field.get('name') in REMOVED_SETTINGS_FIELDS for field in root.iter('field')):
             return True
     return False
 
 
 def _assert_no_residual_legacy_view(cr):
-    """Missing/mis-modelled XMLIDs must not hide a still-invalid old view."""
+    """Hold any remaining Settings view using the removed field.
+
+    Scan only the Settings model. This runs when the target XMLID is absent
+    and again after deleting the exact target in the same transaction.
+    """
     cr.execute('''
         SELECT v.name, v.arch_db::text
           FROM ir_ui_view AS v
-         WHERE v.model = %s OR v.name = %s
-    ''', (VIEW_MODEL, VIEW_NAME))
+         WHERE v.model = %s
+    ''', (VIEW_MODEL,))
     for name, arch_text in cr.fetchall():
-        if name == VIEW_NAME or _contains_owned_legacy_field(arch_text):
-            raise RuntimeError('im_livechat_ai: retired Settings view has no valid XMLID; '
+        if name == VIEW_NAME or _contains_removed_settings_field(arch_text):
+            raise RuntimeError('im_livechat_ai: retired Settings view remains after cleanup; '
                                'manual review required')
 
 
@@ -195,4 +201,5 @@ def migrate(cr, version):
     ''', (xmlid_id, MODULE, XMLID, view_id))
     if cr.rowcount != 1:
         raise RuntimeError('im_livechat_ai: retired Settings XMLID changed during pre-migration')
+    _assert_no_residual_legacy_view(cr)
     _logger.info('im_livechat_ai: removed one retired Settings view before view validation')

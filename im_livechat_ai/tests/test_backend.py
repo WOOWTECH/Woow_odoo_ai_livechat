@@ -1107,6 +1107,15 @@ class TestMigration18121(TransactionCase):
             'res_id': view_id, 'noupdate': False})
         return view_id
 
+    def _raw_view(self, name, model, arch, inherit_id=None):
+        self.env.cr.execute(
+            "INSERT INTO ir_ui_view (name, model, type, mode, priority, active, inherit_id, "
+            "arch_db, arch_updated) VALUES (%s, %s, 'form', %s, 16, true, %s, %s, false) "
+            "RETURNING id",
+            (name, model, 'extension' if inherit_id else 'primary', inherit_id,
+             json.dumps({'en_US': arch})))
+        return self.env.cr.fetchone()[0]
+
     def _upgrade_from(self, installed_version):
         if installed_version == '18.0.1.2.0':
             self.pre.migrate(self.env.cr, installed_version)
@@ -1199,6 +1208,65 @@ class TestMigration18121(TransactionCase):
 
     def test_wrong_model_xmlid_holds_from_1_2_1(self):
         self._assert_wrong_model_xmlid_holds('18.0.1.2.1')
+
+    def _assert_sibling_field_rolls_back(self, installed_version, field_name='livechat_ai_base_url'):
+        target_id = self._legacy_view()
+        sibling_arch = ('<xpath expr="//form" position="inside">'
+                        f'<app name="another_app"><field name="{field_name}"/>'
+                        '</app></xpath>')
+        sibling_id = self._raw_view(
+            'sibling.settings', 'res.config.settings', sibling_arch,
+            self.env.ref('base.res_config_settings_view_form').id)
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'), self.env.cr.savepoint():
+            self._upgrade_from(installed_version)
+        self.env.invalidate_all()
+        self.assertEqual(self._exists(target_id), (1, 1))
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (sibling_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_sibling_field_rolls_back_from_1_2_0(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.0')
+
+    def test_sibling_field_rolls_back_from_1_2_1(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.1')
+
+    def test_other_retired_settings_field_rolls_back_from_1_2_1(self):
+        self._assert_sibling_field_rolls_back('18.0.1.2.1', 'livechat_ai_api_key')
+
+    def _assert_renamed_view_and_app_holds(self, installed_version):
+        view_id = self._legacy_view()
+        old_arch = (Path(get_module_path('im_livechat_ai')) / 'tests/fixtures'
+                    / 'legacy-settings-arch-18.0.1.1.0.xml').read_text().strip()
+        renamed_arch = old_arch.replace('name="im_livechat_ai"', 'name="another_app"')
+        self.assertNotEqual(renamed_arch, old_arch)
+        self.env.cr.execute(
+            "DELETE FROM ir_model_data WHERE module = 'im_livechat_ai' AND name = %s",
+            (self.XMLID,))
+        self.env.cr.execute('UPDATE ir_ui_view SET name = %s, arch_db = %s WHERE id = %s',
+                            ('renamed.settings', json.dumps({'en_US': renamed_arch}), view_id))
+        with self.assertRaisesRegex(RuntimeError, 'manual review required'):
+            self._upgrade_from(installed_version)
+        self.assertEqual(self._exists(view_id), (1, 0))
+
+    def test_renamed_view_and_app_holds_from_1_2_0(self):
+        self._assert_renamed_view_and_app_holds('18.0.1.2.0')
+
+    def test_renamed_view_and_app_holds_from_1_2_1(self):
+        self._assert_renamed_view_and_app_holds('18.0.1.2.1')
+
+    def _assert_unrelated_model_view_is_ignored(self, installed_version):
+        unrelated_id = self._raw_view(
+            'res.config.settings.view.form.inherit.im_livechat_ai', 'res.partner',
+            '<form><field name="livechat_ai_base_url"/></form>')
+        self._upgrade_from(installed_version)
+        self.env.cr.execute('SELECT 1 FROM ir_ui_view WHERE id = %s', (unrelated_id,))
+        self.assertIsNotNone(self.env.cr.fetchone())
+
+    def test_unrelated_model_view_ignored_from_1_2_0(self):
+        self._assert_unrelated_model_view_is_ignored('18.0.1.2.0')
+
+    def test_unrelated_model_view_ignored_from_1_2_1(self):
+        self._assert_unrelated_model_view_is_ignored('18.0.1.2.1')
 
     def test_child_view_requires_manual_review(self):
         view_id = self._legacy_view()

@@ -312,25 +312,38 @@ class LivechatAiJob(models.Model):
         return job
 
     @api.model
-    def _active_jobs_over_limit(self, livechat_channel):
+    def _active_job_slots(self, livechat_channel):
+        """Reply jobs the channel can still take before the cap.
+
+        Returns:
+            int|None: remaining slots (never below 0); None when the limit
+                is disabled
+        """
         raw = self.env['ir.config_parameter'].sudo().get_param('im_livechat_ai.max_active_jobs')
         try:
             limit = int(raw) if raw not in (None, False, '') else MAX_ACTIVE_JOBS_PER_CHANNEL
         except ValueError:
             limit = MAX_ACTIVE_JOBS_PER_CHANNEL
         if limit <= 0:
-            return False
+            return None
         oldest = fields.Datetime.now() - timedelta(minutes=JOB_MAX_AGE_MINUTES)
         active = self.sudo().search_count([
             ('livechat_channel_id', '=', livechat_channel.id),
             ('state', 'in', ('pending', 'running')),
-            # Only live reply work counts: notice/handoff jobs make no backend
-            # call and deferred jobs wait for the end of a handoff.
+            # Only work that makes (or is about to make) a backend call
+            # counts: notice/handoff jobs make none, and a deferred job waits
+            # for the end of a handoff while it is pending (it is held back
+            # by the same limit when it is due, see _process_locked).
             ('kind', '=', 'reply'),
-            ('deferred', '=', False),
+            '|', ('deferred', '=', False), ('state', '=', 'running'),
             ('create_date', '>=', oldest),
         ])
-        return active >= limit
+        return max(limit - active, 0)
+
+    @api.model
+    def _active_jobs_over_limit(self, livechat_channel):
+        slots = self._active_job_slots(livechat_channel)
+        return slots is not None and slots <= 0
 
     @api.model
     def _trigger_recovery_cron(self, at):
@@ -501,6 +514,9 @@ class LivechatAiJob(models.Model):
             self._finish_exhausted(commit_step)
             return
 
+        if self.deferred and self._hold_deferred_when_channel_full(commit_step):
+            return
+
         # Claim: the run counter is durable before any LLM call.
         self.write({
             'state': 'running',
@@ -618,6 +634,28 @@ class LivechatAiJob(models.Model):
             self.write({'run_after': due})
             self._trigger_recovery_cron(due + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
             commit_step()
+        return True
+
+    def _hold_deferred_when_channel_full(self, commit_step):
+        """A due deferred reply makes a backend call like a live one: while
+        the channel already has the maximum of unfinished reply jobs, leave it
+        pending and let the recovery cron try again shortly (it is not
+        dropped; the usual age limit still applies).
+
+        The channel lock is held until the claim is committed, so jobs of
+        different sessions started together cannot all pass the check.
+
+        Returns:
+            bool: True when the job was left pending
+        """
+        channel = self.livechat_channel_id
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(%s, %s)", (LOCK_NAMESPACE, -channel.id))
+        if not self._active_jobs_over_limit(channel):
+            return False
+        _logger.info("AI job %s waits: live chat channel %s already has too many unfinished jobs",
+                     self.id, channel.id)
+        self._trigger_recovery_cron(fields.Datetime.now() + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
+        commit_step()
         return True
 
     def _operator_replied_since_trigger(self):
@@ -917,9 +955,20 @@ class LivechatAiJob(models.Model):
         for job in jobs:
             by_session.setdefault(job.discuss_channel_id.id, []).append(job)
         batch = []
+        slots = {}
         for session_id, session_jobs in by_session.items():
             if self._session_lock_held(session_id):
                 continue
+            if all(job.deferred and job.state == 'pending' for job in session_jobs):
+                # Due deferred replies start only while the channel has room,
+                # so they do not take the batch from other sessions' jobs.
+                channel = session_jobs[0].livechat_channel_id
+                if channel.id not in slots:
+                    slots[channel.id] = self._active_job_slots(channel)
+                if slots[channel.id] is not None:
+                    if slots[channel.id] <= 0:
+                        continue
+                    slots[channel.id] -= 1
             batch.append(session_jobs)
             if len(batch) >= CRON_BATCH_LIMIT:
                 break

@@ -314,6 +314,17 @@ def _clean_text(body):
     return html_lib.unescape(_HTML_TAG_RE.sub('', body or '')).strip()
 
 
+# A visitor message longer than this is cut before it goes to the backend
+# (bounds the size of one request; no normal chat message gets near it).
+MAX_MESSAGE_CHARS = 4000
+
+
+def _truncate_text(text):
+    if len(text) <= MAX_MESSAGE_CHARS:
+        return text
+    return text[:MAX_MESSAGE_CHARS] + '…'
+
+
 # Leading user turn that quotes assistant messages which would otherwise
 # start the conversation (same text as woow_ai_contact).
 EARLIER_ASSISTANT_PREFIX = '[Messages you (the assistant) sent before this user message]\n'
@@ -812,6 +823,7 @@ class DiscussChannel(models.Model):
             kind = self._ai_author_kind(msg, visitor_partner=visitor_partner)
             attachments = Attachment
             if kind == AUTHOR_VISITOR:
+                clean_body = _truncate_text(clean_body)
                 attachments = msg.sudo().attachment_ids.with_prefetch(prefetch).sorted('id')
             if not clean_body and not attachments:
                 continue

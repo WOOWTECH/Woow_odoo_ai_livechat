@@ -294,6 +294,17 @@ class LivechatAiJob(models.Model):
                 discuss_channel.livechat_channel_id.id,
             )
             return self.browse()
+        if deferred and kind == 'reply':
+            # The newest deferred job answers all the messages of the wait:
+            # a session keeps at most one pending deferred job.
+            self.sudo().search([
+                ('discuss_channel_id', '=', discuss_channel.id),
+                ('kind', '=', 'reply'), ('deferred', '=', True), ('state', '=', 'pending'),
+            ]).write({
+                'state': 'skipped',
+                'finished_at': fields.Datetime.now(),
+                'error': '由較新的訪客訊息一併回覆',
+            })
         job = self.sudo().create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
@@ -514,7 +525,9 @@ class LivechatAiJob(models.Model):
             self._finish_exhausted(commit_step)
             return
 
-        if self.deferred and self._hold_deferred_when_channel_full(commit_step):
+        if (self.deferred and self.kind == 'reply' and self.state == 'pending'
+                and not self._skip_decision()
+                and self._hold_deferred_when_channel_full(commit_step)):
             return
 
         # Claim: the run counter is durable before any LLM call.
@@ -589,29 +602,39 @@ class LivechatAiJob(models.Model):
         self._supersede_older()
         commit_step()
 
+    def _skip_decision(self):
+        """Why a reply job must not call the LLM (no change is made).
+
+        Returns:
+            tuple|None: (state, note, supersede_older); None when it answers
+        """
+        channel = self.livechat_channel_id
+        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
+            return 'skipped', 'AI 已關閉或後端連線未設定', False
+        if self._has_newer_job():
+            return 'skipped', '有更新的訪客訊息，由最新的工作一併回覆', False
+        if self._already_answered():
+            return 'done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答', True
+        if self.discuss_channel_id._ai_is_paused():
+            return 'skipped', '真人客服處理中，AI 暫停回覆', True
+        if self.deferred and self._operator_replied_since_trigger():
+            # The wait ended, but an operator answered meanwhile.
+            return 'skipped', '等候期間真人客服已接手，AI 不補回覆', True
+        return None
+
     def _skip_reply(self, commit_step):
         """Finish a reply job without calling the LLM when it must not answer.
 
         Returns:
             bool: True when the job was finished (and committed)
         """
-        channel = self.livechat_channel_id
-        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
-            self._finish('skipped', 'AI 已關閉或後端連線未設定')
-        elif self._has_newer_job():
-            self._finish('skipped', '有更新的訪客訊息，由最新的工作一併回覆')
-        elif self._already_answered():
-            self._finish('done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答')
-            self._supersede_older()
-        elif self.discuss_channel_id._ai_is_paused():
-            self._finish('skipped', '真人客服處理中，AI 暫停回覆')
-            self._supersede_older()
-        elif self.deferred and self._operator_replied_since_trigger():
-            # The wait ended, but an operator answered meanwhile.
-            self._finish('skipped', '等候期間真人客服已接手，AI 不補回覆')
-            self._supersede_older()
-        else:
+        decision = self._skip_decision()
+        if not decision:
             return False
+        state, note, supersede = decision
+        self._finish(state, note)
+        if supersede:
+            self._supersede_older()
         commit_step()
         return True
 
@@ -959,7 +982,8 @@ class LivechatAiJob(models.Model):
         for session_id, session_jobs in by_session.items():
             if self._session_lock_held(session_id):
                 continue
-            if all(job.deferred and job.state == 'pending' for job in session_jobs):
+            if (all(job.deferred and job.state == 'pending' for job in session_jobs)
+                    and not all(job._skip_decision() for job in session_jobs)):
                 # Due deferred replies start only while the channel has room,
                 # so they do not take the batch from other sessions' jobs.
                 channel = session_jobs[0].livechat_channel_id

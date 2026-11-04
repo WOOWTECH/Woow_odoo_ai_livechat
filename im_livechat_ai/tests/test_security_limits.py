@@ -9,7 +9,8 @@ from odoo import fields
 
 from odoo.tests.common import TransactionCase
 
-from odoo.addons.im_livechat_ai.models.discuss_channel import SKIP_CONTEXT_KEY
+from odoo.addons.im_livechat_ai.models.discuss_channel import (
+    MAX_MESSAGE_CHARS, SKIP_CONTEXT_KEY, _truncate_text)
 from odoo.addons.im_livechat_ai.tools.markdown import markdown_to_html, safe_url
 
 from .common import TEST_BACKEND, livechat_operator
@@ -149,7 +150,7 @@ class TestDeferredJobCap(TransactionCase):
         cls.Job = cls.env['im_livechat.ai.job']
         cls.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '2')
 
-    def _due_deferred_job(self, name, state='pending'):
+    def _due_deferred_job(self, name, state='pending', started_ago=None):
         session = self.env['discuss.channel'].create({
             'name': name, 'channel_type': 'livechat',
             'livechat_operator_id': self.operator.id,
@@ -168,7 +169,7 @@ class TestDeferredJobCap(TransactionCase):
             'deferred': True,
             'run_after': now - timedelta(minutes=1),
             'state': state,
-            'started_at': now if state == 'running' else False,
+            'started_at': (now - (started_ago or timedelta())) if state == 'running' else False,
         })
 
     def test_running_deferred_jobs_count_towards_the_cap(self):
@@ -227,3 +228,112 @@ class TestDeferredJobCap(TransactionCase):
         job.discuss_channel_id.sudo().write({'livechat_channel_id': other.id})
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
+
+
+    @patch(POST)
+    def test_recovered_running_deferred_job_is_not_blocked_by_itself(self, mock_post):
+        """A deferred job whose process died (state running) already holds a
+        slot: with a limit of 1 the recovery cron must still finish it."""
+        mock_post.return_value = _ok()
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '1')
+        job = self._due_deferred_job('Stale', state='running', started_ago=timedelta(minutes=5))
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(job.state, 'done')
+
+    @patch(POST)
+    def test_all_recovered_running_deferred_jobs_finish_at_the_limit(self, mock_post):
+        mock_post.return_value = _ok()
+        jobs = [self._due_deferred_job('Stale %s' % i, state='running',
+                                       started_ago=timedelta(minutes=5)) for i in range(2)]
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual({j.state for j in jobs}, {'done'})
+
+    @patch(POST)
+    def test_obsolete_due_job_is_closed_even_when_the_channel_is_full(self, mock_post):
+        """A deferred job that will not call the backend (a newer job covers
+        it, the AI is off...) is closed at once instead of waiting for room."""
+        mock_post.return_value = _ok()
+        self._due_deferred_job('Busy 1', state='running')
+        self._due_deferred_job('Busy 2', state='running')
+        old = self._due_deferred_job('Superseded')
+        newer = self.Job.sudo().create({
+            'discuss_channel_id': old.discuss_channel_id.id,
+            'livechat_channel_id': self.channel.id,
+            'message_id': old.message_id.id,
+            'kind': 'reply', 'deferred': True,
+            'run_after': fields.Datetime.now() + timedelta(minutes=5),
+        })
+        old._run_job(commit=False)
+        self.assertEqual(old.state, 'skipped')
+        self.assertEqual(newer.state, 'pending')
+        mock_post.assert_not_called()
+
+    @patch(POST)
+    def test_cron_closes_obsolete_due_jobs_of_a_full_channel(self, mock_post):
+        mock_post.return_value = _ok()
+        self._due_deferred_job('Busy 1', state='running')
+        self._due_deferred_job('Busy 2', state='running')
+        old = self._due_deferred_job('Superseded')
+        self.Job.sudo().create({
+            'discuss_channel_id': old.discuss_channel_id.id,
+            'livechat_channel_id': self.channel.id,
+            'message_id': old.message_id.id,
+            'kind': 'reply', 'deferred': True,
+            'run_after': fields.Datetime.now() + timedelta(minutes=5),
+        })
+        self.Job._cron_recover_jobs(commit=False)
+        self.assertEqual(old.state, 'skipped')
+
+    def test_new_deferred_job_supersedes_pending_ones_of_the_session(self):
+        """Every message of a handoff wait queues a deferred job; only the
+        newest one answers, so a session keeps at most one pending."""
+        session = self.env['discuss.channel'].create({
+            'name': 'Waiting', 'channel_type': 'livechat',
+            'livechat_operator_id': self.operator.id,
+            'livechat_channel_id': self.channel.id,
+        })
+        session._ai_pause(minutes=10, reason='handoff')
+        with patch(THREAD):
+            for i in range(5):
+                session.message_post(
+                    body='still waiting %s' % i, author_id=self.visitor.id,
+                    message_type='comment', subtype_xmlid='mail.mt_comment')
+        deferred = self.Job.search([('discuss_channel_id', '=', session.id), ('deferred', '=', True)],
+                                   order='id')
+        self.assertEqual(len(deferred), 5)
+        self.assertEqual(deferred.mapped('state'), ['skipped'] * 4 + ['pending'])
+
+    def test_deferred_jobs_of_other_sessions_are_not_superseded(self):
+        jobs = [self._due_deferred_job('Session %s' % i) for i in range(2)]
+        with patch(THREAD):
+            self.Job._create_for_message(
+                jobs[0].discuss_channel_id, jobs[0].message_id,
+                run_after=fields.Datetime.now() + timedelta(minutes=5))
+        self.assertEqual(jobs[0].state, 'skipped')
+        self.assertEqual(jobs[1].state, 'pending')
+
+
+class TestLongVisitorMessage(TransactionCase):
+
+    def test_long_visitor_message_is_truncated_for_the_backend(self):
+        channel = self.env['im_livechat.channel'].create({
+            **TEST_BACKEND, 'name': 'Long Message Channel', 'ai_enabled': True})
+        operator = livechat_operator(self.env)
+        visitor = self.env['res.partner'].create({'name': 'Long Visitor'})
+        session = self.env['discuss.channel'].create({
+            'name': 'Long', 'channel_type': 'livechat',
+            'livechat_operator_id': operator.id, 'livechat_channel_id': channel.id,
+        })
+        limit = MAX_MESSAGE_CHARS
+        post = session.with_context(**{SKIP_CONTEXT_KEY: True}).message_post
+        post(body='x' * (limit * 50), author_id=visitor.id,
+             message_type='comment', subtype_xmlid='mail.mt_comment')
+        post(body='short question', author_id=visitor.id,
+             message_type='comment', subtype_xmlid='mail.mt_comment')
+        history = session._ai_conversation(channel)['history']
+        self.assertEqual(len(history), 2)
+        self.assertLessEqual(len(history[0]['text']), limit + 1)
+        self.assertEqual(history[1]['text'], 'short question')
+
+    def test_message_at_the_limit_is_kept_whole(self):
+        self.assertEqual(_truncate_text('y' * MAX_MESSAGE_CHARS), 'y' * MAX_MESSAGE_CHARS)

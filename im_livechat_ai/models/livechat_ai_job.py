@@ -337,20 +337,25 @@ class LivechatAiJob(models.Model):
             limit = MAX_ACTIVE_JOBS_PER_CHANNEL
         if limit <= 0:
             return None
-        oldest = fields.Datetime.now() - timedelta(minutes=JOB_MAX_AGE_MINUTES)
+        now = fields.Datetime.now()
+        oldest = now - timedelta(minutes=JOB_MAX_AGE_MINUTES)
         active = self.sudo().search_count([
             ('livechat_channel_id', '=', livechat_channel.id),
-            ('state', 'in', ('pending', 'running')),
             # Only work that makes (or is about to make) a backend call
             # counts: notice/handoff jobs make none, and a deferred job waits
             # for the end of a handoff while it is pending (it is held back
             # by the same limit when it is due, see _process_locked).
             ('kind', '=', 'reply'),
-            '|', ('deferred', '=', False), ('state', '=', 'running'),
-            # Same age rule as _process_locked: a deferred job is as old as
-            # its due time, not its creation (the wait can be long).
-            '|', ('create_date', '>=', oldest),
-            '&', ('deferred', '=', True), ('run_after', '>=', oldest),
+            '|',
+            # A running job counts for as long as one run can last, however
+            # old it is by now (it may have been claimed just before the age
+            # limit); a crashed run is bounded by the same window.
+            '&', ('state', '=', 'running'),
+            ('started_at', '>=', now - timedelta(seconds=MAX_RUN_SECONDS + STALE_RUNNING_SECONDS)),
+            # A live (not deferred) job waiting for its turn counts while it
+            # is younger than the age limit (older ones are given up).
+            '&', '&', ('state', '=', 'pending'), ('deferred', '=', False),
+            ('create_date', '>=', oldest),
         ])
         return max(limit - active, 0)
 

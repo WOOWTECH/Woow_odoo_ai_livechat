@@ -150,7 +150,7 @@ class TestDeferredJobCap(TransactionCase):
         cls.Job = cls.env['im_livechat.ai.job']
         cls.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '2')
 
-    def _due_deferred_job(self, name, state='pending', started_ago=None):
+    def _due_deferred_job(self, name, state='pending', started_ago=None, due_ago=None):
         session = self.env['discuss.channel'].create({
             'name': name, 'channel_type': 'livechat',
             'livechat_operator_id': self.operator.id,
@@ -167,7 +167,7 @@ class TestDeferredJobCap(TransactionCase):
             'message_id': message.id,
             'kind': 'reply',
             'deferred': True,
-            'run_after': now - timedelta(minutes=1),
+            'run_after': now - (due_ago or timedelta(minutes=1)),
             'state': state,
             'started_at': (now - (started_ago or timedelta())) if state == 'running' else False,
         })
@@ -205,13 +205,39 @@ class TestDeferredJobCap(TransactionCase):
         mock_post.assert_not_called()
 
     def test_long_gone_running_deferred_job_does_not_count(self):
-        """Positive control: a deferred job whose due time is also long past
-        is given up by the age rule and is not counted."""
+        """Positive control: a running job whose run started long ago (the
+        process died, longer than one run can last) is not counted."""
         for i in range(2):
-            job = self._due_deferred_job('Gone %s' % i, state='running')
+            job = self._due_deferred_job(
+                'Gone %s' % i, state='running', started_ago=timedelta(minutes=45),
+                due_ago=timedelta(minutes=50))
             self._age_created(job, 90)
-            job.write({'run_after': fields.Datetime.now() - timedelta(minutes=45)})
         self.assertFalse(self.Job._active_jobs_over_limit(self.channel))
+
+    def test_running_deferred_jobs_count_after_their_due_time_is_old(self):
+        """A job claimed shortly before the age limit may run for a long
+        time: it counts while it runs, whatever its age by now."""
+        for i in range(2):
+            job = self._due_deferred_job(
+                'Old due %s' % i, state='running', started_ago=timedelta(minutes=4),
+                due_ago=timedelta(minutes=32))
+            self._age_created(job, 45)
+        self.assertEqual(self.Job._active_job_slots(self.channel), 0)
+        self.assertTrue(self.Job._active_jobs_over_limit(self.channel))
+
+    @patch(POST)
+    def test_due_job_waits_behind_running_jobs_whose_due_time_is_old(self, mock_post):
+        mock_post.return_value = _ok()
+        for i in range(2):
+            job = self._due_deferred_job(
+                'Old due %s' % i, state='running', started_ago=timedelta(minutes=4),
+                due_ago=timedelta(minutes=32))
+            self._age_created(job, 45)
+        waiting = self._due_deferred_job('Waiting')
+        waiting._run_job(commit=False)
+        self.assertEqual(waiting.state, 'pending')
+        self.assertEqual(waiting.attempts, 0)
+        mock_post.assert_not_called()
 
     def test_pending_deferred_jobs_do_not_count(self):
         for i in range(3):

@@ -70,3 +70,59 @@ class TestActiveJobCap(TransactionCase):
     def test_limit_zero_disables_the_cap(self):
         self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '0')
         self.assertFalse(self.Job._active_jobs_over_limit(self.channel))
+
+    def _session(self, name):
+        return self.env['discuss.channel'].create({
+            'name': name, 'channel_type': 'livechat',
+            'livechat_operator_id': self.operator.id,
+            'livechat_channel_id': self.channel.id,
+        })
+
+    def _visitor_post(self, session, body):
+        return session.message_post(
+            body=body, author_id=self.visitor.id,
+            message_type='comment', subtype_xmlid='mail.mt_comment')
+
+    def test_deferred_jobs_do_not_starve_other_sessions(self):
+        """Messages written during a handoff wait queue deferred jobs; they
+        must not use up the live reply quota of the whole channel."""
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '2')
+        with patch(THREAD):
+            waiting = self._session('Waiting session')
+            waiting._ai_pause(minutes=10, reason='handoff')
+            for i in range(4):
+                self._visitor_post(waiting, 'still waiting %s' % i)
+            deferred = self.Job.search([
+                ('discuss_channel_id', '=', waiting.id), ('deferred', '=', True)])
+            self.assertTrue(deferred)
+            self.assertFalse(self.Job._active_jobs_over_limit(self.channel))
+            other = self._session('Other session')
+            message = self._visitor_post(other, 'hello there')
+        self.assertTrue(self.Job.search([
+            ('message_id', '=', message.id), ('kind', '=', 'reply')]))
+
+    def test_live_reply_jobs_still_count_with_deferred_present(self):
+        """Positive control: live reply jobs still reach the cap."""
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '2')
+        with patch(THREAD):
+            waiting = self._session('Waiting session')
+            waiting._ai_pause(minutes=10, reason='handoff')
+            self._visitor_post(waiting, 'still waiting')
+            made = []
+            for i in range(4):
+                message = self._visitor_post(self._session('Live %s' % i), 'hello %s' % i)
+                made.append(bool(self.Job.search([('message_id', '=', message.id)])))
+        self.assertEqual(made.count(True), 2)
+
+    def test_one_visitor_many_sessions_stays_within_channel_cap(self):
+        """Evidence for the visitor-triggered load finding: however many
+        sessions one visitor opens, the unfinished reply jobs of the channel
+        never exceed the cap."""
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '3')
+        with patch(THREAD):
+            for i in range(10):
+                self._visitor_post(self._session('Flood %s' % i), 'flood %s' % i)
+        active = self.Job.search_count([
+            ('livechat_channel_id', '=', self.channel.id),
+            ('kind', '=', 'reply'), ('state', 'in', ('pending', 'running'))])
+        self.assertEqual(active, 3)

@@ -324,6 +324,10 @@ class LivechatAiJob(models.Model):
         active = self.sudo().search_count([
             ('livechat_channel_id', '=', livechat_channel.id),
             ('state', 'in', ('pending', 'running')),
+            # Only live reply work counts: notice/handoff jobs make no backend
+            # call and deferred jobs wait for the end of a handoff.
+            ('kind', '=', 'reply'),
+            ('deferred', '=', False),
             ('create_date', '>=', oldest),
         ])
         return active >= limit

@@ -347,7 +347,10 @@ class LivechatAiJob(models.Model):
             # by the same limit when it is due, see _process_locked).
             ('kind', '=', 'reply'),
             '|', ('deferred', '=', False), ('state', '=', 'running'),
-            ('create_date', '>=', oldest),
+            # Same age rule as _process_locked: a deferred job is as old as
+            # its due time, not its creation (the wait can be long).
+            '|', ('create_date', '>=', oldest),
+            '&', ('deferred', '=', True), ('run_after', '>=', oldest),
         ])
         return max(limit - active, 0)
 

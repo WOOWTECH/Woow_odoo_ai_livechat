@@ -178,6 +178,41 @@ class TestDeferredJobCap(TransactionCase):
         self._due_deferred_job('Running 2', state='running')
         self.assertTrue(self.Job._active_jobs_over_limit(self.channel))
 
+    def _age_created(self, job, minutes):
+        """Make the job look created `minutes` ago (a long handoff wait)."""
+        self.env.cr.execute(
+            "UPDATE im_livechat_ai_job SET create_date = create_date - %s * interval '1 minute' WHERE id = %s",
+            (minutes, job.id))
+        job.invalidate_recordset(['create_date'])
+
+    def test_long_waiting_running_deferred_jobs_count_towards_the_cap(self):
+        """A deferred job created long before it became due still counts
+        while it runs (its age is measured from its due time)."""
+        for i in range(2):
+            self._age_created(self._due_deferred_job('Long wait %s' % i, state='running'), 45)
+        self.assertTrue(self.Job._active_jobs_over_limit(self.channel))
+
+    @patch(POST)
+    def test_due_job_waits_behind_long_waiting_running_jobs(self, mock_post):
+        mock_post.return_value = _ok()
+        for i in range(2):
+            self._age_created(self._due_deferred_job('Long wait %s' % i, state='running'), 45)
+        waiting = self._due_deferred_job('Waiting')
+        self._age_created(waiting, 45)
+        waiting._run_job(commit=False)
+        self.assertEqual(waiting.state, 'pending')
+        self.assertEqual(waiting.attempts, 0)
+        mock_post.assert_not_called()
+
+    def test_long_gone_running_deferred_job_does_not_count(self):
+        """Positive control: a deferred job whose due time is also long past
+        is given up by the age rule and is not counted."""
+        for i in range(2):
+            job = self._due_deferred_job('Gone %s' % i, state='running')
+            self._age_created(job, 90)
+            job.write({'run_after': fields.Datetime.now() - timedelta(minutes=45)})
+        self.assertFalse(self.Job._active_jobs_over_limit(self.channel))
+
     def test_pending_deferred_jobs_do_not_count(self):
         for i in range(3):
             self._due_deferred_job('Pending %s' % i)

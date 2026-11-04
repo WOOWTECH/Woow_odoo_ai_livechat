@@ -13,3 +13,4 @@ from . import test_attachments
 from . import test_reply_markdown
 from . import test_backend_handoff
 from . import test_skip_answered
+from . import test_security_limits

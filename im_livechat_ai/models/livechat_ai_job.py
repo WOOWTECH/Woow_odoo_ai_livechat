@@ -74,6 +74,11 @@ STALE_RUNNING_SECONDS = 60
 MAX_RUN_SECONDS = (LLM_MAX_RETRIES + 1) * MAX_REQUEST_TIMEOUT + sum(LLM_RETRY_BACKOFF)
 JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone); > MAX_RUN_SECONDS
 CRON_SEARCH_LIMIT = 200
+# Backend calls (and the DB connection each in-flight run holds) are bounded per
+# live chat channel: an anonymous visitor can open many sessions, so more than
+# this many unfinished reply jobs in a channel are not queued. Override with the
+# system parameter im_livechat_ai.max_active_jobs (0 disables the limit).
+MAX_ACTIVE_JOBS_PER_CHANNEL = 30
 CRON_BATCH_LIMIT = 10  # sessions handed to recovery threads per cron run
 CHAIN_LIMIT = 20  # jobs one thread runs back to back for the same session
 MAX_JOB_ERROR_LENGTH = 300
@@ -283,6 +288,12 @@ class LivechatAiJob(models.Model):
                 process and survives restarts)
         """
         deferred = bool(run_after)
+        if kind == 'reply' and not deferred and self._active_jobs_over_limit(discuss_channel.livechat_channel_id):
+            _logger.warning(
+                "AI job not queued: live chat channel %s already has too many unfinished jobs",
+                discuss_channel.livechat_channel_id.id,
+            )
+            return self.browse()
         job = self.sudo().create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
@@ -299,6 +310,23 @@ class LivechatAiJob(models.Model):
         # recovery cron (cron process) instead of waiting for its interval.
         self._trigger_recovery_cron(job.run_after + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
         return job
+
+    @api.model
+    def _active_jobs_over_limit(self, livechat_channel):
+        raw = self.env['ir.config_parameter'].sudo().get_param('im_livechat_ai.max_active_jobs')
+        try:
+            limit = int(raw) if raw not in (None, False, '') else MAX_ACTIVE_JOBS_PER_CHANNEL
+        except ValueError:
+            limit = MAX_ACTIVE_JOBS_PER_CHANNEL
+        if limit <= 0:
+            return False
+        oldest = fields.Datetime.now() - timedelta(minutes=JOB_MAX_AGE_MINUTES)
+        active = self.sudo().search_count([
+            ('livechat_channel_id', '=', livechat_channel.id),
+            ('state', 'in', ('pending', 'running')),
+            ('create_date', '>=', oldest),
+        ])
+        return active >= limit
 
     @api.model
     def _trigger_recovery_cron(self, at):

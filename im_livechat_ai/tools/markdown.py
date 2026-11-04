@@ -77,9 +77,18 @@ def url_host(url):
 def safe_url(url):
     """Return the URL when its scheme is allowed (http, https), else None."""
     url = (url or '').strip()
-    if url.lower().startswith(ALLOWED_SCHEMES) and not any(c in url for c in '\r\n\t'):
-        return url
-    return None
+    if not url.lower().startswith(ALLOWED_SCHEMES) or any(c in url for c in '\r\n\t'):
+        return None
+    # A backslash is a path separator for browsers but not for urlsplit, and
+    # userinfo ("@") hides the real host: both make the host allowlist
+    # (url_host) disagree with where the browser goes.
+    try:
+        netloc = urlsplit(url).netloc
+    except ValueError:
+        return None
+    if '\\' in url or '@' in netloc:
+        return None
+    return url
 
 
 def _emphasis(escaped):

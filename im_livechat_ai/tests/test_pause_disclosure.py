@@ -249,7 +249,9 @@ class TestHandoffWait(PauseCase):
         self._expire_pause()
         self._make_due(deferred)
         self.assertEqual(self.Job._next_pending_job_id(self.session.id), deferred[-1].id)
-        self.assertEqual(self.Job._cron_recover_jobs(commit=False), 2)
+        # The older deferred job was closed when the newer one was queued, so
+        # the cron only hands over the newest one.
+        self.assertEqual(self.Job._cron_recover_jobs(commit=False), 1)
         self.assertEqual(deferred.mapped('state'), ['skipped', 'done'])
         self.assertEqual(mock_post.call_count, 1)
         sent = mock_post.call_args.kwargs['json']['messages']

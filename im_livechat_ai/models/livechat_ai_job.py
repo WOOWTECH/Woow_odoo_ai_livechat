@@ -294,6 +294,17 @@ class LivechatAiJob(models.Model):
                 discuss_channel.livechat_channel_id.id,
             )
             return self.browse()
+        if deferred and kind == 'reply':
+            # The newest deferred job answers all the messages of the wait:
+            # a session keeps at most one pending deferred job.
+            self.sudo().search([
+                ('discuss_channel_id', '=', discuss_channel.id),
+                ('kind', '=', 'reply'), ('deferred', '=', True), ('state', '=', 'pending'),
+            ]).write({
+                'state': 'skipped',
+                'finished_at': fields.Datetime.now(),
+                'error': '由較新的訪客訊息一併回覆',
+            })
         job = self.sudo().create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
@@ -312,21 +323,46 @@ class LivechatAiJob(models.Model):
         return job
 
     @api.model
-    def _active_jobs_over_limit(self, livechat_channel):
+    def _active_job_slots(self, livechat_channel):
+        """Reply jobs the channel can still take before the cap.
+
+        Returns:
+            int|None: remaining slots (never below 0); None when the limit
+                is disabled
+        """
         raw = self.env['ir.config_parameter'].sudo().get_param('im_livechat_ai.max_active_jobs')
         try:
             limit = int(raw) if raw not in (None, False, '') else MAX_ACTIVE_JOBS_PER_CHANNEL
         except ValueError:
             limit = MAX_ACTIVE_JOBS_PER_CHANNEL
         if limit <= 0:
-            return False
-        oldest = fields.Datetime.now() - timedelta(minutes=JOB_MAX_AGE_MINUTES)
+            return None
+        now = fields.Datetime.now()
+        oldest = now - timedelta(minutes=JOB_MAX_AGE_MINUTES)
         active = self.sudo().search_count([
             ('livechat_channel_id', '=', livechat_channel.id),
-            ('state', 'in', ('pending', 'running')),
+            # Only work that makes (or is about to make) a backend call
+            # counts: notice/handoff jobs make none, and a deferred job waits
+            # for the end of a handoff while it is pending (it is held back
+            # by the same limit when it is due, see _process_locked).
+            ('kind', '=', 'reply'),
+            '|',
+            # A running job counts for as long as one run can last, however
+            # old it is by now (it may have been claimed just before the age
+            # limit); a crashed run is bounded by the same window.
+            '&', ('state', '=', 'running'),
+            ('started_at', '>=', now - timedelta(seconds=MAX_RUN_SECONDS + STALE_RUNNING_SECONDS)),
+            # A live (not deferred) job waiting for its turn counts while it
+            # is younger than the age limit (older ones are given up).
+            '&', '&', ('state', '=', 'pending'), ('deferred', '=', False),
             ('create_date', '>=', oldest),
         ])
-        return active >= limit
+        return max(limit - active, 0)
+
+    @api.model
+    def _active_jobs_over_limit(self, livechat_channel):
+        slots = self._active_job_slots(livechat_channel)
+        return slots is not None and slots <= 0
 
     @api.model
     def _trigger_recovery_cron(self, at):
@@ -497,6 +533,11 @@ class LivechatAiJob(models.Model):
             self._finish_exhausted(commit_step)
             return
 
+        if (self.deferred and self.kind == 'reply' and self.state == 'pending'
+                and not self._skip_decision()
+                and self._hold_deferred_when_channel_full(commit_step)):
+            return
+
         # Claim: the run counter is durable before any LLM call.
         self.write({
             'state': 'running',
@@ -569,29 +610,39 @@ class LivechatAiJob(models.Model):
         self._supersede_older()
         commit_step()
 
+    def _skip_decision(self):
+        """Why a reply job must not call the LLM (no change is made).
+
+        Returns:
+            tuple|None: (state, note, supersede_older); None when it answers
+        """
+        channel = self.livechat_channel_id
+        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
+            return 'skipped', 'AI 已關閉或後端連線未設定', False
+        if self._has_newer_job():
+            return 'skipped', '有更新的訪客訊息，由最新的工作一併回覆', False
+        if self._already_answered():
+            return 'done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答', True
+        if self.discuss_channel_id._ai_is_paused():
+            return 'skipped', '真人客服處理中，AI 暫停回覆', True
+        if self.deferred and self._operator_replied_since_trigger():
+            # The wait ended, but an operator answered meanwhile.
+            return 'skipped', '等候期間真人客服已接手，AI 不補回覆', True
+        return None
+
     def _skip_reply(self, commit_step):
         """Finish a reply job without calling the LLM when it must not answer.
 
         Returns:
             bool: True when the job was finished (and committed)
         """
-        channel = self.livechat_channel_id
-        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
-            self._finish('skipped', 'AI 已關閉或後端連線未設定')
-        elif self._has_newer_job():
-            self._finish('skipped', '有更新的訪客訊息，由最新的工作一併回覆')
-        elif self._already_answered():
-            self._finish('done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答')
-            self._supersede_older()
-        elif self.discuss_channel_id._ai_is_paused():
-            self._finish('skipped', '真人客服處理中，AI 暫停回覆')
-            self._supersede_older()
-        elif self.deferred and self._operator_replied_since_trigger():
-            # The wait ended, but an operator answered meanwhile.
-            self._finish('skipped', '等候期間真人客服已接手，AI 不補回覆')
-            self._supersede_older()
-        else:
+        decision = self._skip_decision()
+        if not decision:
             return False
+        state, note, supersede = decision
+        self._finish(state, note)
+        if supersede:
+            self._supersede_older()
         commit_step()
         return True
 
@@ -614,6 +665,28 @@ class LivechatAiJob(models.Model):
             self.write({'run_after': due})
             self._trigger_recovery_cron(due + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
             commit_step()
+        return True
+
+    def _hold_deferred_when_channel_full(self, commit_step):
+        """A due deferred reply makes a backend call like a live one: while
+        the channel already has the maximum of unfinished reply jobs, leave it
+        pending and let the recovery cron try again shortly (it is not
+        dropped; the usual age limit still applies).
+
+        The channel lock is held until the claim is committed, so jobs of
+        different sessions started together cannot all pass the check.
+
+        Returns:
+            bool: True when the job was left pending
+        """
+        channel = self.livechat_channel_id
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(%s, %s)", (LOCK_NAMESPACE, -channel.id))
+        if not self._active_jobs_over_limit(channel):
+            return False
+        _logger.info("AI job %s waits: live chat channel %s already has too many unfinished jobs",
+                     self.id, channel.id)
+        self._trigger_recovery_cron(fields.Datetime.now() + timedelta(seconds=CRON_TRIGGER_DELAY_SECONDS))
+        commit_step()
         return True
 
     def _operator_replied_since_trigger(self):
@@ -913,9 +986,21 @@ class LivechatAiJob(models.Model):
         for job in jobs:
             by_session.setdefault(job.discuss_channel_id.id, []).append(job)
         batch = []
+        slots = {}
         for session_id, session_jobs in by_session.items():
             if self._session_lock_held(session_id):
                 continue
+            if (all(job.deferred and job.state == 'pending' for job in session_jobs)
+                    and not all(job._skip_decision() for job in session_jobs)):
+                # Due deferred replies start only while the channel has room,
+                # so they do not take the batch from other sessions' jobs.
+                channel = session_jobs[0].livechat_channel_id
+                if channel.id not in slots:
+                    slots[channel.id] = self._active_job_slots(channel)
+                if slots[channel.id] is not None:
+                    if slots[channel.id] <= 0:
+                        continue
+                    slots[channel.id] -= 1
             batch.append(session_jobs)
             if len(batch) >= CRON_BATCH_LIMIT:
                 break

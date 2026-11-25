@@ -475,3 +475,58 @@ class TestUnexpectedErrorFrames(RuntimeCase):
         lines = '\n'.join(logs.output)
         self.assertNotIn('File "', lines)
         self.assertNotIn('sentinel-text-4243', lines)
+
+
+class TestGateWhenTheJobRuns(RuntimeCase):
+    """Contract 3.5: the gate applies again when the job runs and before it posts the answer."""
+
+    def _block(self):
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET model = NULL WHERE id = %s",
+                            (self.channel.sudo().ai_assistant_id.connection_id.id,))
+        self.env.invalidate_all()
+
+    def _notices(self, session):
+        return session.message_ids.filtered(lambda m: m.message_type == 'notification'
+                                            and 'cannot answer right now' in (m.body or ''))
+
+    @patch(POST)
+    def test_blocked_before_the_job_runs(self, mock_post):
+        session, guest, _m = self.session(text=None)
+        self.guest_post(session, guest, '排隊中')
+        job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
+        self._block()
+        with mute_logger(CHANNEL_LOGGER):
+            job._run_job(commit=False)
+        mock_post.assert_not_called()
+        self.assertEqual(job.state, 'skipped')
+        self.assertEqual(len(self._notices(session)), 1, 'one notice')
+
+    @patch(POST)
+    def test_blocked_while_the_backend_answers(self, mock_post):
+        def answer(*_args, **_kwargs):
+            self._block()
+            return _ok('不會貼出')
+        mock_post.side_effect = answer
+        session, guest, _m = self.session(text=None)
+        self.guest_post(session, guest, '請問')
+        job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
+        bot = self.channel._get_bot_partner()
+        with mute_logger(CHANNEL_LOGGER):
+            job._run_job(commit=False)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(job.state, 'skipped')
+        self.assertFalse(session.message_ids.filtered(lambda m: m.author_id == bot and m.message_type == 'comment'),
+                         'the answer is not posted')
+        self.assertEqual(len(self._notices(session)), 1)
+
+    @patch(POST)
+    def test_ai_turned_off_while_queued(self, mock_post):
+        session, guest, _m = self.session(text=None)
+        self.guest_post(session, guest, '你好')
+        job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
+        self.channel.sudo().ai_enabled = False
+        job._run_job(commit=False)
+        mock_post.assert_not_called()
+        self.assertEqual(job.state, 'skipped')
+        self.assertFalse(self._notices(session), 'the AI is off: no notice')

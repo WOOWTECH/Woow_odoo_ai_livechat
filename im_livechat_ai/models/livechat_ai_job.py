@@ -107,6 +107,8 @@ MONITOR_STALE_MINUTES = 5
 FAILURE_ALERT_MINUTES = 10
 RATE_LIMIT_ALERT_MINUTES = FAILURE_ALERT_MINUTES  # 18.0.2.0.0 drafts throttled HTTP 429 only
 RATE_LIMIT_ERROR_PREFIX = 'HTTP 429'
+# Note of a reply job skipped by the gate when it ran (contract 3.5)
+BLOCKED_AT_RUN_NOTE = 'the AI assistant cannot answer (checked when the job ran): no backend call or no reply'
 # Who decided a handoff (im_livechat.ai.job.handoff_source)
 HANDOFF_KEYWORD = 'keyword'  # a handoff keyword in the visitor message (no backend call)
 HANDOFF_BACKEND = 'backend'  # the backend's answer ([[handoff]] / n8n "handoff": true)
@@ -624,6 +626,18 @@ class LivechatAiJob(models.Model):
             self._supersede_older()
             commit_step()
             return
+        # Contract 3.5: the gate again before posting: an administrator may have changed the connection or
+        # the assistant, or a manager turned the AI off, while the backend was answering.
+        self.env.invalidate_all()
+        if not channel.ai_enabled:
+            self._finish('skipped', 'the AI was turned off before the reply: nothing posted')
+            commit_step()
+            return
+        if not channel._ai_connection_is_ready():
+            self._finish('skipped', BLOCKED_AT_RUN_NOTE)
+            channel._ai_handle_blocked(session, self.message_id)
+            commit_step()
+            return
         if result['error']:
             self._give_up(result['error'], result=result, commit_step=commit_step)
         elif result['handoff']:
@@ -654,8 +668,12 @@ class LivechatAiJob(models.Model):
             tuple|None: (state, note, supersede_older); None when it answers
         """
         channel = self.livechat_channel_id
-        if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
-            return 'skipped', 'the AI is off or its AI assistant cannot answer', False
+        if not channel or not channel.ai_enabled:
+            return 'skipped', 'the AI is off', False
+        if not channel._ai_connection_is_ready():
+            # contract 3.5: the gate applies again when the job runs (the connection or the assistant may have
+            # changed while it waited); _skip_reply gives the notice
+            return 'skipped', BLOCKED_AT_RUN_NOTE, False
         if self._has_newer_job():
             return 'skipped', 'a newer visitor message: the newest job answers', False
         if self._already_answered():
@@ -680,6 +698,9 @@ class LivechatAiJob(models.Model):
         self._finish(state, note)
         if supersede:
             self._supersede_older()
+        if note == BLOCKED_AT_RUN_NOTE:
+            # one notice per blocked period for the person, one alert for the operators (as at the trigger)
+            self.livechat_channel_id._ai_handle_blocked(self.discuss_channel_id, self.message_id)
         commit_step()
         return True
 

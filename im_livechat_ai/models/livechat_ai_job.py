@@ -52,8 +52,6 @@ from odoo.modules.registry import Registry
 
 from .discuss_channel import PAUSE_HANDOFF
 from .im_livechat_channel import (
-    DEFAULT_ERROR_MESSAGE,
-    DEFAULT_HANDOFF_MESSAGE,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF,
     MAX_REQUEST_TIMEOUT,
@@ -69,8 +67,10 @@ STALE_PENDING_SECONDS = 30  # pending this long past run_after: the thread was l
 # takes, and the cron skips locked sessions (_session_lock_held), so this
 # does not need to exceed MAX_RUN_SECONDS.
 STALE_RUNNING_SECONDS = 60
-# The longest one run can legitimately take: every call waiting the longest
-# allowed timeout, plus the retry backoff (3 x 300 s + 13 s, about 15 min).
+# A generous bound of one run (18.0.1.x: every call waiting the longest
+# allowed timeout, plus the retry backoff, 3 x 300 s + 13 s, about 15 min; since
+# 18.0.2.0.0 the timeout bounds the whole answer, so a run is much shorter).
+# Kept as it was: the per-channel cap counts a running job this long.
 MAX_RUN_SECONDS = (LLM_MAX_RETRIES + 1) * MAX_REQUEST_TIMEOUT + sum(LLM_RETRY_BACKOFF)
 JOB_MAX_AGE_MINUTES = 30  # older unfinished jobs are given up (visitor likely gone); > MAX_RUN_SECONDS
 CRON_SEARCH_LIMIT = 200
@@ -303,7 +303,7 @@ class LivechatAiJob(models.Model):
             ]).write({
                 'state': 'skipped',
                 'finished_at': fields.Datetime.now(),
-                'error': '由較新的訪客訊息一併回覆',
+                'error': 'answered together with a newer visitor message',
             })
         job = self.sudo().create({
             'discuss_channel_id': discuss_channel.id,
@@ -523,9 +523,11 @@ class LivechatAiJob(models.Model):
         # A deferred job is as old as its due time (the wait can be long).
         reference = max(self.create_date, self.run_after) if self.deferred and self.run_after else self.create_date
         if reference and reference < now - timedelta(minutes=JOB_MAX_AGE_MINUTES):
-            self._finish('failed', f'超過 {JOB_MAX_AGE_MINUTES} 分鐘仍未處理，已放棄')
-            self._notify_failure('訪客的訊息超過 %s 分鐘未能由 AI 處理' % JOB_MAX_AGE_MINUTES,
-                                 visitor_told=False)
+            self._finish('failed', f'not processed within {JOB_MAX_AGE_MINUTES} minutes: given up')
+            self._notify_failure(
+                lambda env: env._('the visitor message was not processed by the AI within %(minutes)s minutes',
+                                  minutes=JOB_MAX_AGE_MINUTES),
+                visitor_told=False)
             commit_step()
             return
         if self.attempts >= MAX_JOB_RUNS:
@@ -562,7 +564,7 @@ class LivechatAiJob(models.Model):
         context = session._ai_context_messages(channel)
         conversation = session._ai_conversation(channel, recent_messages=context, resume=self.deferred)
         if not any(e['kind'] == 'visitor' for e in conversation['history']):
-            self._finish('skipped', '對話中沒有訪客訊息')
+            self._finish('skipped', 'no visitor message in the conversation')
             commit_step()
             return
         # The visitor messages up to this id are answered by this reply.
@@ -572,7 +574,7 @@ class LivechatAiJob(models.Model):
         # before_call commits right before each request.
         commit_step()
         result = channel._generate_ai_reply(session, conversation, before_call=commit_step,
-                                            trigger_message=self.message_id)
+                                            trigger_message=self.message_id, job=self)
         self.write({'llm_calls': result['calls']})
 
         # Final checks and the post, with the session row locked (see
@@ -581,32 +583,35 @@ class LivechatAiJob(models.Model):
         if self._has_newer_job():
             # A newer message arrived while the backend was answering: drop
             # this answer, the newest job answers with the full context.
-            self._finish('skipped', '回覆前有新的訪客訊息，由最新的工作一併回覆')
+            self._finish('skipped', 'a newer visitor message arrived before the reply: the newest job answers')
             commit_step()
             return
         if session._ai_is_paused():
             # An operator took over while the backend was answering.
-            self._finish('skipped', '回覆前真人客服已接手，AI 暫停回覆')
+            self._finish('skipped', 'an operator took over before the reply: the AI is paused')
             self._supersede_older()
             commit_step()
             return
         if result['error']:
-            self._give_up(result['error'])
+            self._give_up(result['error'], result=result)
         elif result['handoff']:
             # Owner decision 40: the backend asked for a human. Its text is
             # posted first, then the same handoff as for a keyword.
             posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            self._count_usage(result, ok=True)
             self._process_backend_handoff(commit_step, posted, result['handoff_reason'])
             return
         elif result['skip']:
             # n8n answered {"skip": true}: the workflow chose not to reply
             # (or replies later through its own channel).
-            self._finish('done', '後端選擇不回覆（skip）')
+            self._finish('done', 'the backend chose not to reply (skip)')
         elif result['replies']:
             posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            self._count_usage(result, ok=True)
             self._finish('done', False, reply_message=posted[0])
         else:
-            self._give_up('AI 沒有回覆')
+            self._give_up('the AI gave no answer', result=result,
+                          reason=lambda env: env._('the AI gave no answer'))
         self._supersede_older()
         commit_step()
 
@@ -618,16 +623,16 @@ class LivechatAiJob(models.Model):
         """
         channel = self.livechat_channel_id
         if not channel or not channel.ai_enabled or not channel._ai_connection_is_ready():
-            return 'skipped', 'AI 已關閉或後端連線未設定', False
+            return 'skipped', 'the AI is off or its AI assistant cannot answer', False
         if self._has_newer_job():
-            return 'skipped', '有更新的訪客訊息，由最新的工作一併回覆', False
+            return 'skipped', 'a newer visitor message: the newest job answers', False
         if self._already_answered():
-            return 'done', '觸發訊息已由先前的 AI 回覆一併回答，不重複回答', True
+            return 'done', 'the trigger message was answered by an earlier AI reply', True
         if self.discuss_channel_id._ai_is_paused():
-            return 'skipped', '真人客服處理中，AI 暫停回覆', True
+            return 'skipped', 'an operator is handling the conversation: the AI is paused', True
         if self.deferred and self._operator_replied_since_trigger():
             # The wait ended, but an operator answered meanwhile.
-            return 'skipped', '等候期間真人客服已接手，AI 不補回覆', True
+            return 'skipped', 'an operator took over during the wait: no reply after the wait', True
         return None
 
     def _skip_reply(self, commit_step):
@@ -700,9 +705,10 @@ class LivechatAiJob(models.Model):
         ]
         if self.message_id:
             domain.append(('id', '>', self.message_id.id))
-        visitor = session._ai_visitor_partner()
+        bot_ids = session._ai_bot_ids()
+        visitor = session._ai_visitor_partner(bot_ids=bot_ids)
         for message in self.env['mail.message'].search(domain, order='id'):
-            if session._ai_author_kind(message, visitor_partner=visitor) == 'operator':
+            if session._ai_author_kind(message, visitor_partner=visitor, bot_ids=bot_ids) == 'operator':
                 return True
         return False
 
@@ -719,8 +725,14 @@ class LivechatAiJob(models.Model):
             return
         if self._skip_reply(commit_step):
             return
-        self._give_up(f'已嘗試處理 {self.attempts} 次仍未完成')
+        runs = self.attempts
+        self._give_up(f'{runs} runs did not finish',
+                      reason=lambda env: env._('%(runs)s runs did not finish', runs=runs))
         commit_step()
+
+    def _visitor_lang(self):
+        """Language of the visitor of this job's session ('' when unknown)."""
+        return self.discuss_channel_id._ai_visitor_lang() if self.discuss_channel_id else ''
 
     def _process_handoff(self, commit_step):
         """Visitor asked for a human: send the handoff message once, then
@@ -732,20 +744,24 @@ class LivechatAiJob(models.Model):
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         if not channel or not channel.ai_enabled:
-            self._finish('skipped', 'AI 已關閉')
+            self._finish('skipped', 'the AI is off')
             commit_step()
             return
-        message = channel._create_bot_message(
-            self.env, session, channel.ai_handoff_message or DEFAULT_HANDOFF_MESSAGE,
-        )
+        message = channel._create_bot_message(self.env, session,
+                                              channel._ai_handoff_message_text(self._visitor_lang()))
         self.write({'handoff_source': HANDOFF_KEYWORD})
         self._finish('done', False, reply_message=message)
         self._supersede_older()
         commit_step()
         minutes = channel._ai_wait_minutes()
-        text = ('訪客在對話「%s」要求真人客服，AI 會先等候 %s 分鐘；'
-                '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, minutes)
-        self._notify_operators(text, 'AI 客服：訪客要求真人客服', notification_type='warning')
+        name = session.display_name
+
+        def build(env):
+            return (env._('The visitor in conversation "%(session)s" asked for a human. The AI waits %(minutes)s '
+                          'minutes; if nobody replies, the AI answers the visitor again. Please take over soon.',
+                          session=name, minutes=minutes),
+                    env._('Live Chat AI: the visitor asked for a human'))
+        self._notify_operators(build, notification_type='warning')
         commit_step()
 
     def _process_backend_handoff(self, commit_step, posted, reason=None):
@@ -759,21 +775,27 @@ class LivechatAiJob(models.Model):
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         if not posted:
-            posted = [channel._create_bot_message(
-                self.env, session, channel.ai_handoff_message or DEFAULT_HANDOFF_MESSAGE)]
+            posted = [channel._create_bot_message(self.env, session,
+                                                  channel._ai_handoff_message_text(self._visitor_lang()))]
         minutes = channel._ai_wait_minutes()
         session._ai_pause(minutes=minutes, reason=PAUSE_HANDOFF)
         self.write({'handoff_source': HANDOFF_BACKEND, 'handoff_reason': reason or False})
         self._finish('done', False, reply_message=posted[0])
         self._supersede_older()
         commit_step()
-        if reason:
-            text = ('AI 判斷訪客在對話「%s」要找真人客服（%s），AI 會先等候 %s 分鐘；'
-                    '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, reason, minutes)
-        else:
-            text = ('AI 判斷訪客在對話「%s」要找真人客服，AI 會先等候 %s 分鐘；'
-                    '若沒有人回覆，AI 會繼續回答訪客。請盡快接手。') % (session.display_name, minutes)
-        self._notify_operators(text, 'AI 客服：訪客要求真人客服', notification_type='warning')
+        name = session.display_name
+
+        def build(env):
+            if reason:
+                text = env._('The AI found that the visitor in conversation "%(session)s" wants a human '
+                             '(%(reason)s). The AI waits %(minutes)s minutes; if nobody replies, the AI answers the '
+                             'visitor again. Please take over soon.', session=name, reason=reason, minutes=minutes)
+            else:
+                text = env._('The AI found that the visitor in conversation "%(session)s" wants a human. The AI '
+                             'waits %(minutes)s minutes; if nobody replies, the AI answers the visitor again. Please '
+                             'take over soon.', session=name, minutes=minutes)
+            return text, env._('Live Chat AI: the visitor asked for a human')
+        self._notify_operators(build, notification_type='warning')
         commit_step()
 
     def _process_notice(self, commit_step):
@@ -783,11 +805,13 @@ class LivechatAiJob(models.Model):
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
         if not channel or not channel.ai_enabled:
-            self._finish('skipped', 'AI 已關閉')
+            self._finish('skipped', 'the AI is off')
         elif not session._ai_waiting_for_human():
-            self._finish('skipped', '已不在等候真人客服（客服已接手或等候已結束），不送等候通知')
+            self._finish('skipped', 'not waiting for an operator any more (taken over or the wait ended): '
+                                    'no waiting notice')
         else:
-            message = channel._create_bot_message(self.env, session, channel._ai_pause_notice_text())
+            message = channel._create_bot_message(self.env, session,
+                                                  channel._ai_pause_notice_text(self._visitor_lang()))
             self._finish('done', False, reply_message=message)
         commit_step()
 
@@ -801,15 +825,37 @@ class LivechatAiJob(models.Model):
             vals['reply_message_id'] = reply_message.id
         self.write(vals)
 
-    def _give_up(self, error):
-        """Final failure: tell the visitor (Chinese) and the operators."""
+    def _count_usage(self, result, ok=True):
+        """Count one answer in the monthly usage (in the posting transaction)."""
+        assistant = result.get('assistant') if result else None
+        connection = result.get('connection') if result else None
+        if not assistant or not connection:
+            assistant = self.livechat_channel_id._ai_assistant() if self.livechat_channel_id else None
+            connection = assistant.connection_id if assistant else None
+        if not assistant or not connection:
+            return
+        prompt, completion = (result or {}).get('usage') or (0, 0)
+        self.env['im_livechat.ai.usage.month'].sudo()._add(
+            assistant, connection, livechat_channel=self.livechat_channel_id, ok=ok,
+            prompt_tokens=prompt if ok else 0, completion_tokens=completion if ok else 0)
+
+    def _give_up(self, error, result=None, reason=None):
+        """Final failure: tell the visitor (the AI assistant's error message, in
+        their language) and the operators; counted as a failed reply.
+
+        ``error``: the job's note; ``reason``: a function (env) -> the reason
+        in that env's language for the operators (default: from the backend
+        error of ``result``, else ``error``)."""
         channel = self.livechat_channel_id
         session = self.discuss_channel_id
-        message = channel._create_bot_message(
-            self.env, session, channel.ai_error_message or DEFAULT_ERROR_MESSAGE,
-        )
+        message = channel._create_bot_message(self.env, session, channel._ai_error_text(self._visitor_lang()))
         self._finish('failed', error, reply_message=message)
-        self._notify_failure(error, visitor_told=True)
+        self._count_usage(result, ok=False)
+        exc = (result or {}).get('error_exc')
+        if reason is None and exc is not None:
+            def reason(env):
+                return channel.with_env(env)._short_llm_error(exc)
+        self._notify_failure(reason or error, visitor_told=True)
 
     def _has_newer_job(self):
         return bool(self.search_count([
@@ -851,15 +897,16 @@ class LivechatAiJob(models.Model):
             older.write({
                 'state': 'skipped',
                 'finished_at': fields.Datetime.now(),
-                'error': '已由較新的工作一併回覆',
+                'error': 'covered by a newer job',
             })
 
     # --- Operator notification ---
 
-    def _failure_recipients(self):
+    @api.model
+    def _ai_recipients(self, session, livechat_channel):
         """Internal users to warn: the session operator and internal members,
         else the channel operators, else the Live Chat managers."""
-        excluded = set(self._bot_partner_ids())
+        excluded = set(self.env['im_livechat.channel']._ai_bot_partner_ids(livechat_channel))
         odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
         if odoobot:
             excluded.add(odoobot.id)
@@ -869,63 +916,106 @@ class LivechatAiJob(models.Model):
                 lambda p: p.id not in excluded and any(not u.share for u in p.user_ids)
             )
 
-        session = self.discuss_channel_id
+        session = session.sudo()
         partners = internal(session.livechat_operator_id | session.channel_member_ids.partner_id)
-        if not partners:
-            partners = internal(self.livechat_channel_id.user_ids.partner_id)
+        if not partners and livechat_channel:
+            partners = internal(livechat_channel.sudo().user_ids.partner_id)
         if not partners:
             group = self.env.ref('im_livechat.im_livechat_group_manager', raise_if_not_found=False)
             if group:
-                partners = internal(group.users.partner_id)
+                partners = internal(group.sudo().users.partner_id)
         return partners
 
-    def _notify_failure(self, reason, visitor_told=True):
-        """Warn the operators that the AI could not answer (see _notify_operators)."""
+    def _failure_recipients(self):
         self.ensure_one()
-        session = self.discuss_channel_id
-        text = 'AI 客服無法回覆對話「%s」（%s）。' % (session.display_name, reason)
-        text += '已向訪客送出錯誤訊息，請盡快接手。' if visitor_told else '請盡快接手。'
-        self._notify_operators(text, 'AI 客服回覆失敗')
+        return self._ai_recipients(self.discuss_channel_id, self.livechat_channel_id)
 
-    def _notify_operators(self, text, title, notification_type='danger'):
-        """Warn operators in a way they see in Odoo 18:
+    def _notify_failure(self, reason, visitor_told=True):
+        """Warn the operators that the AI could not answer (see _ai_notify).
+        ``reason``: a short text, or a function (env) -> text in that env's language."""
+        self.ensure_one()
+        name = self.discuss_channel_id.display_name
+
+        def build(env):
+            why = reason(env) if callable(reason) else reason
+            if visitor_told:
+                text = env._('The Live Chat AI could not answer conversation "%(session)s" (%(reason)s). The '
+                             'visitor got the error message; please take over soon.', session=name, reason=why)
+            else:
+                text = env._('The Live Chat AI could not answer conversation "%(session)s" (%(reason)s). '
+                             'Please take over soon.', session=name, reason=why)
+            return text, env._('Live Chat AI: no reply')
+        self._notify_operators(build)
+
+    def _notify_operators(self, build, notification_type='danger'):
+        self.ensure_one()
+        self._ai_notify(self.discuss_channel_id, self.livechat_channel_id, build,
+                        notification_type=notification_type, ref='AI job %s' % self.id)
+
+    @api.model
+    def _notify_blocked(self, livechat_channel, session):
+        """Tell the operators once per blocked period that the AI of
+        `livechat_channel` is on but cannot answer (see _ai_notify)."""
+        name = session.sudo().display_name
+        channel_name = livechat_channel.sudo().name or ''
+
+        def build(env):
+            reasons = ' '.join(livechat_channel.with_env(env)._ai_problems())
+            return (env._('The AI of the Live Chat channel "%(channel)s" is on but cannot answer (conversation '
+                          '"%(session)s"): %(reason)s No reply job is queued until this is fixed; please take '
+                          'over the visitors meanwhile. A system administrator can see why on the AI Assistant tab '
+                          'of the channel.', channel=channel_name, session=name, reason=reasons),
+                    env._('Live Chat AI: cannot answer'))
+        self._ai_notify(session, livechat_channel, build, ref='live chat channel %s' % livechat_channel.id)
+
+    @api.model
+    def _ai_notify(self, session, livechat_channel, build, notification_type='danger', ref=''):
+        """Warn operators in a way they see in Odoo 18, each in their own language:
 
         - a direct chat message from OdooBot (persistent, unread counter in
           the Discuss systray menu and the Discuss app, also when offline);
         - a sticky toast through the bus (simple_notification) for users who
           are online right now.
+
+        ``build(env)`` returns (text, title) in the language of ``env``.
         """
-        self.ensure_one()
-        partners = self._failure_recipients()
+        partners = self._ai_recipients(session, livechat_channel)
         if not partners:
-            _logger.warning("AI job %s: no operator could be notified (%s)", self.id, title)
+            _logger.warning("%s: no operator could be notified", ref)
             return
-        session = self.discuss_channel_id
+        Assistant = self.env['im_livechat.ai.assistant']
         url = '/odoo/discuss?active_id=discuss.channel_%s' % session.id
-        body = Markup('%s<br/><a href="%s">開啟對話</a>') % (text, url)
         odoobot = self.env.ref('base.partner_root')
         Channel = self.env['discuss.channel'].with_user(SUPERUSER_ID).sudo()
+        by_lang = {}
         for partner in partners:
+            by_lang.setdefault(Assistant._installed_lang(partner.lang), self.env['res.partner'])
+            by_lang[Assistant._installed_lang(partner.lang)] |= partner
+        for lang, group in by_lang.items():
+            env = self.with_context(lang=lang).env
+            text, title = build(env)
+            body = Markup('%s<br/><a href="%s">%s</a>') % (text, url, env._('Open the conversation'))
+            for partner in group:
+                try:
+                    with self.env.cr.savepoint():
+                        chat = Channel.channel_get([partner.id], pin=False)
+                        chat.message_post(
+                            body=body,
+                            author_id=odoobot.id,
+                            message_type='comment',
+                            subtype_xmlid='mail.mt_comment',
+                        )
+                except Exception:  # noqa: BLE001 - notification must not undo the job result
+                    _logger.exception("%s: could not notify partner %s", ref, partner.id)
             try:
-                with self.env.cr.savepoint():
-                    chat = Channel.channel_get([partner.id], pin=False)
-                    chat.message_post(
-                        body=body,
-                        author_id=odoobot.id,
-                        message_type='comment',
-                        subtype_xmlid='mail.mt_comment',
-                    )
-            except Exception:  # noqa: BLE001 - notification must not undo the job result
-                _logger.exception("AI job %s: could not notify partner %s", self.id, partner.id)
-        try:
-            partners._bus_send('simple_notification', {
-                'title': title,
-                'message': text,
-                'sticky': True,
-                'type': notification_type,
-            })
-        except Exception:  # noqa: BLE001
-            _logger.exception("AI job %s: could not send the bus notification", self.id)
+                group._bus_send('simple_notification', {
+                    'title': title,
+                    'message': text,
+                    'sticky': True,
+                    'type': notification_type,
+                })
+            except Exception:  # noqa: BLE001
+                _logger.exception("%s: could not send the bus notification", ref)
 
     # --- Recovery cron ---
 

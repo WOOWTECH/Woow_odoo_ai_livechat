@@ -5,8 +5,8 @@
 "im_livechat_ai|<id>|<checksum>|<expires>")>``, valid one hour (see
 models/discuss_channel.py ``make_token``). Only attachments of messages in a
 live chat session (a discuss.channel with livechat_channel_id) are served,
-always as a download; anything else is 404. Same shape as woow_ai_contact's
-/woow_ai/attachment route.
+always as a download; anything else is 404. Same shape as the attachment
+route of Discuss AI (aligned, nothing shared).
 """
 
 from werkzeug.exceptions import NotFound

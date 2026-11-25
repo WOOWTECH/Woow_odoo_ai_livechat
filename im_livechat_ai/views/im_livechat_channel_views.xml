@@ -1,90 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Live Chat > Configuration > Channels > AI tab: everything of the module lives here
-         (18.0.1.2.0: no Settings page). The backend connection is per channel and is
-         managed by system administrators; Live Chat managers only see whether it is set. -->
+    <!-- Live Chat > Configuration > Channels > AI Assistant tab (18.0.2.0.0): a Live Chat manager picks one of
+         the AI assistants a system administrator made available in Live Chat and turns the AI on; the channel
+         keeps its welcome and handoff texts, pause and wait minutes and keywords. The AI connections and
+         assistants themselves are set up by system administrators (Live Chat > Configuration). Same xmlid as
+         18.0.1.x: the view is rewritten in place on upgrade (no view is removed). -->
     <record id="im_livechat_channel_view_form_inherit_ai" model="ir.ui.view">
         <field name="name">im_livechat.channel.form.inherit.ai</field>
         <field name="model">im_livechat.channel</field>
         <field name="inherit_id" ref="im_livechat.im_livechat_channel_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
-                <page string="AI Integration" name="ai_integration" groups="im_livechat.im_livechat_group_manager">
-                    <group name="ai_backend_connection">
-                        <group string="AI Backend Connection" name="ai_backend">
+                <page string="AI Assistant" name="ai_integration" groups="im_livechat.im_livechat_group_manager">
+                    <group name="ai_assistant">
+                        <group name="ai_assistant_pick">
                             <field name="ai_enabled"/>
-                            <field name="ai_backend_type" groups="base.group_system" widget="radio"/>
-                            <field name="ai_backend_type" groups="!base.group_system" readonly="1"/>
-                            <field name="ai_endpoint_url" groups="base.group_system"
-                                   placeholder="https://litellm.example.com/v1"/>
-                            <field name="ai_api_token" groups="base.group_system" password="True"
-                                   placeholder="Leave empty to keep the saved token"/>
-                            <field name="ai_api_token_set" invisible="1" groups="base.group_system"/>
-                            <field name="ai_model" invisible="ai_backend_type == 'n8n'"
-                                   required="ai_enabled and ai_backend_type == 'openai'"
-                                   placeholder="chatgpt-pool/gpt-6-sol"/>
-                            <field name="ai_document_mode" widget="radio"
-                                   invisible="ai_backend_type == 'n8n'"/>
-                            <div colspan="2" class="text-muted" invisible="ai_backend_type == 'n8n'">
-                                Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly.
-                                Download link only: for Hermes and other backends that do not take file
-                                content; the backend downloads the file itself.
-                            </div>
-                            <field name="ai_connection_ready" invisible="1"/>
+                            <field name="ai_assistant_id" groups="base.group_system"
+                                   options="{'no_quick_create': True}"/>
+                            <field name="ai_assistant_id" groups="!base.group_system"
+                                   options="{'no_open': True, 'no_create': True}"/>
+                            <field name="ai_assistant_description" invisible="not ai_assistant_id"/>
+                            <field name="ai_state" widget="badge"
+                                   decoration-success="ai_state == 'ok'"
+                                   decoration-danger="ai_state == 'blocked'"
+                                   decoration-muted="ai_state == 'off'"/>
                         </group>
-                        <group name="ai_backend_status">
-                            <div colspan="2" class="text-success" invisible="not ai_connection_ready">
-                                Backend connection is set up (managed by system administrators).
+                        <group name="ai_assistant_status">
+                            <div colspan="2" class="alert alert-warning" role="alert" invisible="not ai_state_reason">
+                                <field name="ai_state_reason" nolabel="1" class="d-block"/>
                             </div>
-                            <div colspan="2" class="text-warning" invisible="ai_connection_ready">
-                                No backend connection yet: a system administrator must fill it in.
+                            <field name="ai_customer_safe_warning" invisible="1"/>
+                            <div colspan="2" class="alert alert-info" role="status"
+                                 invisible="not ai_customer_safe_warning">
+                                The AI connection of this AI assistant is not marked "Safe for Customers". Live Chat
+                                visitors are mostly anonymous customers: the backend must only use public data.
                             </div>
-                            <div colspan="2" class="text-muted" groups="base.group_system">
-                                <span invisible="not ai_api_token_set">An access token is saved (it is never displayed). </span>
-                                <span invisible="ai_api_token_set">No access token saved yet. </span>
-                                OpenAI compatible (LiteLLM, Hermes…): the base URL ending in /v1 and the
-                                API key (sent as a Bearer token). n8n: the production webhook URL and,
-                                optionally, a signing secret (Odoo then signs each request with
-                                X-Woow-Signature and never sends the secret; without it, e.g. for a public
-                                Chat Trigger, requests are not signed). Odoo only records, forwards and
-                                manages the conversation: the backend decides the answer, its tools and its
-                                permissions.
+                            <div colspan="2" class="text-muted">
+                                System administrators set up the AI assistants and their AI connections in
+                                Live Chat > Configuration; only the assistants they made available in Live Chat can
+                                be chosen here.
                             </div>
-                            <div colspan="2">
+                            <div colspan="2" groups="base.group_system">
                                 <button name="action_test_ai_connection"
                                         string="Test Connection"
                                         type="object"
                                         class="btn-primary"
-                                        groups="base.group_system"/>
+                                        invisible="not ai_assistant_id"/>
                                 <button name="action_view_api_logs"
-                                        string="AI API Logs"
+                                        string="Call Logs"
                                         type="object"
                                         class="btn-link"/>
                             </div>
                         </group>
                     </group>
 
-                    <group invisible="not ai_enabled">
-                        <group string="Bot Settings">
-                            <field name="ai_bot_name"/>
-                            <field name="ai_bot_partner_id" readonly="1"/>
-                            <field name="ai_welcome_message"/>
-                            <div class="text-muted" colspan="2">
-                                While AI is enabled, visitors see this welcome message instead of the
-                                channel welcome message, so they know they are talking to an AI.
-                            </div>
-                        </group>
-                        <group string="Error Handling">
-                            <field name="ai_error_message"
-                                   placeholder="Sorry, the AI assistant is temporarily unavailable..."/>
-                        </group>
-                    </group>
-
-                    <group string="System Prompt" invisible="not ai_enabled">
-                        <field name="ai_system_prompt"
-                               nolabel="1"
-                               placeholder="Optional. Leave empty to let the backend decide the persona."
-                               colspan="2"/>
+                    <group string="AI Welcome Message" invisible="not ai_enabled">
+                        <field name="ai_welcome_message" nolabel="1" colspan="2"/>
+                        <div class="text-muted" colspan="2">
+                            While AI is enabled, visitors see this welcome message instead of the
+                            channel welcome message, so they know they are talking to an AI.
+                        </div>
                     </group>
 
                     <group string="Human Handoff" invisible="not ai_enabled">
@@ -95,39 +70,12 @@
                         <field name="ai_pause_notice"/>
                         <div class="text-muted" colspan="2">
                             When an operator posts in a conversation, the AI stays silent for the pause
-                            minutes (every operator message extends it). When the visitor writes one of
-                            the keywords, the visitor gets the handoff message, the operators are notified
-                            and the AI waits for an operator; the first visitor message during the wait
-                            gets the waiting notice once. If no operator replies before the wait ends, the
-                            AI answers the messages the visitor wrote meanwhile.
-                        </div>
-                    </group>
-
-                    <group>
-                        <group string="Advanced Settings" invisible="not ai_enabled">
-                            <field name="ai_max_history"/>
-                            <field name="ai_max_retries"/>
-                            <field name="ai_request_timeout"/>
-                        </group>
-                        <group string="API Logs &amp; Privacy">
-                            <field name="ai_log_payload" groups="base.group_system"/>
-                            <field name="ai_log_retention_days"/>
-                        </group>
-                    </group>
-
-                    <group string="Reply Jobs" name="ai_monitoring">
-                        <field name="ai_cron_lastcall" readonly="1"/>
-                        <field name="ai_stale_job_count" readonly="1"/>
-                        <div colspan="2" class="alert alert-warning" role="alert" invisible="not ai_job_warning">
-                            <field name="ai_job_warning" readonly="1"/>
-                        </div>
-                        <div colspan="2" class="text-success" invisible="ai_job_warning">
-                            The recovery cron ran in the last 5 minutes and no reply job is stuck.
-                        </div>
-                        <div colspan="2" class="text-muted">
-                            Replies after a restart or deploy, and the AI answers after an unanswered
-                            handoff wait, are sent by the cron "Live Chat AI: Recover Reply Jobs"
-                            (every 2 minutes). A cron process must be running.
+                            minutes (every operator message extends it). When the visitor asks for a human
+                            (the AI backend decides, or one of the keywords), the visitor gets the handoff
+                            message, the operators are notified and the AI waits for an operator; the first
+                            visitor message during the wait gets the waiting notice once. If no operator
+                            replies before the wait ends, the AI answers the messages the visitor wrote
+                            meanwhile.
                         </div>
                     </group>
                 </page>

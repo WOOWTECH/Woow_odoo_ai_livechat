@@ -1,3 +1,7 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_llm_api_log_manager,llm.api.log.manager,model_llm_api_log,im_livechat.im_livechat_group_manager,1,0,0,1
-access_im_livechat_ai_job_manager,im_livechat.ai.job.manager,model_im_livechat_ai_job,im_livechat.im_livechat_group_manager,1,0,0,1
+access_im_livechat_ai_connection_system,im_livechat.ai.connection.system,model_im_livechat_ai_connection,base.group_system,1,1,1,1
+access_im_livechat_ai_assistant_system,im_livechat.ai.assistant.system,model_im_livechat_ai_assistant,base.group_system,1,1,1,1
+access_im_livechat_ai_assistant_manager,im_livechat.ai.assistant.manager,model_im_livechat_ai_assistant,im_livechat.im_livechat_group_manager,1,0,0,0
+access_im_livechat_ai_job_system,im_livechat.ai.job.system,model_im_livechat_ai_job,base.group_system,1,0,0,1
+access_llm_api_log_system,llm.api.log.system,model_llm_api_log,base.group_system,1,0,0,1
+access_im_livechat_ai_usage_month_system,im_livechat.ai.usage.month.system,model_im_livechat_ai_usage_month,base.group_system,1,0,0,0

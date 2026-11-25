@@ -22,6 +22,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND, TEST_N8N_BACKEND, ok_response
+from .common import add_legacy_channel_columns, make_ai_channel, set_ai
 from .test_backend import _load_migration
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
@@ -47,9 +48,9 @@ class BackendHandoffCase(TransactionCase):
         Channel = cls.env['im_livechat.channel']
         common = {'ai_enabled': True, 'ai_max_retries': 0, 'ai_handoff_keywords': False,
                   'user_ids': [(6, 0, cls.operator_user.ids)]}
-        cls.openai = Channel.create({**TEST_BACKEND, **common, 'name': '官網客服',
+        cls.openai = make_ai_channel(cls.env, {**TEST_BACKEND, **common, 'name': '官網客服',
                                      'ai_system_prompt': 'You are the shop assistant.'})
-        cls.n8n = Channel.create({**TEST_N8N_BACKEND, **common, 'name': 'n8n 客服'})
+        cls.n8n = make_ai_channel(cls.env, {**TEST_N8N_BACKEND, **common, 'name': 'n8n 客服'})
         cls.ResPartner = type(cls.env['res.partner'])
 
     def new_session(self, channel):
@@ -91,7 +92,7 @@ class BackendHandoffCase(TransactionCase):
         channel = channel or session.livechat_channel_id
         return self.env['mail.message'].search([
             ('model', '=', 'discuss.channel'), ('res_id', '=', session.id),
-            ('author_id', '=', channel.ai_bot_partner_id.id),
+            ('author_id', '=', channel._get_bot_partner().id),
         ], order='id')
 
     def odoobot_messages(self, partner):
@@ -116,7 +117,7 @@ class BackendHandoffCase(TransactionCase):
         self.assertTrue(session._ai_is_paused())
         self.assertEqual(session.ai_pause_reason, 'handoff')
         self.assertEqual(len(self.notifications(bus)), 1)
-        self.assertIn('要找真人客服', self.odoobot_messages(self.operator)[-1].body)
+        self.assertIn('wants a human', self.odoobot_messages(self.operator)[-1].body)
 
 
 class TestN8nHandoff(BackendHandoffCase):
@@ -215,7 +216,7 @@ class TestOpenAiHandoff(BackendHandoffCase):
         self.assertFalse(self.odoobot_messages(self.operator))
 
     def test_no_system_line_without_operators(self):
-        self.openai.write({'user_ids': [(5, 0, 0)], 'ai_system_prompt': False})
+        set_ai(self.openai, {'user_ids': [(5, 0, 0)], 'ai_system_prompt': False})
         _session, _job, post, _bus = self.ask('你好', ok_response('您好'))
         messages = self.request_body(post)['messages']
         self.assertNotIn('[[handoff]]', json.dumps(messages, ensure_ascii=False))
@@ -275,6 +276,7 @@ class TestHandoffKeywordPrefilter(BackendHandoffCase):
         spaced = Channel.create({'name': 'Spaced', 'ai_handoff_keywords': HANDOFF_KEYWORDS_1_1_0.replace(',', ', ')})
         custom = Channel.create({'name': 'Custom', 'ai_handoff_keywords': '專人,主管'})
         self.env.flush_all()
+        add_legacy_channel_columns(self.env.cr)  # the script runs on the 18.0.1.x columns
         with self.assertLogs(post.__name__, level='WARNING') as logs:
             post.migrate(self.env.cr, '18.0.1.1.0')
         self.env.invalidate_all()

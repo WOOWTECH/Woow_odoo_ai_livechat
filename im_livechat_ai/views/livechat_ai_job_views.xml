@@ -5,7 +5,7 @@
         <field name="name">im_livechat.ai.job.list</field>
         <field name="model">im_livechat.ai.job</field>
         <field name="arch" type="xml">
-            <list string="AI Reply Jobs" create="false" edit="false">
+            <list string="Reply Jobs" create="false" edit="false">
                 <field name="create_date" widget="datetime"/>
                 <field name="livechat_channel_id"/>
                 <field name="discuss_channel_id"/>
@@ -31,7 +31,7 @@
         <field name="name">im_livechat.ai.job.form</field>
         <field name="model">im_livechat.ai.job</field>
         <field name="arch" type="xml">
-            <form string="AI Reply Job" create="false" edit="false">
+            <form string="Reply Job" create="false" edit="false">
                 <header>
                     <field name="state" widget="statusbar" statusbar_visible="pending,running,done"/>
                 </header>
@@ -68,7 +68,7 @@
         <field name="name">im_livechat.ai.job.search</field>
         <field name="model">im_livechat.ai.job</field>
         <field name="arch" type="xml">
-            <search string="Search AI Reply Jobs">
+            <search string="Search Reply Jobs">
                 <field name="livechat_channel_id"/>
                 <field name="discuss_channel_id"/>
                 <filter name="filter_open" string="Pending or Running"
@@ -89,10 +89,11 @@
 
     <!-- Action -->
     <record id="im_livechat_ai_job_action" model="ir.actions.act_window">
-        <field name="name">AI Reply Jobs</field>
+        <field name="name">Reply Jobs</field>
         <field name="res_model">im_livechat.ai.job</field>
         <field name="view_mode">list,form</field>
-        <field name="groups_id" eval="[(4, ref('im_livechat.im_livechat_group_manager'))]"/>
+        <!-- (6, 0, ...): replace the 18.0.1.x group (Live Chat managers) on upgraded databases too -->
+        <field name="groups_id" eval="[(6, 0, [ref('base.group_system')])]"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_empty_folder">
                 No AI reply jobs yet
@@ -104,11 +105,11 @@
         </field>
     </record>
 
-    <!-- Menu Item -->
+    <!-- Menu Item (system administrators; "-group" unlinks the 18.0.1.x group on upgraded databases) -->
     <menuitem id="im_livechat_ai_job_menu"
-              name="AI Reply Jobs"
+              name="Reply Jobs"
               parent="im_livechat.livechat_config"
               action="im_livechat_ai_job_action"
-              groups="im_livechat.im_livechat_group_manager"
+              groups="-im_livechat.im_livechat_group_manager,base.group_system"
               sequence="49"/>
 </odoo>

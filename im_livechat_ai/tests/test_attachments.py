@@ -22,6 +22,8 @@ from odoo.tools import mute_logger
 from odoo.addons.im_livechat_ai.models import discuss_channel as dc
 
 from .common import TEST_BACKEND, TEST_N8N_BACKEND, call_backend, ok_response
+from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, set_ai,
+                     set_legacy_channel_values)
 from .test_backend import _json_response, _load_migration
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
@@ -65,10 +67,10 @@ class AttachmentCase(TransactionCase):
             cls.env, login='att_operator', name='客服小明',
             groups='base.group_user,im_livechat.im_livechat_group_user',
         )
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND, 'name': '官網客服', 'ai_enabled': True, 'ai_max_retries': 0,
         })
-        cls.n8n = cls.env['im_livechat.channel'].create({
+        cls.n8n = make_ai_channel(cls.env, {
             **TEST_N8N_BACKEND, 'name': 'n8n 客服', 'ai_enabled': True, 'ai_max_retries': 0,
         })
 
@@ -101,7 +103,7 @@ class AttachmentCase(TransactionCase):
         if author == 'visitor':
             vals.update(author_id=False, author_guest_id=self.guest.id)
         elif author == 'bot':
-            vals['author_id'] = session.livechat_channel_id.ai_bot_partner_id.id
+            vals['author_id'] = session.livechat_channel_id._get_bot_partner().id
         else:
             vals['author_id'] = self.operator_user.partner_id.id
         message = self.env['mail.message'].create(vals)
@@ -154,7 +156,7 @@ class TestOpenAiAttachments(AttachmentCase):
             'url': 'data:image/png;base64,' + base64.b64encode(TINY_PNG).decode()}}])
 
     def test_image_in_link_mode_still_inlined(self):
-        self.channel.ai_document_mode = 'link'
+        set_ai(self.channel, {'ai_document_mode': 'link'})
         session = self.session()
         self.post(session, '看圖', [('photo.png', TINY_PNG, 'image/png')])
         self.assertEqual(len(self.parts(self.messages(session)[-1]['content'], 'image_url')), 1)
@@ -181,7 +183,7 @@ class TestOpenAiAttachments(AttachmentCase):
         self.assertEqual(part['file']['file_data'], 'data:%s;base64,%s' % (DOCX_TYPE, base64.b64encode(docx).decode()))
 
     def test_link_mode_gives_a_signed_url_line(self):
-        self.channel.ai_document_mode = 'link'
+        set_ai(self.channel, {'ai_document_mode': 'link'})
         session = self.session()
         _m, (pdf,) = self.post(session, '請看報價單', [('報價單.pdf', PDF, 'application/pdf')])
         content = self.messages(session)[-1]['content']
@@ -193,7 +195,7 @@ class TestOpenAiAttachments(AttachmentCase):
 
     def test_dangerous_types_are_links_even_in_file_mode(self):
         session = self.session()
-        self.assertEqual(self.channel.ai_document_mode, 'file')
+        self.assertEqual(self.channel._ai_document_mode(), 'file')
         _m, attachments = self.post(session, '檔案', [
             ('logo.svg', SVG, 'image/svg+xml'),
             ('page.html', HTML, 'text/html'),
@@ -227,7 +229,23 @@ class TestOpenAiAttachments(AttachmentCase):
         content = self.messages(session)[-1]['content']
         self.assertIsInstance(content, str)
         self.assert_signed_link(content, pdf)
-        self.assertIn('[附件說明] big.pdf：檔案太大（5.0 MB，上限 5.0 MB），只附下載連結。', content)
+        self.assertIn('[附件說明] big.pdf：檔案太大（5.0 MB，上限 4.0 MB），只附下載連結。', content)
+
+    def test_document_over_4_mb_is_a_link(self):
+        """Q13 ⑦ (aligned with Discuss AI and Project AI): a document of 4 to 5 MB is a link."""
+        self.assertEqual(dc.INLINE_DOC_MAX_BYTES, 4 * 1024 * 1024)
+        session = self.session()
+        _m, (pdf,) = self.post(session, '四點五', [('mid.pdf', big_pdf(dc.INLINE_DOC_MAX_BYTES + 512 * 1024),
+                                                  'application/pdf')])
+        content = self.messages(session)[-1]['content']
+        self.assertIsInstance(content, str)
+        self.assert_signed_link(content, pdf)
+        self.assertIn('[附件說明] mid.pdf：檔案太大（4.5 MB，上限 4.0 MB），只附下載連結。', content)
+        # an image of the same size is still inlined (images: 5 MB)
+        session = self.session()
+        raw = TINY_PNG + b'\x00' * (dc.INLINE_DOC_MAX_BYTES + 512 * 1024)
+        self.post(session, '圖', [('mid.png', raw, 'image/png')])
+        self.assertEqual(len(self.parts(self.messages(session)[-1]['content'], 'image_url')), 1)
 
     def test_image_over_size_limit_is_a_link_with_note(self):
         session = self.session()
@@ -304,7 +322,7 @@ class TestOpenAiAttachments(AttachmentCase):
         self.assertTrue(all(isinstance(m['content'], str) for m in messages))
 
     def test_payload_log_has_base64_replaced(self):
-        self.channel.sudo().ai_log_payload = True
+        set_ai(self.channel, {'ai_log_payload': True})
         session = self.session()
         self.post(session, '看檔', [('a.pdf', PDF, 'application/pdf'), ('p.png', TINY_PNG, 'image/png')])
         self.messages(session)
@@ -433,37 +451,39 @@ class TestAttachmentRoute(HttpCase):
 
 class TestDocumentModeUpgrade(TransactionCase):
 
+    """The 18.0.1.2.0 scripts still run on the way up from 18.0.1.1.x (on the 18.0.1.x columns)."""
+
     def test_hermes_channels_get_link(self):
         post = _load_migration('18.0.1.2.0', 'post-migrate')
+        cr = self.env.cr
         Channel = self.env['im_livechat.channel']
-        by_model = Channel.create({'name': 'Hermes model', 'ai_model': 'hermes-agent'})
-        by_url = Channel.create({'name': 'Hermes URL', 'ai_endpoint_url':
-                                 'http://hermes.agents.svc.cluster.local:8642/v1'})
-        litellm = Channel.create({'name': 'LiteLLM', 'ai_model': 'chatgpt-pool/gpt-6-sol',
-                                  'ai_endpoint_url': 'https://litellm.example.com/v1'})
-        already = Channel.create({'name': 'Chosen', 'ai_model': 'hermes-agent', 'ai_document_mode': 'file'})
-        # pre-migrate created the column empty: no channel has a value yet
+        add_legacy_channel_columns(cr)
+        by_model, by_url, litellm, already = (Channel.create({'name': name}) for name in (
+            'Hermes model', 'Hermes URL', 'LiteLLM', 'Chosen'))
         self.env.flush_all()
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_document_mode = NULL WHERE id IN %s",
-                            (tuple((by_model | by_url | litellm).ids),))
-        self.env.invalidate_all()
+        set_legacy_channel_values(cr, by_model.id, ai_model='hermes-agent')
+        set_legacy_channel_values(cr, by_url.id, ai_endpoint_url='http://hermes.agents.svc.cluster.local:8642/v1')
+        set_legacy_channel_values(cr, litellm.id, ai_model='chatgpt-pool/gpt-6-sol',
+                                  ai_endpoint_url='https://litellm.example.com/v1')
+        set_legacy_channel_values(cr, already.id, ai_model='hermes-agent', ai_document_mode='file')
         with mute_logger(post.__name__):
-            post.migrate(self.env.cr, '18.0.1.1.0')
-            post.migrate(self.env.cr, '18.0.1.1.0')  # idempotent
-        self.env.invalidate_all()
-        self.assertEqual(by_model.ai_document_mode, 'link')
-        self.assertEqual(by_url.ai_document_mode, 'link')
-        self.assertEqual(litellm.ai_document_mode, 'file')
-        self.assertEqual(already.ai_document_mode, 'file')  # a value already set is kept
+            post.migrate(cr, '18.0.1.1.0')
+            post.migrate(cr, '18.0.1.1.0')  # idempotent
+        mode = {c.id: legacy_channel_values(cr, c.id, 'ai_document_mode')['ai_document_mode']
+                for c in (by_model, by_url, litellm, already)}
+        self.assertEqual(mode[by_model.id], 'link')
+        self.assertEqual(mode[by_url.id], 'link')
+        self.assertEqual(mode[litellm.id], 'file')
+        self.assertEqual(mode[already.id], 'file')  # a value already set is kept
 
     def test_pre_migrate_creates_the_column_empty(self):
         pre = _load_migration('18.0.1.2.0', 'pre-migrate')
         channel = self.env['im_livechat.channel'].create({'name': 'Pre'})
         self.env.flush_all()
-        self.env.cr.execute("ALTER TABLE im_livechat_channel DROP COLUMN ai_document_mode")
         pre.migrate(self.env.cr, '18.0.1.1.0')
         self.env.cr.execute("SELECT ai_document_mode FROM im_livechat_channel WHERE id = %s", (channel.id,))
         self.assertIsNone(self.env.cr.fetchone()[0])
 
-    def test_new_channel_default_is_file(self):
-        self.assertEqual(self.env['im_livechat.channel'].create({'name': 'Neu'}).ai_document_mode, 'file')
+    def test_new_connection_default_is_file(self):
+        connection = self.env['im_livechat.ai.connection'].create({'name': 'Neu'})
+        self.assertEqual(connection.document_mode, 'file')

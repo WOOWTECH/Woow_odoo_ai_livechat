@@ -5,6 +5,7 @@
 from odoo.tests.common import TransactionCase
 
 from .common import livechat_operator, TEST_BACKEND
+from .common import make_ai_channel, set_ai
 
 
 class TestDiscussChannel(TransactionCase):
@@ -15,7 +16,7 @@ class TestDiscussChannel(TransactionCase):
         super().setUpClass()
 
         # Create livechat channel with AI enabled
-        cls.livechat_channel = cls.env['im_livechat.channel'].create({
+        cls.livechat_channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'AI Test Channel',
             'ai_enabled': True,
@@ -25,7 +26,7 @@ class TestDiscussChannel(TransactionCase):
         })
 
         # Create bot partner
-        cls.bot_partner = cls.livechat_channel._get_or_create_bot_partner()
+        cls.bot_partner = cls.livechat_channel._get_bot_partner()
 
         # Create operator user and partner
         cls.operator_partner = cls.env['res.partner'].create({
@@ -192,7 +193,7 @@ class TestDiscussChannel(TransactionCase):
 
     def test_build_llm_messages_respects_max_history(self):
         """Should respect max_history limit."""
-        self.livechat_channel.write({'ai_max_history': 3})
+        set_ai(self.livechat_channel, {'ai_max_history': 3})
 
         for i in range(5):
             self._create_message(
@@ -207,7 +208,7 @@ class TestDiscussChannel(TransactionCase):
         self.assertTrue(len(non_system) <= 3)
 
         # Restore
-        self.livechat_channel.write({'ai_max_history': 10})
+        set_ai(self.livechat_channel, {'ai_max_history': 10})
 
     def test_build_llm_messages_chronological_order(self):
         """Messages should be in chronological order."""
@@ -230,11 +231,11 @@ class TestDiscussChannel(TransactionCase):
 
     def test_build_llm_messages_no_system_prompt(self):
         """Without a channel prompt (and no event) there is no system message."""
-        self.livechat_channel.write({'ai_system_prompt': False})
+        set_ai(self.livechat_channel, {'ai_system_prompt': False})
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
         self.assertEqual(messages, [{'role': 'user', 'content': 'Hello'}])
 
         # Restore
-        self.livechat_channel.write({'ai_system_prompt': 'You are a helpful assistant.'})
+        set_ai(self.livechat_channel, {'ai_system_prompt': 'You are a helpful assistant.'})

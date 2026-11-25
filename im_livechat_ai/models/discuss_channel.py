@@ -12,7 +12,10 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 
+from markupsafe import Markup
+
 from odoo import api, fields, models
+from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools.mimetypes import guess_mimetype
 
 _logger = logging.getLogger(__name__)
@@ -23,7 +26,7 @@ _HTML_TAG_RE = re.compile(r'<[^>]+>')
 # Prefix of a human operator's message in the LLM history (P1-3).
 OPERATOR_PREFIX = '[真人客服 %s] '
 # Added to the system prompt when the history contains operator messages
-# (operator messages are user turns, as in woow_ai_contact).
+# (operator messages are user turns, aligned with Discuss AI).
 OPERATOR_SYSTEM_NOTE = (
     '對話中以「[真人客服 姓名]」開頭的訊息是真人客服同事對訪客說的話，不是訪客說的，也不是你說的；'
     '不要推翻、否認或更改同事的說法與承諾，必要時請訪客等候同事處理。'
@@ -36,14 +39,13 @@ RESUME_SYSTEM_NOTE = (
     '請一併回答訪客在等候期間提出、還沒有被回答的所有問題。'
 )
 
-# Owner decision 40 (same as woow_ai_contact_livechat): the backend decides
-# when the visitor goes to a human. openai backends (LiteLLM, Hermes) end
-# their reply with this marker; n8n answers "handoff": true or uses the
-# marker in "output" (Chat Trigger workflows).
+# Owner decision 40: the backend decides when the visitor goes to a human.
+# LiteLLM backends end their reply with this marker; n8n answers
+# "handoff": true or uses the marker in "output" (Chat Trigger workflows).
 HANDOFF_MARKER = '[[handoff]]'
 # case insensitive, spaces inside allowed, also escaped (\[\[handoff\]\]) or in backticks
 HANDOFF_MARKER_RE = re.compile(r'`?\\?\[\\?\[\s*handoff\s*\\?\]\\?\]`?', re.IGNORECASE)
-# The only prompt text Odoo adds for the handoff (openai backends, channels with operators).
+# The only prompt text Odoo adds for the handoff (LiteLLM backends, channels with operators).
 HANDOFF_SYSTEM_LINE = (
     '訪客要求真人客服、想跟真人說話時，在回覆最後單獨一行寫 [[handoff]]，系統就會轉接真人客服（不要說無法轉接；'
     '只問電話或聯絡方式不算）。When the visitor asks for a human, end your reply with a line [[handoff]] '
@@ -74,21 +76,23 @@ AUTHOR_BOT = 'bot'  # AI bot, OdooBot, a company partner, or a session operator 
 SKIP_CONTEXT_KEY = 'im_livechat_ai_skip'
 
 
-# --- Visitor attachments (owner decision 39, same limits as woow_ai_contact) ---
+# --- Visitor attachments (owner decision 39, limits aligned with Discuss AI) ---
 # Visitor images and files go to the backend as they are: no text extraction
 # in Odoo. Only attachments of visitor messages are used, never those of the
 # bot, the operators or OdooBot.
-DOCUMENT_MODE_FILE = 'file'  # documents as OpenAI ``file`` parts (LiteLLM, OpenAI)
-DOCUMENT_MODE_LINK = 'link'  # documents as signed download links (Hermes...)
+DOCUMENT_MODE_FILE = 'file'  # documents as OpenAI ``file`` parts (LiteLLM)
+DOCUMENT_MODE_LINK = 'link'  # documents as signed download links (servers that refuse file parts)
 # Inline image types (detected from the content, never from the name).
 INLINE_IMAGE_TYPES = ('image/png', 'image/jpeg', 'image/gif', 'image/webp')
 INLINE_IMAGE_MESSAGES = 3  # the most recent visitor messages whose images are inlined
 INLINE_IMAGE_MAX_COUNT = 4  # images inlined per request
 INLINE_DOC_MESSAGES = 5  # the most recent visitor messages whose documents are inlined ('file' mode)
 INLINE_DOC_MAX_COUNT = 5  # documents inlined per request
-INLINE_FILE_MAX_BYTES = 5 * 1024 * 1024  # per inlined image or document
-# data: URI characters per request, images and documents together (Hermes
-# rejects requests over 10 MB).
+INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # per inlined image
+INLINE_DOC_MAX_BYTES = 4 * 1024 * 1024  # per inlined document (aligned with Discuss AI and Project AI)
+INLINE_FILE_MAX_BYTES = INLINE_IMAGE_MAX_BYTES  # the largest file that is ever read to be inlined
+# data: URI characters per request, images and documents together (keeps one
+# request well under the 10 MB some OpenAI compatible servers accept).
 INLINE_DATA_BUDGET = 7 * 1024 * 1024
 # Signed download URL of a visitor attachment (both backends).
 SIGNED_URL_TTL = 3600  # seconds
@@ -136,8 +140,8 @@ OPAQUE_ARCHIVE_TYPES = frozenset((
 OPAQUE_ARCHIVE_EXTENSIONS = frozenset(('rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'txz', 'cab',
                                        'z', 'zst', 'lz', 'lzma'))
 ZIP_EXTENSIONS = frozenset(('zip',))
-# Documents sent as ``file`` parts in 'file' mode (same list as
-# woow_ai_contact): the types LiteLLM / OpenAI read. Any other file (archive,
+# Documents sent as ``file`` parts in 'file' mode (the list of Discuss AI):
+# the types LiteLLM reads. Any other file (archive,
 # audio, video...) is a link only, so one unsupported part never makes the
 # backend refuse the whole request. Extension -> mimetype used when the
 # uploaded one is missing.
@@ -167,7 +171,7 @@ _DATA_URI_RE = re.compile(r'(data:[a-z0-9.+-]+/[a-z0-9.+-]+(?:;[a-z0-9.+=-]+)*;b
 
 
 def human_size(size):
-    """1234567 -> '1.2 MB' (same format as woow_ai_contact)."""
+    """1234567 -> '1.2 MB' (same format as Discuss AI)."""
     size = float(size or 0)
     for unit in ('B', 'KB', 'MB', 'GB'):
         if size < 1024 or unit == 'GB':
@@ -326,15 +330,16 @@ def _truncate_text(text):
 
 
 # Leading user turn that quotes assistant messages which would otherwise
-# start the conversation (same text as woow_ai_contact).
+# start the conversation (same text as Discuss AI).
 EARLIER_ASSISTANT_PREFIX = '[Messages you (the assistant) sent before this user message]\n'
 
 
 def normalize_turns(turns):
     """OpenAI chat turns (no system message) that start and end with a user turn.
 
-    Hermes treats the last item as the new input, and Anthropic-style models
-    would continue a trailing assistant turn or reject a leading one:
+    OpenAI compatible servers and some models treat the last item as the new
+    input, and Anthropic-style models would continue a trailing assistant
+    turn or reject a leading one:
 
     - assistant turns before the first user turn (the welcome message) are dropped;
     - assistant turns after the last user turn (error or notice messages,
@@ -364,8 +369,8 @@ class DiscussChannel(models.Model):
     Extend discuss.channel to intercept livechat messages and trigger AI responses.
 
     This extension hooks into the message notification pipeline to queue AI
-    replies (sent to the channel's backend) when visitors write in live chat
-    sessions.
+    replies (sent to the backend of the channel's AI assistant) when visitors
+    write in live chat sessions.
     """
     _inherit = 'discuss.channel'
 
@@ -394,6 +399,13 @@ class DiscussChannel(models.Model):
         copy=False,
         help='The waiting notice was already sent during the current handoff wait.',
     )
+    ai_blocked_notice_sent = fields.Boolean(
+        string='AI Unavailable Notice Sent',
+        readonly=True,
+        copy=False,
+        help='The conversation was told once that the AI cannot answer right now; cleared when the AI '
+             'answers again.',
+    )
 
     def _notify_thread(self, message, msg_vals=False, **kwargs):
         """
@@ -416,10 +428,15 @@ class DiscussChannel(models.Model):
             # sudo: the poster may be a guest, a portal or a public user.
             with self.env.cr.savepoint():
                 self.sudo()._ai_handle_new_message(message.sudo())
-        except Exception as e:
+        except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+            # concurrent update (e.g. two posts in the same session at once,
+            # raised when the savepoint flushes Odoo's own writes): the
+            # transaction is aborted, Odoo retries the whole request
+            raise
+        except Exception as e:  # noqa: BLE001 - the visitor's message stays
             _logger.warning(
                 "Failed to trigger AI response for channel %s: %s",
-                self.id, e, exc_info=True,
+                self.id, type(e).__name__, exc_info=True,
             )
 
         return rdata
@@ -556,9 +573,12 @@ class DiscussChannel(models.Model):
     # --- Who wrote a message (P1-1) ---
 
     def _ai_bot_ids(self):
-        """Partner ids that are bots: the AI bots, OdooBot and the companies'
-        own partners (automations such as LINE keyword replies post as the
-        company; they are never a visitor to answer)."""
+        """Partner ids that are bots: the AI bots (every AI assistant's bot
+        partner, former channel bots tagged 「AI 機器人」 without a user, the
+        default bot), OdooBot and the companies' own partners (automations
+        such as LINE keyword replies post as the company; they are never a
+        visitor to answer). Computed once by the callers that classify many
+        messages and passed down."""
         ids = set(self.env['im_livechat.channel']._ai_bot_partner_ids(self.sudo().livechat_channel_id))
         odoobot = self.env.ref('base.partner_root', raise_if_not_found=False)
         if odoobot:
@@ -566,7 +586,7 @@ class DiscussChannel(models.Model):
         ids.update(self.env['res.company'].sudo().with_context(active_test=False).search([]).partner_id.ids)
         return ids
 
-    def _ai_visitor_member(self):
+    def _ai_visitor_member(self, bot_ids=None):
         """The session's visitor member (partner or guest), or an empty recordset.
 
         Odoo creates the operator's member first and then, in the same
@@ -579,7 +599,8 @@ class DiscussChannel(models.Model):
         self.ensure_one()
         session = self.sudo()
         operator = session.livechat_operator_id
-        bot_ids = self._ai_bot_ids()
+        if bot_ids is None:
+            bot_ids = self._ai_bot_ids()
         for member in session.channel_member_ids.sorted('id'):
             if member.create_date and session.create_date and member.create_date > session.create_date:
                 break  # joined later: an invited operator, never the visitor
@@ -589,17 +610,18 @@ class DiscussChannel(models.Model):
             return member
         return self.env['discuss.channel.member']
 
-    def _ai_visitor_partner(self):
+    def _ai_visitor_partner(self, bot_ids=None):
         """Partner of the session's visitor member, or an empty recordset."""
         self.ensure_one()
-        return self._ai_visitor_member().partner_id
+        return self._ai_visitor_member(bot_ids=bot_ids).partner_id
 
-    def _ai_author_kind(self, message, visitor_partner=None):
+    def _ai_author_kind(self, message, visitor_partner=None, bot_ids=None):
         """
         Classify the author of a message: visitor, operator or bot.
 
         Bot exclusion checks come FIRST to prevent response loops:
-        - the channel's AI bot partner and the default AI bot partner
+        - the AI bot partners (every assistant's, former tagged channel bots,
+          the default one)
         - OdooBot (base.partner_root)
         - the companies' own partners (automations posting as the company)
         Then:
@@ -615,9 +637,12 @@ class DiscussChannel(models.Model):
         Args:
             visitor_partner (res.partner|None): result of
                 _ai_visitor_partner(), when the caller classifies many messages
+            bot_ids (set|None): result of _ai_bot_ids(), idem
         """
+        if bot_ids is None:
+            bot_ids = self._ai_bot_ids()
         author = message.author_id
-        if author and author.id in self._ai_bot_ids():
+        if author and author.id in bot_ids:
             return AUTHOR_BOT
 
         if message.author_guest_id or not author:
@@ -628,7 +653,7 @@ class DiscussChannel(models.Model):
             if author == self.sudo().livechat_operator_id:
                 return AUTHOR_OPERATOR
             if visitor_partner is None:
-                visitor_partner = self._ai_visitor_partner()
+                visitor_partner = self._ai_visitor_partner(bot_ids=bot_ids)
             if visitor_partner and author == visitor_partner:
                 return AUTHOR_VISITOR
             return AUTHOR_OPERATOR
@@ -648,8 +673,9 @@ class DiscussChannel(models.Model):
         return self._ai_author_kind(message) == AUTHOR_VISITOR
 
     def _ai_context_messages(self, livechat_channel):
-        """The most recent ai_max_history comment/email messages of this
-        session, oldest first (what the LLM gets as conversation)."""
+        """The most recent comment/email messages of this session (the AI
+        assistant's history length), oldest first (what the backend gets as
+        conversation)."""
         max_history = livechat_channel._ai_max_history_value()
         recent_messages = self.env['mail.message'].search(
             [
@@ -701,7 +727,7 @@ class DiscussChannel(models.Model):
         return 'portal'
 
     def _ai_visitor_identity(self):
-        """Who the AI talks to (woow_ai_contact docs/LIVECHAT.md visitor table).
+        """Who the AI talks to (docs/PROTOCOL.md, "user").
 
         Never the IP address, visited pages, website.visitor tracking, phone
         or address. The email is only part of the n8n JSON, never of the
@@ -769,7 +795,7 @@ class DiscussChannel(models.Model):
             'id': session.id,
             'type': 'livechat',
             'livechat': {
-                # woow_ai_contact_livechat names, and the short aliases
+                # the channel's id and name, and their short aliases
                 'livechat_channel_id': livechat_channel.id,
                 'livechat_channel_name': name,
                 'channel_id': livechat_channel.id,
@@ -785,13 +811,13 @@ class DiscussChannel(models.Model):
         """
         What the backend gets for one reply, independent of the protocol.
 
-        History roles (woow_ai_contact protocol): visitor -> user; AI bot ->
+        History roles (docs/PROTOCOL.md): visitor -> user; AI bot ->
         assistant; human operator -> user marked "[真人客服 name]" (the name
         visitors see), so the model treats it as a colleague's words and
-        never as its own. Odoo adds no persona:
-        only the channel's optional system prompt and conversation events
-        (facts): operator replies in the history, and the end of a handoff
-        wait that no operator answered.
+        never as its own. Odoo adds no persona: only the AI assistant's
+        optional system prompt and conversation events (facts): operator
+        replies in the history, and the end of a handoff wait that no
+        operator answered.
 
         Args:
             livechat_channel (im_livechat.channel): The livechat channel config
@@ -811,7 +837,8 @@ class DiscussChannel(models.Model):
         """
         if recent_messages is None:
             recent_messages = self._ai_context_messages(livechat_channel)
-        visitor_partner = self._ai_visitor_partner()
+        bot_ids = self._ai_bot_ids()
+        visitor_partner = self._ai_visitor_partner(bot_ids=bot_ids)
         Attachment = self.env['ir.attachment'].sudo()
         # One prefetch set for the attachment metadata of the whole context
         # (the content is read one file at a time, see attachment_raw).
@@ -820,7 +847,7 @@ class DiscussChannel(models.Model):
         first_operator_date = None
         for msg in recent_messages:
             clean_body = _clean_text(msg.body)
-            kind = self._ai_author_kind(msg, visitor_partner=visitor_partner)
+            kind = self._ai_author_kind(msg, visitor_partner=visitor_partner, bot_ids=bot_ids)
             attachments = Attachment
             if kind == AUTHOR_VISITOR:
                 clean_body = _truncate_text(clean_body)
@@ -844,7 +871,7 @@ class DiscussChannel(models.Model):
             events.append({'time': fields.Datetime.now(), 'kind': 'resume', 'text': RESUME_SYSTEM_NOTE})
         return {
             'history': history,
-            'system_prompt': (livechat_channel.sudo().ai_system_prompt or '').strip(),
+            'system_prompt': (livechat_channel._ai_assistant().system_prompt or '').strip(),
             'events': events,
         }
 
@@ -894,11 +921,11 @@ class DiscussChannel(models.Model):
 
         - Images (type from the content): the INLINE_IMAGE_MESSAGES most
           recent visitor messages, newest first, at most
-          INLINE_IMAGE_MAX_COUNT, INLINE_FILE_MAX_BYTES each; both modes.
+          INLINE_IMAGE_MAX_COUNT, INLINE_IMAGE_MAX_BYTES each; both modes.
         - Documents (DOCUMENT_TYPES: PDF, Word, Excel, text), 'file' mode: the
           INLINE_DOC_MESSAGES most recent visitor messages, newest first, at
           most INLINE_DOC_MAX_COUNT, original bytes and mimetype,
-          INLINE_FILE_MAX_BYTES each.
+          INLINE_DOC_MAX_BYTES each (a larger one is a link).
         - Images first, then documents share INLINE_DATA_BUDGET data URI
           characters. A file skipped because of a limit gets a note.
         """
@@ -926,9 +953,9 @@ class DiscussChannel(models.Model):
         def note(name, reason):
             return {'note': ATTACHMENT_NOTE % (name, reason)}
 
-        def too_large(attachment, kind):
+        def too_large(attachment, kind, limit):
             return note(attachment.name or 'file', '%s太大（%s，上限 %s），只附下載連結。' % (
-                kind, human_size(attachment.file_size), human_size(INLINE_FILE_MAX_BYTES)))
+                kind, human_size(attachment.file_size), human_size(limit)))
 
         budget_reason = '這次請求的附件總量已達上限（%s），只附下載連結。' % human_size(INLINE_DATA_BUDGET)
 
@@ -941,7 +968,7 @@ class DiscussChannel(models.Model):
                 raw, sniffed, link_only = content(attachment)
                 if raw is None:
                     if plain_mimetype(attachment.mimetype) in INLINE_IMAGE_TYPES:
-                        plan[key] = too_large(attachment, '圖片')
+                        plan[key] = too_large(attachment, '圖片', INLINE_IMAGE_MAX_BYTES)
                     continue
                 if link_only or sniffed not in INLINE_IMAGE_TYPES:
                     continue
@@ -964,16 +991,20 @@ class DiscussChannel(models.Model):
                 if key in plan or is_link_only(attachment.name, attachment.mimetype):
                     continue
                 raw, sniffed, link_only = content(attachment)
+                is_document = file_extension(attachment.name) in DOCUMENT_TYPES \
+                    or plain_mimetype(attachment.mimetype) == 'application/pdf'
                 if raw is None:
-                    extension = file_extension(attachment.name)
-                    if extension in DOCUMENT_TYPES or plain_mimetype(attachment.mimetype) == 'application/pdf':
-                        plan[key] = too_large(attachment, '檔案')
+                    if is_document:
+                        plan[key] = too_large(attachment, '檔案', INLINE_DOC_MAX_BYTES)
                     continue
                 if link_only or sniffed in INLINE_IMAGE_TYPES or not raw:
                     continue  # dangerous, an image (older or already decided), or empty
                 mimetype = document_mimetype(attachment.name, attachment.mimetype, raw)
                 if not mimetype:
                     continue  # not a document the backend reads (archive, media...): a link
+                if len(raw) > INLINE_DOC_MAX_BYTES:
+                    plan[key] = too_large(attachment, '檔案', INLINE_DOC_MAX_BYTES)
+                    continue
                 if documents >= INLINE_DOC_MAX_COUNT:
                     plan[key] = note(attachment.name or 'file',
                                      '每次最多附上 %s 個檔案，這個只附下載連結。' % INLINE_DOC_MAX_COUNT)
@@ -994,8 +1025,9 @@ class DiscussChannel(models.Model):
         user turn (see normalize_turns).
 
         A visitor turn with attachments (owner decision 39) carries them as
-        they are: images as ``image_url`` data URIs, documents in 'file' mode
-        as ``file`` parts with the original bytes and mimetype (plus a
+        they are: images as ``image_url`` data URIs, documents in the AI
+        connection's 'file' mode as ``file`` parts with the original bytes and
+        mimetype (plus a
         ``[附件]`` line), every other attachment as a ``[附件]`` line with its
         signed download URL (and a ``[附件說明]`` note when a limit skipped
         it). Such a turn's content becomes a list of parts.
@@ -1003,7 +1035,7 @@ class DiscussChannel(models.Model):
         When the channel has operators, HANDOFF_SYSTEM_LINE ends the system
         message: the model ends its reply with [[handoff]] to hand over."""
         livechat_channel = livechat_channel or self.sudo().livechat_channel_id
-        mode = (livechat_channel.sudo().ai_document_mode if livechat_channel else None) or DOCUMENT_MODE_FILE
+        mode = (livechat_channel._ai_document_mode() if livechat_channel else None) or DOCUMENT_MODE_FILE
         parts = [conversation['system_prompt']] + [event['text'] for event in conversation['events']]
         if self._ai_handoff_available():
             parts.append(HANDOFF_SYSTEM_LINE)  # always the last line (owner decision 40)
@@ -1042,6 +1074,31 @@ class DiscussChannel(models.Model):
             turns.append({'role': entry['role'], 'content': content})
         turns = normalize_turns(turns)
         return ([{'role': 'system', 'content': system}] if system else []) + turns
+
+    # --- When the AI cannot answer ---
+
+    def _ai_visitor_lang(self):
+        """Language of the visitor (for the default texts), '' when unknown."""
+        self.ensure_one()
+        return self._ai_visitor_identity().get('lang') or ''
+
+    def _ai_post_blocked_notice(self, livechat_channel):
+        """Tell the conversation once per blocked period that the AI cannot
+        answer right now: a notification message (the history never reads it,
+        it is never answered), as the AI assistant's bot partner (or the
+        module's default bot), in the visitor's language."""
+        self.ensure_one()
+        session = self.sudo()
+        if session.ai_blocked_notice_sent:
+            return self.env['mail.message']
+        lang = self.env['im_livechat.ai.assistant']._installed_lang(session._ai_visitor_lang())
+        text = self.with_context(lang=lang).env._(
+            'The AI assistant cannot answer right now. Our team will get back to you as soon as possible.')
+        author = livechat_channel._get_bot_partner()
+        session.ai_blocked_notice_sent = True
+        return session.with_context(mail_create_nosubscribe=True).message_post(
+            body=Markup('<div class="o_mail_notification">%s</div>') % text, author_id=author.id,
+            message_type='notification', subtype_xmlid='mail.mt_comment')
 
     def _build_llm_messages(self, livechat_channel, recent_messages=None, resume=False):
         """OpenAI chat completion messages of this session (see _ai_conversation)."""

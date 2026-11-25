@@ -47,6 +47,8 @@ from .common import (
     call_backend,
     ok_response,
 )
+from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, set_ai,
+                     set_legacy_channel_values)
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -83,14 +85,14 @@ class BackendCase(TransactionCase):
             cls.env, login='be_operator', name='客服小明',
             groups='base.group_user,im_livechat.im_livechat_group_user',
         )
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': '官網客服',
             'ai_enabled': True,
             'ai_system_prompt': '你是官網客服。',
             'ai_max_retries': 0,
         })
-        cls.n8n = cls.env['im_livechat.channel'].create({
+        cls.n8n = make_ai_channel(cls.env, {
             **TEST_N8N_BACKEND,
             'name': 'n8n 客服',
             'ai_enabled': True,
@@ -117,129 +119,102 @@ class BackendCase(TransactionCase):
     def _post_bot(self, session, channel, text):
         return self.env['mail.message'].create({
             'body': text, 'model': 'discuss.channel', 'res_id': session.id,
-            'message_type': 'comment', 'author_id': channel.ai_bot_partner_id.id,
+            'message_type': 'comment', 'author_id': channel._get_bot_partner().id,
         })
 
 
 class TestConnectionAccess(BackendCase):
-    """Owner decision 4: the connection is per channel and only system
-    administrators read or write the URL and the token."""
+    """Owner decisions Q12 A and Q13 ② (18.0.2.0.0): system administrators set
+    up the AI connections and assistants; a Live Chat manager only picks an
+    assistant on the channel and turns the AI on. The key is write-only and
+    lives on the connection (see test_connection.py)."""
 
-    def test_manager_cannot_read_url_or_token(self):
-        Channel = self.env['im_livechat.channel'].with_user(self.manager)
-        for fname in ('ai_endpoint_url', 'ai_api_token', 'ai_api_token_set', 'ai_log_payload'):
-            with self.assertRaises(AccessError, msg=fname):
-                Channel.browse(self.channel.id).read([fname])
-        values = Channel.browse(self.channel.id).read(['ai_connection_ready', 'ai_backend_type', 'ai_model'])[0]
-        self.assertTrue(values['ai_connection_ready'])
-        self.assertEqual(values['ai_backend_type'], 'openai')
-        # A read without field list leaves the restricted fields out.
-        row = Channel.search_read([('id', '=', self.channel.id)])[0]
-        for fname in ('ai_endpoint_url', 'ai_api_token', 'ai_api_token_set', 'ai_log_payload'):
-            self.assertNotIn(fname, row)
-        self.assertNotIn(TEST_API_KEY, json.dumps(row, default=str))
-
-    def test_manager_cannot_write_connection(self):
-        channel = self.channel.with_user(self.manager)
-        for vals in ({'ai_endpoint_url': 'https://evil.example/v1'}, {'ai_api_token': 'dummy-evil'},
-                     {'ai_backend_type': 'n8n'}, {'ai_log_payload': True}):
-            with self.assertRaises(AccessError, msg=vals), self.env.cr.savepoint():
-                channel.write(vals)
+    def test_manager_reads_the_channel_ai_not_the_connection(self):
+        channel = self.env['im_livechat.channel'].with_user(self.manager).browse(self.channel.id)
+        values = channel.read(['ai_enabled', 'ai_assistant_id', 'ai_state', 'ai_state_reason'])[0]
+        self.assertTrue(values['ai_enabled'])
+        self.assertEqual(values['ai_state'], 'ok')
+        self.assertFalse(values['ai_state_reason'])
         with self.assertRaises(AccessError):
-            self.env['im_livechat.channel'].with_user(self.manager).create({
-                'name': 'Manager URL', 'ai_endpoint_url': 'https://evil.example/v1',
-            })
-        # The unchanged backend type (sent by the form) is accepted.
-        channel.write({'ai_backend_type': 'openai', 'ai_model': 'other/model', 'ai_system_prompt': '新提示'})
-        self.assertEqual(self.channel.ai_endpoint_url, TEST_BASE_URL)
-        self.assertEqual(self.channel._ai_get_token(), TEST_API_KEY)
-        # A manager may create a channel (no connection yet) and switch AI off/on.
-        new = self.env['im_livechat.channel'].with_user(self.manager).create({
-            'name': 'Manager Channel', 'ai_backend_type': 'openai', 'ai_model': 'x',
-        })
-        self.assertFalse(new.sudo().ai_connection_ready)
+            self.channel.sudo().ai_assistant_id.connection_id.with_user(self.manager).read(['endpoint_url'])
+        with self.assertRaises(AccessError):
+            self.channel.sudo().ai_assistant_id.with_user(self.manager).read(['connection_id'])
+        row = channel.search_read([('id', '=', self.channel.id)])[0]
+        self.assertNotIn(TEST_API_KEY, json.dumps(row, default=str))
+        self.assertNotIn(TEST_BASE_URL, json.dumps(row, default=str))
+
+    def test_manager_cannot_write_connection_or_assistant(self):
+        assistant = self.channel.sudo().ai_assistant_id
+        with self.assertRaises(AccessError):
+            assistant.connection_id.with_user(self.manager).write({'endpoint_url': 'https://evil.example/v1'})
+        with self.assertRaises(AccessError):
+            assistant.with_user(self.manager).write({'name': 'renamed'})
+        with self.assertRaises(AccessError):
+            self.env['im_livechat.ai.connection'].with_user(self.manager).create({'name': 'x'})
+        # A manager may create a channel (no assistant) and switch AI off/on.
+        new = self.env['im_livechat.channel'].with_user(self.manager).create({'name': 'Manager Channel'})
+        self.assertEqual(new.sudo().ai_state, 'off')
+        channel = self.channel.with_user(self.manager)
         channel.write({'ai_enabled': False})
         channel.write({'ai_enabled': True})
 
-    def test_manager_cannot_enable_without_connection(self):
-        new = self.env['im_livechat.channel'].create({'name': 'No Connection', 'ai_model': 'x'})
+    def test_manager_cannot_enable_without_assistant(self):
+        new = self.env['im_livechat.channel'].create({'name': 'No Assistant'})
         with self.assertRaises(UserError) as caught:
             new.with_user(self.manager).write({'ai_enabled': True})
-        self.assertIn('尚未設定後端連線', str(caught.exception))
-        self.assertIn('系統管理員', str(caught.exception))
-
-    def test_admin_reads_and_writes(self):
-        channel = self.channel.with_user(self.admin)
-        channel.write({'ai_endpoint_url': 'https://gateway.example/v1', 'ai_api_token': 'dummy-new-token'})
-        values = channel.read(['ai_endpoint_url', 'ai_api_token', 'ai_api_token_set', 'ai_connection_ready'])[0]
-        self.assertEqual(values['ai_endpoint_url'], 'https://gateway.example/v1')
-        # Write-only: the token is never read back, only "saved".
-        self.assertFalse(values['ai_api_token'])
-        self.assertTrue(values['ai_api_token_set'])
-        self.assertTrue(values['ai_connection_ready'])
-        self.assertEqual(self.channel._ai_get_token(), 'dummy-new-token')
-        # Empty input keeps the saved token.
-        channel.write({'ai_api_token': ''})
-        channel.write({'ai_api_token': False, 'ai_model': 'm2'})
-        self.assertEqual(self.channel._ai_get_token(), 'dummy-new-token')
-
-    def test_token_is_not_a_stored_field(self):
-        self.assertFalse(self.channel._fields['ai_api_token'].store)
-        self.assertNotIn(TOKEN_COLUMN, self.channel._fields)
-        self.env.flush_all()
-        self.env.cr.execute("SELECT count(*) FROM im_livechat_channel WHERE ai_api_token_secret IS NOT NULL")
-        self.assertGreaterEqual(self.env.cr.fetchone()[0], 2)
-
-    def test_web_save_does_not_echo_token(self):
-        result = self.channel.with_user(self.admin).web_save(
-            {'ai_api_token': 'dummy-typed-token'}, {'ai_api_token': {}, 'ai_api_token_set': {}})
-        self.assertFalse(result[0]['ai_api_token'])
-        self.assertTrue(result[0]['ai_api_token_set'])
+        self.assertIn('has no AI assistant that can answer yet', str(caught.exception))
+        self.assertIn('Live Chat > Configuration > AI Assistants', str(caught.exception))
 
     def test_form_fields_per_group(self):
         def arch(user):
             return self.env['im_livechat.channel'].with_user(user).get_views(
                 [(False, 'form')])['views']['form']['arch']
         manager_arch = arch(self.manager)
-        for fname in ('ai_endpoint_url', 'ai_api_token', 'ai_log_payload', 'action_test_ai_connection'):
+        for fname in ('action_test_ai_connection', 'action_view_api_logs', 'endpoint_url', 'api_key'):
             self.assertNotIn(fname, manager_arch)
-        for fname in ('ai_connection_ready', 'ai_backend_type', 'ai_model', 'action_view_api_logs',
-                      'ai_log_retention_days', 'ai_job_warning'):
+        for fname in ('ai_enabled', 'ai_assistant_id', 'ai_state', 'ai_state_reason', 'ai_handoff_keywords',
+                      'ai_welcome_message'):
             self.assertIn(fname, manager_arch)
         admin_arch = arch(self.admin)
-        for fname in ('ai_endpoint_url', 'ai_api_token', 'ai_log_payload', 'action_test_ai_connection'):
+        for fname in ('action_test_ai_connection', 'action_view_api_logs', 'ai_assistant_id'):
             self.assertIn(fname, admin_arch)
+        operator_arch = arch(self.operator_user)
+        self.assertNotIn('ai_assistant_id', operator_arch)
 
-    @patch(POST)
-    def test_connection_test_is_admin_only(self, mock_post):
-        mock_post.return_value = ok_response()
+    @patch('odoo.addons.im_livechat_ai.models.ai_connection.requests.get')
+    def test_connection_test_is_admin_only(self, mock_get):
+        mock_get.return_value = _json_response({'data': [{'id': 'chatgpt-pool/gpt-6-sol'}]})
         with self.assertRaises(AccessError):
             self.channel.with_user(self.manager).action_test_ai_connection()
-        mock_post.assert_not_called()
+        mock_get.assert_not_called()
         result = self.channel.with_user(self.admin).action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
-        payload = mock_post.call_args.kwargs['json']
-        self.assertEqual(payload['model'], 'chatgpt-pool/gpt-6-sol')
-        self.assertNotIn('max_tokens', payload)
+        args, kwargs = mock_get.call_args
+        self.assertEqual(args[0], TEST_BASE_URL + '/models')
+        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer ' + TEST_API_KEY)
+        self.assertIs(kwargs['allow_redirects'], False)
         self.assertNotIn(TEST_API_KEY, result['params']['message'])
 
-    def test_copy_has_no_token(self):
+    def test_copy_keeps_an_active_assistant_and_turns_ai_off(self):
         copy = self.channel.with_user(self.manager).copy()
         self.assertFalse(copy.sudo().ai_enabled)
-        self.assertFalse(copy.sudo().ai_api_token_set)
+        self.assertEqual(copy.sudo().ai_assistant_id, self.channel.sudo().ai_assistant_id)
+        self.channel.write({'ai_enabled': False})
+        self.channel.sudo().ai_assistant_id.active = False
+        self.assertFalse(self.channel.copy().sudo().ai_assistant_id)
 
 
 class TestEndpointUrlValidation(BackendCase):
-    """https only; http only for local and in-cluster hosts (woow_ai_contact rule)."""
+    """https only; http only for local and in-cluster hosts (aligned with Discuss AI)."""
 
     def test_allowed_and_refused(self):
         allowed = (
             'https://litellm.example.com/v1', 'https://n8n.example.com/webhook/x',
             'http://localhost:4000/v1', 'http://127.0.0.1:8642/v1', 'http://[::1]:8642/v1',
-            'http://hermes.ai.svc.cluster.local:8642/v1', 'HTTPS://Upper.Example/v1',
+            'http://agents.ai.svc.cluster.local:8642/v1', 'HTTPS://Upper.Example/v1',
         )
         refused = (
-            'http://hermes:8642/v1', 'http://litellm.example.com/v1', 'ftp://example.com',
+            'http://agents:8642/v1', 'http://litellm.example.com/v1', 'ftp://example.com',
             'litellm.example.com/v1', 'javascript:alert(1)', 'http://svc.cluster.local.evil.com/v1',
             'https://', 'not a url',
         )
@@ -249,23 +224,28 @@ class TestEndpointUrlValidation(BackendCase):
             self.assertFalse(endpoint_url_allowed(url), url)
 
     def test_constraint_on_save(self):
-        for url in ('http://hermes:8642/v1', 'http://example.com/hook', 'ftp://x.example'):
+        connection = self.channel.sudo().ai_assistant_id.connection_id
+        for url in ('http://agents:8642/v1', 'http://example.com/hook', 'ftp://x.example'):
             with self.assertRaises(ValidationError, msg=url), self.env.cr.savepoint():
-                self.channel.write({'ai_endpoint_url': url})
-        self.channel.write({'ai_endpoint_url': 'http://hermes.ai.svc.cluster.local:8642/v1'})
-        self.assertTrue(self.channel.ai_connection_ready)
+                connection.write({'endpoint_url': url, 'api_key': 'dummy-new-key'})
+        connection.write({'endpoint_url': 'http://agents.ai.svc.cluster.local:8642/v1', 'api_key': 'dummy-new-key'})
+        self.assertEqual(connection.readiness, 'ok')
+        self.assertTrue(self.channel._ai_connection_is_ready())
 
     @patch(POST)
     def test_url_set_in_sql_is_refused_at_runtime(self, mock_post):
         """A URL that bypassed the constraint (e.g. migrated) is never called."""
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_endpoint_url = 'http://litellm:4000/v1' "
-                            "WHERE id = %s", (self.channel.id,))
+        connection = self.channel.sudo().ai_assistant_id.connection_id
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET endpoint_url = 'http://litellm:4000/v1' "
+                            "WHERE id = %s", (connection.id,))
         self.env.invalidate_all()
-        self.assertFalse(self.channel.ai_connection_ready)
+        self.assertEqual(connection.readiness, 'blocked')
+        self.assertFalse(self.channel._ai_connection_is_ready())
         with mute_logger(CHANNEL_LOGGER):
             result = call_backend(self.channel)
         mock_post.assert_not_called()
-        self.assertIn('尚未設定 AI 後端連線', result['error'])
+        self.assertIn('the AI assistant or its AI connection is not set up', result['error'])
 
 
 class TestOpenAiRequest(BackendCase):
@@ -280,7 +260,9 @@ class TestOpenAiRequest(BackendCase):
         args, kwargs = mock_post.call_args
         self.assertEqual(args[0], TEST_BASE_URL + '/chat/completions')
         self.assertEqual(kwargs['headers']['Authorization'], 'Bearer ' + TEST_API_KEY)
-        self.assertEqual(kwargs['timeout'], LLM_REQUEST_TIMEOUT)
+        connect, read = kwargs['timeout']
+        self.assertEqual(connect, 10)
+        self.assertAlmostEqual(read, LLM_REQUEST_TIMEOUT, delta=1)
         self.assertIs(kwargs['allow_redirects'], False)
         payload = kwargs['json']
         self.assertEqual(list(payload), ['model', 'messages', 'user', 'metadata'])
@@ -297,9 +279,15 @@ class TestOpenAiRequest(BackendCase):
         self.assertEqual(metadata['odoo_is_portal'], 'false')
         self.assertEqual(metadata['odoo_name'], '訪客 42')
         self.assertEqual(metadata['livechat_channel'], '官網客服')
+        # the contract's surface keys (session_id first, then surface_*, then odoo_*)
+        self.assertEqual(metadata['surface_type'], 'livechat')
+        self.assertEqual(metadata['surface_livechat_channel_id'], str(self.channel.id))
+        self.assertEqual(list(metadata)[:3], ['session_id', 'surface_type', 'surface_livechat_channel_id'])
         self.assertTrue(all(isinstance(v, str) for v in metadata.values()))
-        self.assertTrue(set(metadata) <= {'session_id', 'odoo_partner_id', 'odoo_guest_id', 'odoo_name',
-                                          'odoo_lang', 'odoo_is_portal', 'odoo_is_guest', 'livechat_channel'})
+        self.assertLessEqual(len(metadata), 16)
+        self.assertTrue(set(metadata) <= {'session_id', 'surface_type', 'surface_livechat_channel_id',
+                                          'odoo_partner_id', 'odoo_guest_id', 'odoo_name', 'odoo_lang',
+                                          'odoo_is_portal', 'odoo_is_guest', 'livechat_channel'})
 
     @patch(POST)
     def test_portal_identity_has_no_email_in_metadata(self, mock_post):
@@ -329,7 +317,7 @@ class TestOpenAiRequest(BackendCase):
         """The welcome message before the first visitor message is dropped; a
         bot message after the last visitor message moves before it."""
         mock_post.return_value = ok_response()
-        self.channel.write({'ai_system_prompt': False})
+        set_ai(self.channel, {'ai_system_prompt': False})
         session, guest, _m = self._guest_session(self.channel, text=None)
         self._post_bot(session, self.channel, '歡迎光臨')
         self.env['mail.message'].create({
@@ -350,17 +338,59 @@ class TestOpenAiRequest(BackendCase):
 
     @patch(SLEEP)
     @patch(POST)
-    def test_openai_keeps_retry_policy(self, mock_post, mock_sleep):
-        """openai: every failure is retried within ai_max_retries (3 s, 10 s)."""
-        self.channel.write({'ai_max_retries': 2})
-        bad = ok_response()
-        bad.status_code = 502
-        mock_post.side_effect = [bad, requests.ReadTimeout('slow'), ok_response('第三次')]
+    def test_openai_retry_policy(self, mock_post, mock_sleep):
+        """Q13 ③ (18.0.2.0.0): LiteLLM follows the n8n rule. Retried (3 s, then 10
+        s): not sent, HTTP 429 and 503; never a read timeout, a 401, a 502 or a
+        reset after sending (the backend may already be answering)."""
+        set_ai(self.channel, {'ai_max_retries': 2})
+        status_429, status_503 = ok_response(), ok_response()
+        status_429.status_code, status_503.status_code = 429, 503
+        mock_post.side_effect = [status_429, status_503, ok_response('第三次')]
         with mute_logger(CHANNEL_LOGGER):
             result = call_backend(self.channel)
         self.assertEqual(result['replies'], ['第三次'])
         self.assertEqual(mock_post.call_count, 3)
         self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3, 10])
+        for outcome in (requests.ReadTimeout('slow'), _json_response({}, status=401),
+                        _json_response({}, status=502),
+                        requests.ConnectionError('Connection aborted after the request was sent')):
+            with self.subTest(outcome=outcome):
+                mock_post.reset_mock(side_effect=True, return_value=True)
+                mock_sleep.reset_mock()
+                mock_post.side_effect = [outcome, ok_response('不該到這裡')]
+                with mute_logger(CHANNEL_LOGGER):
+                    result = call_backend(self.channel)
+                self.assertTrue(result['error'])
+                self.assertEqual(mock_post.call_count, 1)
+                mock_sleep.assert_not_called()
+
+    @patch(SLEEP)
+    @patch(POST)
+    def test_timeout_is_the_total_of_one_answer(self, mock_post, mock_sleep):
+        """The connection's timeout bounds the whole answer, retries included: a
+        retry is made only while its wait fits in the time left, and each call
+        reads at most the time left."""
+        set_ai(self.channel, {'ai_max_retries': 2, 'ai_request_timeout': 12})
+        status_429 = ok_response()
+        status_429.status_code = 429
+        clock = [1000.0]
+
+        def fake_time():
+            return clock[0]
+
+        def fake_sleep(seconds):
+            clock[0] += seconds
+        mock_sleep.side_effect = fake_sleep
+        mock_post.side_effect = [status_429, status_429, ok_response('不會到')]
+        with patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.time.time', side_effect=fake_time), \
+                mute_logger(CHANNEL_LOGGER):
+            result = call_backend(self.channel)
+        # 12 s: the first wait (3 s) fits, the second (10 s) does not
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3])
+        self.assertIn('HTTP 429', result['error'])
+        reads = [c.kwargs['timeout'][1] for c in mock_post.call_args_list]
+        self.assertEqual(reads, [12, 9])
 
 
 class TestN8nRequest(BackendCase):
@@ -404,7 +434,7 @@ class TestN8nRequest(BackendCase):
 
     @patch(POST)
     def test_payload(self, mock_post):
-        self.n8n.write({'ai_system_prompt': '你是 n8n 客服。'})
+        set_ai(self.n8n, {'ai_system_prompt': '你是 n8n 客服。'})
         session, guest, message = self._guest_session(self.n8n, text='第一個問題')
         self._post_bot(session, self.n8n, '第一個回答')
         second = self.env['mail.message'].create({
@@ -496,16 +526,16 @@ class TestN8nRequest(BackendCase):
     @patch(POST)
     def test_invalid_answers_are_errors(self, mock_post):
         cases = (
-            ({'text': 'no reply key'}, '回應格式不正確'),
-            ({'reply': {'text': ''}}, 'AI 回覆是空的'),
-            ({'reply': {'text': '   '}}, 'AI 回覆是空的'),
-            ({'replies': 'not a list'}, '回應格式不正確'),
-            ({'replies': [123]}, '回應格式不正確'),
-            ({'skip': 'yes'}, '回應格式不正確'),
-            ('just a string', '回應格式不正確'),
-            ({'output': ''}, 'AI 回覆是空的'),
-            ({'output': {'text': 'x'}}, '回應格式不正確'),
-            ([{'output': None}], '回應格式不正確'),
+            ({'text': 'no reply key'}, 'the answer has an invalid format'),
+            ({'reply': {'text': ''}}, 'the AI answer is empty'),
+            ({'reply': {'text': '   '}}, 'the AI answer is empty'),
+            ({'replies': 'not a list'}, 'the answer has an invalid format'),
+            ({'replies': [123]}, 'the answer has an invalid format'),
+            ({'skip': 'yes'}, 'the answer has an invalid format'),
+            ('just a string', 'the answer has an invalid format'),
+            ({'output': ''}, 'the AI answer is empty'),
+            ({'output': {'text': 'x'}}, 'the answer has an invalid format'),
+            ([{'output': None}], 'the answer has an invalid format'),
         )
         with mute_logger(CHANNEL_LOGGER):
             for data, error in cases:
@@ -516,7 +546,7 @@ class TestN8nRequest(BackendCase):
             not_json = _json_response({})
             not_json.json.side_effect = ValueError('no json')
             result, _s = self._call(mock_post, not_json)
-            self.assertIn('回應格式不正確', result['error'])
+            self.assertIn('the answer has an invalid format', result['error'])
             result, _s = self._call(mock_post, _json_response({'error': 'agent_failed'}, status=502))
             self.assertIn('HTTP 502', result['error'])
         # Each of these was one call: answers are never retried.
@@ -582,8 +612,12 @@ class TestN8nRequest(BackendCase):
         self.assertEqual(result['params']['type'], 'success')
         kwargs = mock_post.call_args.kwargs
         body = kwargs['data']
+        assistant = self.n8n.sudo().ai_assistant_id
+        connection = assistant.connection_id
         self.assertEqual(json.loads(body), {
             'event': 'ping', 'contact': {'id': self.n8n.id, 'name': 'n8n 客服'},
+            'assistant': {'id': assistant.id, 'name': assistant.name},
+            'connection': {'id': connection.id, 'name': connection.name},
             'action': 'loadPreviousSession', 'sessionId': 'woow-ai-ping-%s' % self.n8n.id,
         })
         self.assertNotIn('Authorization', kwargs['headers'])
@@ -608,19 +642,19 @@ class TestN8nChatTrigger(BackendCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.chat = cls.env['im_livechat.channel'].create({
+        cls.chat = make_ai_channel(cls.env, {
             'name': '智居顧問', 'ai_backend_type': 'n8n', 'ai_endpoint_url': cls.CHAT_URL,
             'ai_enabled': True, 'ai_max_retries': 2,
         })
 
     def test_token_optional_for_n8n_only(self):
         self.assertTrue(self.chat.ai_enabled)
-        self.assertTrue(self.chat.ai_connection_ready)
-        self.assertFalse(self.chat.ai_api_token_set)
-        openai = self.env['im_livechat.channel'].create({
+        self.assertTrue(self.chat._ai_connection_is_ready())
+        self.assertFalse(self.chat.sudo().ai_assistant_id.connection_id.api_key_set)
+        openai = make_ai_channel(self.env, {
             'name': 'OpenAI no token', 'ai_endpoint_url': TEST_BASE_URL, 'ai_model': 'm',
         })
-        self.assertFalse(openai.ai_connection_ready)
+        self.assertFalse(openai._ai_connection_is_ready())
         with self.assertRaises(UserError):
             openai.write({'ai_enabled': True})
 
@@ -659,10 +693,11 @@ class TestN8nChatTrigger(BackendCase):
         self.assertEqual(LLM_REQUEST_TIMEOUT, 45)
         mock_post.return_value = _json_response({'output': 'ok'})
         call_backend(self.chat)
-        self.assertEqual(mock_post.call_args.kwargs['timeout'], 120)
+        self.assertEqual(self.chat.sudo().ai_assistant_id.connection_id.timeout_seconds, 120)
+        self.assertAlmostEqual(mock_post.call_args.kwargs['timeout'][1], 120, delta=1)
         mock_post.return_value = ok_response()
         call_backend(self.channel)
-        self.assertEqual(mock_post.call_args.kwargs['timeout'], 45)
+        self.assertAlmostEqual(mock_post.call_args.kwargs['timeout'][1], 45, delta=1)
 
     @patch(SLEEP)
     @patch(POST)
@@ -671,7 +706,7 @@ class TestN8nChatTrigger(BackendCase):
         mock_post.side_effect = [requests.ReadTimeout('no answer in 90 s'), _json_response({'output': 'late'})]
         with mute_logger(CHANNEL_LOGGER):
             result = call_backend(self.chat)
-        self.assertIn('連線逾時', result['error'])
+        self.assertIn('the backend did not answer in time', result['error'])
         self.assertEqual(mock_post.call_count, 1)
         mock_sleep.assert_not_called()
 
@@ -690,7 +725,7 @@ class TestN8nChatTrigger(BackendCase):
 
     @patch(POST)
     def test_secret_set_later_signs(self, mock_post):
-        self.chat.write({'ai_api_token': 'dummy-chat-secret'})
+        set_ai(self.chat, {'ai_api_token': 'dummy-chat-secret'})
         mock_post.return_value = _json_response({'output': 'ok'})
         call_backend(self.chat)
         headers, body = mock_post.call_args.kwargs['headers'], mock_post.call_args.kwargs['data']
@@ -705,7 +740,7 @@ class TestN8nJobs(BackendCase):
     def _bot_messages(self, session):
         return self.env['mail.message'].search([
             ('model', '=', 'discuss.channel'), ('res_id', '=', session.id),
-            ('author_id', '=', self.n8n.ai_bot_partner_id.id),
+            ('author_id', '=', self.n8n._get_bot_partner().id),
         ], order='id')
 
     def _run(self, session, message):
@@ -734,14 +769,14 @@ class TestN8nJobs(BackendCase):
         self.assertIn('skip', job.error)
         self.assertFalse(self._bot_messages(session))
         log = self.env['llm.api.log'].search([('discuss_channel_id', '=', session.id)])
-        self.assertEqual(log.status, 'success')
+        self.assertEqual(log.status, 'ok')
         self.assertEqual(log.backend_type, 'n8n')
         self.assertEqual(log.http_status, 200)
 
     @patch(POST)
     def test_error_posts_error_message(self, mock_post):
         mock_post.return_value = _json_response({'error': 'agent_failed'}, status=502)
-        self.n8n.write({'ai_error_message': '後端暫時無法回覆'})
+        set_ai(self.n8n, {'ai_error_message': '後端暫時無法回覆'})
         session, _guest, message = self._guest_session(self.n8n)
         with mute_logger(CHANNEL_LOGGER, 'odoo.addons.im_livechat_ai.models.livechat_ai_job'):
             job = self._run(session, message)
@@ -749,19 +784,21 @@ class TestN8nJobs(BackendCase):
         self.assertIn('HTTP 502', job.error)
         self.assertIn('後端暫時無法回覆', self._bot_messages(session).body)
         log = self.env['llm.api.log'].search([('discuss_channel_id', '=', session.id)])
-        self.assertEqual(log.status, 'error')
+        self.assertEqual(log.status, 'http_error')
         self.assertEqual(log.http_status, 502)
-        self.assertNotIn('agent_failed', log.error_message)
+        self.assertEqual(log.error_message, 'HTTPError')
+        self.assertEqual(log.assistant_id, self.n8n.sudo().ai_assistant_id)
+        self.assertEqual(log.connection_id, self.n8n.sudo().ai_assistant_id.connection_id)
 
 
-class TestPerChannelLogs(BackendCase):
-    """Content logging and retention are per channel (replacing the system
-    parameters of 18.0.1.1.0)."""
+class TestCallLogs(BackendCase):
+    """Content logging is a setting of the AI connection; call logs and finished
+    jobs are kept 30 days (Q13 ①, aligned with Discuss AI and Project AI)."""
 
     @patch(POST)
-    def test_payload_only_for_channel_with_logging_on(self, mock_post):
+    def test_payload_only_for_connection_with_logging_on(self, mock_post):
         mock_post.return_value = ok_response('回覆內容')
-        self.channel.write({'ai_log_payload': True})
+        set_ai(self.channel, {'ai_log_payload': True})
         on_session, _g, _m = self._guest_session(self.channel, text='保固多久？')
         call_backend(self.channel, session=on_session)
         mock_post.return_value = _json_response({'reply': 'n8n 回覆'})
@@ -775,61 +812,51 @@ class TestPerChannelLogs(BackendCase):
         self.assertFalse(off_log.request_payload)
         self.assertFalse(off_log.response_payload)
         self.assertEqual(off_log.backend_type, 'n8n')
-        # Turning logging off erases the stored content of that channel only.
+        self.assertEqual(on_log.status, 'ok')
+        self.assertEqual(on_log.surface_type, 'livechat')
+        self.assertGreaterEqual(on_log.duration_ms, 0)
+        # Turning logging off erases the stored content of that connection only.
         other = self.env['llm.api.log'].create({
-            'status': 'success', 'livechat_channel_id': self.n8n.id, 'request_payload': '{"x": 1}',
+            'status': 'ok', 'livechat_channel_id': self.n8n.id, 'request_payload': '{"x": 1}',
+            'connection_id': self.n8n.sudo().ai_assistant_id.connection_id.id,
         })
-        self.channel.write({'ai_log_payload': False})
+        set_ai(self.channel, {'ai_log_payload': False})
         self.assertFalse(on_log.request_payload)
         self.assertFalse(on_log.response_payload)
         self.assertEqual(other.request_payload, '{"x": 1}')
 
-    def test_retention_per_channel(self):
+    def test_retention_is_30_days(self):
         Log = self.env['llm.api.log']
         Job = self.env['im_livechat.ai.job']
-        self.channel.write({'ai_log_retention_days': 3})
-        self.n8n.write({'ai_log_retention_days': 30})
         now = fields.Datetime.now()
-        logs = {
-            'a_2': Log.create({'status': 'success', 'livechat_channel_id': self.channel.id,
-                               'timestamp': now - timedelta(days=2)}),
-            'a_5': Log.create({'status': 'success', 'livechat_channel_id': self.channel.id,
-                               'timestamp': now - timedelta(days=5)}),
-            'b_20': Log.create({'status': 'success', 'livechat_channel_id': self.n8n.id,
-                                'timestamp': now - timedelta(days=20)}),
-            'b_40': Log.create({'status': 'success', 'livechat_channel_id': self.n8n.id,
-                                'timestamp': now - timedelta(days=40)}),
-            'none_10': Log.create({'status': 'success', 'timestamp': now - timedelta(days=10)}),
-            'none_20': Log.create({'status': 'success', 'timestamp': now - timedelta(days=20)}),
-        }
-        session_a, _g, _m = self._guest_session(self.channel)
-        session_b, _g, _m = self._guest_session(self.n8n)
-        job_a = Job.create({'discuss_channel_id': session_a.id, 'livechat_channel_id': self.channel.id,
-                            'state': 'done'})
-        job_b = Job.create({'discuss_channel_id': session_b.id, 'livechat_channel_id': self.n8n.id,
-                            'state': 'done'})
+        logs = {days: Log.create({'status': 'ok', 'livechat_channel_id': self.channel.id,
+                                  'timestamp': now - timedelta(days=days)}) for days in (2, 29, 31, 60)}
+        legacy = Log.create({'status': 'retry', 'timestamp': now - timedelta(days=10)})
+        session, _g, _m = self._guest_session(self.channel)
+        job_old = Job.create({'discuss_channel_id': session.id, 'livechat_channel_id': self.channel.id,
+                              'state': 'done'})
+        job_new = Job.create({'discuss_channel_id': session.id, 'livechat_channel_id': self.channel.id,
+                              'state': 'failed'})
+        job_running = Job.create({'discuss_channel_id': session.id, 'livechat_channel_id': self.channel.id,
+                                  'state': 'running'})
         self.env.cr.execute("UPDATE im_livechat_ai_job SET create_date = %s WHERE id IN %s",
-                            (now - timedelta(days=5), (job_a.id, job_b.id)))
+                            (now - timedelta(days=31), (job_old.id, job_running.id)))
+        self.env.cr.execute("UPDATE im_livechat_ai_job SET create_date = %s WHERE id = %s",
+                            (now - timedelta(days=29), job_new.id))
         self.env.invalidate_all()
-        self.assertEqual(Log._cleanup_old_logs(), 3)
-        self.assertEqual({k for k, log in logs.items() if log.exists()}, {'a_2', 'b_20', 'none_10'})
-        self.assertFalse(job_a.exists())
-        self.assertTrue(job_b.exists())
-
-    def test_retention_bounds(self):
-        with self.assertRaises(ValidationError):
-            self.channel.write({'ai_log_retention_days': 0})
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_log_retention_days = 0 WHERE id = %s",
-                            (self.channel.id,))
-        self.env.invalidate_all()
-        self.assertEqual(self.env['llm.api.log']._retention_by_channel()[self.channel.id], 14)
+        self.assertEqual(Log._cleanup_old_logs(), 2)
+        self.assertEqual({days for days, log in logs.items() if log.exists()}, {2, 29})
+        self.assertTrue(legacy.exists(), '1.x rows stay readable until they age out')
+        self.assertFalse(job_old.exists())
+        self.assertTrue(job_new.exists())
+        self.assertTrue(job_running.exists(), 'unfinished jobs are never cleaned up')
 
     def test_cron_uses_cleanup(self):
         cron = self.env.ref('im_livechat_ai.ir_cron_cleanup_llm_api_logs')
         self.assertIn('_cleanup_old_logs', cron.code)
         old = self.env['llm.api.log'].create({
-            'status': 'success', 'livechat_channel_id': self.channel.id,
-            'timestamp': fields.Datetime.now() - timedelta(days=15),
+            'status': 'ok', 'livechat_channel_id': self.channel.id,
+            'timestamp': fields.Datetime.now() - timedelta(days=31),
         })
         cron.method_direct_trigger()
         self.assertFalse(old.exists())
@@ -845,7 +872,8 @@ def _load_migration(version, name):
 
 
 class TestMigration18012(TransactionCase):
-    """18.0.1.1.0 -> 18.0.1.2.0: system parameters move to every channel."""
+    """18.0.1.1.0 -> 18.0.1.2.0: system parameters move to every channel (the 18.0.1.2.0
+    script still runs on the way up from 18.0.1.1.x, on the 18.0.1.x columns)."""
 
     DUMMY_URL = 'https://litellm.dummy.test/v1/chat/completions/'
     DUMMY_KEY = 'dummy-migration-key'
@@ -855,13 +883,24 @@ class TestMigration18012(TransactionCase):
         super().setUpClass()
         cls.post = _load_migration('18.0.1.2.0', 'post-migrate')
         Channel = cls.env['im_livechat.channel']
-        cls.on = Channel.create({'name': 'Legacy On', 'ai_model': 'chatgpt-pool/gpt-6-sol'})
-        cls.off = Channel.create({'name': 'Legacy Off', 'ai_model': 'MiniMax-M1'})
+        cls.on = Channel.create({'name': 'Legacy On'})
+        cls.off = Channel.create({'name': 'Legacy Off'})
+        cls.env.flush_all()
+        add_legacy_channel_columns(cls.env.cr)
         # 18.0.1.1.0 state: AI on, no connection on the channel.
-        cls.env.cr.execute("UPDATE im_livechat_channel SET ai_enabled = (id = %s), "
-                           "ai_endpoint_url = NULL, ai_api_token_secret = NULL, ai_log_payload = NULL, "
-                           "ai_log_retention_days = NULL", (cls.on.id,))
+        cls.env.cr.execute("UPDATE im_livechat_channel SET ai_enabled = (id = %s) WHERE id IN %s",
+                           (cls.on.id, (cls.on.id, cls.off.id)))
+        set_legacy_channel_values(cls.env.cr, cls.on.id, ai_model='chatgpt-pool/gpt-6-sol')
+        set_legacy_channel_values(cls.env.cr, cls.off.id, ai_model='MiniMax-M1')
         cls.env.invalidate_all()
+
+    def _legacy(self, channel):
+        values = legacy_channel_values(self.env.cr, channel.id, 'ai_backend_type', 'ai_endpoint_url',
+                                       'ai_log_payload', 'ai_log_retention_days', 'ai_model')
+        self.env.cr.execute("SELECT md5(ai_api_token_secret) = md5(%s), ai_api_token_secret IS NOT NULL "
+                            "FROM im_livechat_channel WHERE id = %s", (self.DUMMY_KEY, channel.id))
+        values['key_is_dummy'], values['has_key'] = self.env.cr.fetchone()
+        return values
 
     def _set_params(self, **params):
         ICP = self.env['ir.config_parameter'].sudo()
@@ -881,16 +920,16 @@ class TestMigration18012(TransactionCase):
         self.env.invalidate_all()
         self.assertEqual(self._params(), 0)
         for channel in (self.on, self.off):
-            self.assertEqual(channel.ai_backend_type, 'openai')
-            self.assertEqual(channel.ai_endpoint_url, 'https://litellm.dummy.test/v1')
-            self.assertEqual(channel._ai_get_token(), self.DUMMY_KEY)
-            self.assertTrue(channel.ai_log_payload)
-            self.assertEqual(channel.ai_log_retention_days, 21)
+            values = self._legacy(channel)
+            self.assertEqual(values['ai_backend_type'], 'openai')
+            self.assertEqual(values['ai_endpoint_url'], 'https://litellm.dummy.test/v1')
+            self.assertTrue(values['key_is_dummy'])
+            self.assertTrue(values['ai_log_payload'])
+            self.assertEqual(values['ai_log_retention_days'], 21)
         # AI state and model are kept: the enabled channel keeps working.
         self.assertTrue(self.on.ai_enabled)
         self.assertFalse(self.off.ai_enabled)
-        self.assertEqual(self.off.ai_model, 'MiniMax-M1')
-        self.assertTrue(self.on.ai_connection_ready)
+        self.assertEqual(self._legacy(self.off)['ai_model'], 'MiniMax-M1')
         # The summary has counts only, never the URL or the key.
         output = '\n'.join(logs.output)
         self.assertIn('access token copied to', output)
@@ -903,19 +942,19 @@ class TestMigration18012(TransactionCase):
             self.post.migrate(self.env.cr, '18.0.1.1.0')
         self.env.invalidate_all()
         # An administrator changes one channel afterwards.
-        self.off.write({'ai_backend_type': 'n8n', 'ai_endpoint_url': 'https://n8n.test/webhook/x',
-                        'ai_api_token': 'dummy-n8n-secret'})
+        set_legacy_channel_values(self.env.cr, self.off.id, ai_backend_type='n8n',
+                                  ai_endpoint_url='https://n8n.test/webhook/x', ai_api_token_secret='dummy-n8n')
         # Parameters re-created (e.g. by hand) are copied only where empty.
         self._set_params(base_url='https://other.test/v1', api_key='dummy-other')
         with mute_logger(self.post.__name__):
             self.post.migrate(self.env.cr, '18.0.1.1.0')
             self.post.migrate(self.env.cr, '18.0.1.1.0')
-        self.env.invalidate_all()
-        self.assertEqual(self.off.ai_backend_type, 'n8n')
-        self.assertEqual(self.off.ai_endpoint_url, 'https://n8n.test/webhook/x')
-        self.assertEqual(self.off._ai_get_token(), 'dummy-n8n-secret')
-        self.assertEqual(self.on.ai_endpoint_url, 'https://litellm.dummy.test/v1')
-        self.assertEqual(self.on._ai_get_token(), self.DUMMY_KEY)
+        off, on = self._legacy(self.off), self._legacy(self.on)
+        self.assertEqual(off['ai_backend_type'], 'n8n')
+        self.assertEqual(off['ai_endpoint_url'], 'https://n8n.test/webhook/x')
+        self.assertFalse(off['key_is_dummy'])
+        self.assertEqual(on['ai_endpoint_url'], 'https://litellm.dummy.test/v1')
+        self.assertTrue(on['key_is_dummy'])
         self.assertEqual(self._params(), 0)
 
     def test_without_params_nothing_is_enabled(self):
@@ -926,21 +965,21 @@ class TestMigration18012(TransactionCase):
             self.post.migrate(self.env.cr, '18.0.1.1.0')
         self.env.invalidate_all()
         for channel in (self.on, self.off):
+            values = self._legacy(channel)
             self.assertFalse(channel.ai_enabled)
-            self.assertFalse(channel.ai_endpoint_url)
-            self.assertFalse(channel._ai_get_token())
-            self.assertEqual(channel.ai_backend_type, 'openai')
-            self.assertFalse(channel.ai_log_payload)
-            self.assertEqual(channel.ai_log_retention_days, 14)
+            self.assertFalse(values['ai_endpoint_url'])
+            self.assertFalse(values['has_key'])
+            self.assertEqual(values['ai_backend_type'], 'openai')
+            self.assertFalse(values['ai_log_payload'])
+            self.assertEqual(values['ai_log_retention_days'], 14)
         self.assertIn('0 im_livechat_ai.* system parameter(s) deleted', '\n'.join(logs.output))
 
     def test_key_without_url_uses_the_1_1_0_default(self):
         self._set_params(api_key=self.DUMMY_KEY)
         with mute_logger(self.post.__name__):
             self.post.migrate(self.env.cr, '18.0.1.1.0')
-        self.env.invalidate_all()
-        self.assertEqual(self.on.ai_endpoint_url, self.post.LEGACY_DEFAULT_BASE_URL)
-        self.assertTrue(self.on.ai_connection_ready)
+        self.assertEqual(self._legacy(self.on)['ai_endpoint_url'], self.post.LEGACY_DEFAULT_BASE_URL)
+        self.assertTrue(self._legacy(self.on)['key_is_dummy'])
 
     def test_fresh_install_is_noop(self):
         self._set_params(api_key=self.DUMMY_KEY)
@@ -948,66 +987,10 @@ class TestMigration18012(TransactionCase):
         self.assertEqual(self._params(), 1)
 
 
-class TestMigration18011(TransactionCase):
-    """Upgrade from 18.0.1.0.x (18.0.1.1.0 scripts, still shipped): legacy
-    credentials wiped, all channels disabled."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.pre = _load_migration('18.0.1.1.0', 'pre-migrate')
-        cls.post = _load_migration('18.0.1.1.0', 'post-migrate')
-        Channel = cls.env['im_livechat.channel']
-        cls.ch_on = Channel.create({**TEST_BACKEND, 'name': 'Legacy On', 'ai_enabled': True})
-        cls.ch_off = Channel.create({'name': 'Legacy Off', 'ai_enabled': False})
-        cls.env.cr.execute("UPDATE im_livechat_channel SET ai_model = 'MiniMax-M1' WHERE id = %s",
-                           (cls.ch_on.id,))
-        cls.env.invalidate_all()
-
-    def _add_legacy_columns(self):
-        cr = self.env.cr
-        for column in ('ai_api_key', 'ai_api_base_url'):
-            cr.execute(f"ALTER TABLE im_livechat_channel ADD COLUMN IF NOT EXISTS {column} varchar")
-        cr.execute("UPDATE im_livechat_channel SET ai_api_key = 'dummy-legacy-key', "
-                   "ai_api_base_url = 'https://api.legacy.example/v1'")
-
-    def test_pre_migrate_wipes_credentials(self):
-        self._add_legacy_columns()
-        self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.cr.execute("""SELECT count(*) FROM im_livechat_channel
-                                WHERE ai_api_key IS NOT NULL OR ai_api_base_url IS NOT NULL""")
-        self.assertEqual(self.env.cr.fetchone()[0], 0)
-
-    def test_post_migrate_drops_columns_and_disables_ai(self):
-        self._add_legacy_columns()
-        self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        with self.assertLogs(self.post.__name__, level='WARNING'):
-            self.post.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.cr.execute("SELECT count(*) FROM im_livechat_channel WHERE ai_enabled")
-        self.assertEqual(self.env.cr.fetchone()[0], 0)
-        self.env.invalidate_all()
-        self.assertFalse(self.ch_on.ai_enabled)
-        self.assertEqual(self.ch_on.ai_model, 'MiniMax-M1')
-
-    def test_upgrade_from_1_0_runs_both_versions(self):
-        """1.0.x -> 1.2.0 runs the 1.1.0 then the 1.2.0 scripts: AI off,
-        no connection invented, no parameter left."""
-        post12 = _load_migration('18.0.1.2.0', 'post-migrate')
-        self._add_legacy_columns()
-        self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        with mute_logger(self.post.__name__, post12.__name__):
-            self.post.migrate(self.env.cr, '18.0.1.0.1')
-            post12.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.invalidate_all()
-        self.assertFalse(self.ch_off.ai_endpoint_url)
-        self.assertFalse(self.ch_on.ai_enabled)
-        self.env.cr.execute("SELECT count(*) FROM ir_config_parameter WHERE key LIKE 'im_livechat_ai.%%'")
-        self.assertEqual(self.env.cr.fetchone()[0], 0)
-
-
 class TestRequestTimeout(BackendCase):
-    """ai_request_timeout: seconds a chat call waits, per channel (live test:
-    the n8n advisor took 112 s, Odoo gave up at 90 s)."""
+    """The AI connection's timeout bounds one answer, retries included (10-300 s;
+    new connections: LiteLLM 45 s, n8n 120 s; live test: the n8n advisor took
+    112 s). Each call reads at most the time left; the connect timeout is 10 s."""
 
     def _timeout(self, mock_post, channel, response):
         mock_post.return_value = response
@@ -1015,50 +998,59 @@ class TestRequestTimeout(BackendCase):
         return mock_post.call_args.kwargs['timeout']
 
     @patch(POST)
-    def test_defaults_when_zero_or_empty(self, mock_post):
-        for value in (0, False):
-            self.channel.ai_request_timeout = value
-            self.n8n.ai_request_timeout = value
-            self.assertEqual(self._timeout(mock_post, self.channel, ok_response()), 45)
-            self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 120)
+    def test_defaults_per_backend(self, mock_post):
+        self.assertEqual(self.channel.sudo().ai_assistant_id.connection_id.timeout_seconds, 45)
+        self.assertEqual(self.n8n.sudo().ai_assistant_id.connection_id.timeout_seconds, 120)
+        connect, read = self._timeout(mock_post, self.channel, ok_response())
+        self.assertEqual(connect, 10)
+        self.assertAlmostEqual(read, 45, delta=1)
+        connect, read = self._timeout(mock_post, self.n8n, _json_response({'skip': True}))
+        self.assertAlmostEqual(read, 120, delta=1)
 
     @patch(POST)
-    def test_channel_value_is_used(self, mock_post):
-        self.n8n.ai_request_timeout = 180
-        self.channel.ai_request_timeout = 20
-        self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 180)
-        self.assertEqual(self._timeout(mock_post, self.channel, ok_response()), 20)
+    def test_connection_value_is_used(self, mock_post):
+        set_ai(self.n8n, {'ai_request_timeout': 180})
+        set_ai(self.channel, {'ai_request_timeout': 20})
+        self.assertAlmostEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True}))[1], 180, delta=1)
+        self.assertAlmostEqual(self._timeout(mock_post, self.channel, ok_response())[1], 20, delta=1)
 
     @patch(POST)
     def test_out_of_range_stored_value_is_clamped(self, mock_post):
         """A value written around the constraint never reaches requests."""
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_request_timeout = 5000 WHERE id = %s",
-                            (self.n8n.id,))
-        self.n8n.invalidate_recordset(['ai_request_timeout'])
-        self.assertEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True})), 300)
+        connection = self.n8n.sudo().ai_assistant_id.connection_id
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET timeout_seconds = 5000 WHERE id = %s",
+                            (connection.id,))
+        connection.invalidate_recordset(['timeout_seconds'])
+        self.assertAlmostEqual(self._timeout(mock_post, self.n8n, _json_response({'skip': True}))[1], 300, delta=1)
 
     def test_range_constraint(self):
-        for value in (0, 10, 112, 300):
-            self.channel.ai_request_timeout = value
+        connection = self.channel.sudo().ai_assistant_id.connection_id
+        for value in (10, 112, 300):
+            connection.timeout_seconds = value
+            connection.flush_recordset()
         for value in (5, 9, 301, -1):
             with self.assertRaises(ValidationError), self.env.cr.savepoint():
-                self.channel.ai_request_timeout = value
-                self.channel.flush_recordset()
+                connection.timeout_seconds = value
+                connection.flush_recordset()
 
-    def test_manager_can_set_it(self):
-        self.channel.with_user(self.manager).ai_request_timeout = 150
-        self.assertEqual(self.channel.ai_request_timeout, 150)
+    def test_manager_cannot_set_it(self):
+        """Q12 A in place: the call settings are for system administrators only."""
+        connection = self.channel.sudo().ai_assistant_id.connection_id
+        with self.assertRaises(AccessError):
+            connection.with_user(self.manager).timeout_seconds = 150
 
+    @patch('odoo.addons.im_livechat_ai.models.ai_connection.requests.get')
     @patch(POST)
-    def test_connection_test_timeouts_unchanged(self, mock_post):
-        self.channel.ai_request_timeout = 250
-        self.n8n.ai_request_timeout = 250
-        mock_post.return_value = ok_response()
+    def test_connection_test_timeouts_unchanged(self, mock_post, mock_get):
+        set_ai(self.channel, {'ai_request_timeout': 250})
+        set_ai(self.n8n, {'ai_request_timeout': 250})
+        mock_get.return_value = _json_response({'data': [{'id': 'chatgpt-pool/gpt-6-sol'}]})
         self.channel.with_user(self.admin).action_test_ai_connection()
-        self.assertEqual(mock_post.call_args.kwargs['timeout'], LLM_REQUEST_TIMEOUT)
+        self.assertEqual(mock_get.call_args.kwargs['timeout'], (10, N8N_TEST_TIMEOUT))
         mock_post.return_value = _json_response({'skip': True})
         self.n8n.with_user(self.admin).action_test_ai_connection()
-        self.assertEqual(mock_post.call_args.kwargs['timeout'], N8N_TEST_TIMEOUT)
+        self.assertEqual(mock_post.call_args.kwargs['timeout'], (10, N8N_TEST_TIMEOUT))
 
     def test_job_thresholds_cover_the_longest_run(self):
         from odoo.addons.im_livechat_ai.models import livechat_ai_job as jobs

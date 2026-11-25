@@ -11,6 +11,7 @@ from odoo.tests.common import TransactionCase
 from odoo.addons.im_livechat_ai.tools.markdown import markdown_to_html
 
 from .common import TEST_BACKEND, livechat_operator
+from .common import make_ai_channel
 
 # A real smart-home advisor reply (n8n, 2026-11-01, shortened): bold, a pipe
 # table with markdown links to the shop, an off-site LINE link.
@@ -106,7 +107,7 @@ class TestBotMessageMarkdown(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
         cls.env['ir.config_parameter'].sudo().set_param('web.base.url', 'https://aiot.woowtech.io')
-        cls.channel = cls.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'MD', 'ai_enabled': True})
+        cls.channel = make_ai_channel(cls.env, {**TEST_BACKEND, 'name': 'MD', 'ai_enabled': True})
         cls.session = cls.env['discuss.channel'].create({
             'name': 'MD Session', 'channel_type': 'livechat',
             'livechat_operator_id': livechat_operator(cls.env).id, 'livechat_channel_id': cls.channel.id,
@@ -115,7 +116,7 @@ class TestBotMessageMarkdown(TransactionCase):
     def test_posted_advisor_reply(self):
         message = self.channel._create_bot_message(self.env, self.session, ADVISOR_REPLY)
         body = str(message.body)
-        self.assertEqual(message.author_id, self.channel.ai_bot_partner_id)
+        self.assertEqual(message.author_id, self.channel._get_bot_partner())
         self.assertIn('<table', body)
         self.assertIn('<th>設備</th>', body)
         self.assertIn('<strong>NT$36,099</strong>', body)

@@ -327,3 +327,151 @@ class TestRetryAndDeadline(RuntimeCase):
                     job = run_ai_job(self.env, session)
                 self.assertEqual(job.state, 'failed')
                 self.assertEqual(mock_post.call_count, 1)
+
+
+class TestFailureAlertKinds(RuntimeCase):
+    """One operator alert per kind of failure and channel in 10 minutes (review #7): a LiteLLM outage
+    or an exhausted budget no longer sends one alert per visitor message."""
+
+    def alerts(self, bus_send):
+        return [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
+
+    @patch(POST)
+    def test_one_alert_per_kind_of_failure(self, mock_post):
+        ResPartner = type(self.env['res.partner'])
+        mock_post.return_value = _json({}, status=500)
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, \
+                mute_logger(CHANNEL_LOGGER, JOB_LOGGER):
+            for i in range(3):
+                session, _g, _m = self.session(text='第 %s 位' % i)
+                self.assertEqual(run_ai_job(self.env, session).state, 'failed')
+        self.assertEqual(len(self.alerts(bus_send)), 1, 'one alert for three HTTP 500 failures')
+        self.assertIn('not announced again', self.alerts(bus_send)[0].args[2]['message'])
+        mock_post.side_effect = requests.ReadTimeout('read timeout')
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, \
+                mute_logger(CHANNEL_LOGGER, JOB_LOGGER):
+            for _i in range(2):
+                session, _g, _m = self.session(text='逾時')
+                run_ai_job(self.env, session)
+        self.assertEqual(len(self.alerts(bus_send)), 1, 'another kind of failure alerts once')
+
+    def test_failure_kinds(self):
+        Job = self.env['im_livechat.ai.job']
+        self.assertEqual(Job._failure_kind('HTTP 500: the AI backend is failing (HTTPError)'), 'HTTP 500')
+        self.assertEqual(Job._failure_kind('the backend did not answer in time (ReadTimeout)'),
+                         'the backend did not answer in time (ReadTimeout)')
+        self.assertEqual(Job._failure_kind('not processed within 30 minutes: given up'),
+                         'not processed within 30 minutes')
+
+    def test_aged_out_jobs_alert_once(self):
+        ResPartner = type(self.env['res.partner'])
+        jobs = self.env['im_livechat.ai.job']
+        for i in range(3):
+            session, _g, message = self.session(text='舊訊息 %s' % i)
+            jobs |= self.env['im_livechat.ai.job']._create_for_message(session, message)
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_job SET create_date = now() at time zone 'UTC' - interval '2 hours' "
+                            "WHERE id IN %s", (tuple(jobs.ids),))
+        self.env.invalidate_all()
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, mute_logger(JOB_LOGGER):
+            for job in jobs.sorted('id'):
+                job._run_job(commit=False)
+        self.assertEqual(set(jobs.mapped('state')), {'failed'})
+        self.assertEqual(len(self.alerts(bus_send)), 1, 'one alert for the backlog the cron gives up')
+
+
+class TestReplyCaps(RuntimeCase):
+    """A message the cap of unfinished replies refuses gets the notice and one operator alert per period
+    (review #8); the cap also holds for the whole database (review #15)."""
+
+    def test_channel_cap_tells_the_visitor_and_the_operators(self):
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '1')
+        ResPartner = type(self.env['res.partner'])
+        ch._FULL_WARNED.pop(self.channel.id, None)
+        first, guest1, _m = self.session(text=None)
+        second, guest2, _m = self.session(text=None)
+        third, guest3, _m = self.session(text=None)
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, \
+                self.assertLogs(CHANNEL_LOGGER, level='WARNING') as logs:
+            self.guest_post(first, guest1, '第一位')
+            self.guest_post(second, guest2, '第二位')
+            self.guest_post(second, guest2, '第二位再問')
+            self.guest_post(third, guest3, '第三位')
+        Job = self.env['im_livechat.ai.job']
+        self.assertEqual(Job.search_count([('discuss_channel_id', '=', first.id)]), 1)
+        self.assertFalse(Job.search_count([('discuss_channel_id', 'in', (second | third).ids)]))
+        for session in (second, third):
+            notices = session.message_ids.filtered(lambda m: m.message_type == 'notification'
+                                                   and 'cannot answer right now' in (m.body or ''))
+            self.assertEqual(len(notices), 1, 'one notice per session and period')
+        alerts = [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
+        self.assertEqual(len(alerts), 1, 'one operator alert per period of the channel')
+        self.assertIn('too many unfinished replies', alerts[0].args[2]['message'])
+        self.assertEqual(len([line for line in logs.output if 'too many unfinished' in line]), 1,
+                         'the warning is rate-limited')
+
+    def test_database_cap(self):
+        ICP = self.env['ir.config_parameter'].sudo()
+        ICP.set_param('im_livechat_ai.max_active_jobs', '0')
+        ICP.set_param('im_livechat_ai.max_active_jobs_total', '2')
+        Job = self.env['im_livechat.ai.job']
+        Job.search([('state', 'in', ('pending', 'running'))]).write({'state': 'skipped'})
+        for channel in (self.channel, self.n8n):
+            session, _g, message = self.session(channel=channel)
+            self.assertTrue(Job._create_for_message(session, message))
+        session, _g, message = self.session()
+        with mute_logger(CHANNEL_LOGGER):
+            self.assertFalse(Job._create_for_message(session, message), 'the third live reply is refused')
+        ICP.set_param('im_livechat_ai.max_active_jobs_total', '0')
+        self.assertTrue(Job._create_for_message(session, message), '0 turns the database cap off')
+
+
+class TestAlertConcurrency(RuntimeCase):
+    """The flag of the blocked alert is flushed inside its savepoint: a concurrent update is re-raised so
+    Odoo retries the request, and the transaction stays usable (review #10)."""
+
+    def test_flag_conflict_is_re_raised(self):
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET api_key_secret = NULL WHERE id = %s",
+                            (self.channel.sudo().ai_assistant_id.connection_id.id,))
+        self.env.invalidate_all()
+        session, guest, _m = self.session(text=None)
+        Channel = type(self.env['im_livechat.channel'])
+        original = Channel.flush_recordset
+
+        def flush_recordset(records, fnames=None):
+            if fnames == ['ai_blocked_alert_sent']:
+                raise psycopg2.errors.SerializationFailure('concurrent update')
+            return original(records, fnames)
+
+        with patch.object(Channel, 'flush_recordset', flush_recordset), \
+                self.assertRaises(psycopg2.errors.SerializationFailure), mute_logger(CHANNEL_LOGGER):
+            self.guest_post(session, guest, '你好')
+        self.env.cr.execute("SELECT 1")
+        self.assertEqual(self.env.cr.fetchone(), (1,), 'the cursor is still usable')
+
+
+class TestUnexpectedErrorFrames(RuntimeCase):
+    """An unexpected exception in the reply path is logged with its type and code frames, never its text
+    (review #12, contract 3.9)."""
+
+    @patch(POST)
+    def test_frames_without_text(self, mock_post):
+        mock_post.side_effect = RuntimeError('sentinel-text-4242')
+        session, _g, _m = self.session()
+        with self.assertLogs(CHANNEL_LOGGER, level='WARNING') as logs, mute_logger(JOB_LOGGER):
+            run_ai_job(self.env, session)
+        lines = '\n'.join(logs.output)
+        self.assertIn('RuntimeError', lines)
+        self.assertIn('File "', lines, 'code frames')
+        self.assertNotIn('sentinel-text-4242', lines)
+
+    @patch(POST)
+    def test_expected_failures_stay_one_line(self, mock_post):
+        mock_post.side_effect = requests.ReadTimeout('sentinel-text-4243')
+        session, _g, _m = self.session()
+        with self.assertLogs(CHANNEL_LOGGER, level='WARNING') as logs, mute_logger(JOB_LOGGER):
+            run_ai_job(self.env, session)
+        lines = '\n'.join(logs.output)
+        self.assertNotIn('File "', lines)
+        self.assertNotIn('sentinel-text-4243', lines)

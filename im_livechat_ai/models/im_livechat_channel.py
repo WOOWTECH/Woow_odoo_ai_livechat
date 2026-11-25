@@ -43,6 +43,7 @@ import requests
 
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context
 
 from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signature_headers are re-exported
@@ -153,6 +154,7 @@ _SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
 
 # {livechat channel id: time.monotonic() of the last "cannot answer" warning} (this process)
 _BLOCKED_WARNED = {}
+_FULL_WARNED = {}  # the same for the cap of unfinished reply jobs
 
 
 class LLMNotConfigured(Exception):
@@ -753,6 +755,9 @@ class ImLivechatChannel(models.Model):
                 session.ai_blocked_notice_sent = False
             if channel.ai_blocked_alert_sent:
                 channel.ai_blocked_alert_sent = False
+        elif not run_after:
+            # the cap of unfinished reply jobs refused it (channel or database)
+            self._ai_handle_full(discuss_channel, message)
         return job
 
     def _ai_handle_blocked(self, discuss_channel, message):
@@ -771,15 +776,45 @@ class ImLivechatChannel(models.Model):
         session = discuss_channel.sudo()
         if not session.ai_blocked_notice_sent:
             session._ai_post_blocked_notice(self)
+        self._ai_alert_once(lambda: self.env['im_livechat.ai.job']._notify_blocked(self, session))
+
+    def _ai_handle_full(self, discuss_channel, message):
+        """The cap of unfinished reply jobs (of the channel, or of the
+        database) refused the job: as for a blocked channel, the conversation
+        gets one notice per period, the operators one alert per period of the
+        channel, the server log a warning at most once per channel and process
+        in BLOCKED_WARNING_SECONDS. The next queued reply ends the period."""
+        self.ensure_one()
+        now = time.monotonic()
+        last = _FULL_WARNED.get(self.id)
+        if last is None or now - last >= BLOCKED_WARNING_SECONDS:
+            _FULL_WARNED[self.id] = now
+            _logger.warning("Live chat channel %s: too many unfinished AI reply jobs; no reply job queued", self.id)
+        session = discuss_channel.sudo()
+        if not session.ai_blocked_notice_sent:
+            session._ai_post_blocked_notice(self)
+        self._ai_alert_once(lambda: self.env['im_livechat.ai.job']._notify_full(self, session))
+
+    def _ai_alert_once(self, notify):
+        """Run ``notify`` (the operator alert of a blocked or full channel)
+        once per period of the channel (ai_blocked_alert_sent)."""
+        self.ensure_one()
         channel = self.sudo()
-        if not channel.ai_blocked_alert_sent:
-            try:
-                with self.env.cr.savepoint():
-                    channel.ai_blocked_alert_sent = True
-                    self.env['im_livechat.ai.job']._notify_blocked(self, session)
-            except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
-                _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
-                              self.id, exception_frames(e))
+        if channel.ai_blocked_alert_sent:
+            return
+        try:
+            with self.env.cr.savepoint():
+                channel.ai_blocked_alert_sent = True
+                # Flushed here, inside the savepoint: a concurrent alert of the same channel fails now, the
+                # savepoint is rolled back and Odoo retries the request, instead of failing in the middle of
+                # the fan-out where the error would leave the transaction aborted.
+                channel.flush_recordset(['ai_blocked_alert_sent'])
+                notify()
+        except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+            raise
+        except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
+            _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
+                          self.id, exception_frames(e))
 
     # --- Backend requests ---
 
@@ -1050,9 +1085,14 @@ class ImLivechatChannel(models.Model):
                 wait = LLM_RETRY_BACKOFF[min(attempts - 1, len(LLM_RETRY_BACKOFF) - 1)]
                 can_retry = (attempts - 1 < retries and self._ai_should_retry(backend, e)
                              and time.time() + wait < deadline)
+                # An unexpected exception (a defect, a library change) also gets its code frames, never its
+                # text (contract 3.9); the expected failures are described by their short text.
+                expected = isinstance(e, (requests.HTTPError, requests.Timeout, requests.ConnectionError,
+                                          LLMNotConfigured, LLMInvalidResponse, LLMEmptyResponse))
                 _logger.warning(
-                    "AI backend call failed for channel %s (call %s, %s): %s",
+                    "AI backend call failed for channel %s (call %s, %s): %s%s",
                     channel.id, attempts, 'retrying' if can_retry else 'giving up', last_error,
+                    '' if expected else '\n' + exception_frames(e),
                 )
                 if can_retry:
                     if before_call:

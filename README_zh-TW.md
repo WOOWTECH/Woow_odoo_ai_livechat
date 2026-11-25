@@ -83,7 +83,7 @@ Live Chat AI 原地升級（18.0.2.0.0）。曾經把線上客服頻道搬到 Di
 
 Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查商品、Odoo MCP 等）、審核與權限都屬於後端。客服隨時可以接手：客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話。沒有預設網址、也沒有預設模型：系統管理員建好 AI 連線與 AI 助理、線上客服管理員選好助理之前，AI 不會回覆。設定 App 裡沒有本模組的任何設定。
 
-**限制設在 LiteLLM 金鑰上。** 每個線上客服用的連線各給一把 LiteLLM 虛擬金鑰，在那裡設每分鐘請求數與 Token 數、同時請求數與預算。Odoo 沒有用量限制，只有技術性的佇列上限：每段對話一次一則回覆、每個線上客服頻道最多 30 則未完成的回覆（系統參數 `im_livechat_ai.max_active_jobs`）、整個資料庫最多 60 則（`im_livechat_ai.max_active_jobs_total`；設 0 表示不限制）、1.5 秒合併連發訊息、每個回覆工作最多處理 3 次、超過 30 分鐘的回覆工作放棄。被上限擋下的訪客訊息會收到和未就緒頻道相同的通知，客服收到一次提醒。**AI 用量**每月統計回覆數與 Token 數，作為人工開立發票的參考。詳見 [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps)。
+**限制設在 LiteLLM 金鑰上。** 每個線上客服用的連線各給一把 LiteLLM 虛擬金鑰，在那裡設每分鐘請求數與 Token 數、同時請求數與預算。Odoo 沒有用量限制，只有技術性的佇列上限：每段對話一次一則回覆、每個線上客服頻道最多 30 則未完成的回覆（系統參數 `im_livechat_ai.max_active_jobs`）、整個資料庫最多是一個 Odoo 程序連線池的一半（`db_maxconn`：Odoo 預設 64 時為 32，最多 60；系統參數 `im_livechat_ai.max_active_jobs_total`；設 0 表示不限制）、1.5 秒合併連發訊息、每個回覆工作最多處理 3 次、超過 30 分鐘的回覆工作放棄。每則處理中的回覆在呼叫後端期間會佔用所在程序連線池的一條資料庫連線：處理回覆的程序，`db_maxconn` 請至少是資料庫上限的兩倍。被上限擋下的訪客訊息會收到和未就緒頻道相同的通知，客服收到一次提醒，每個頻道 10 分鐘內最多一次。**AI 用量**每月統計回覆數與 Token 數，作為人工開立發票的參考。詳見 [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps)。
 
 ---
 
@@ -104,7 +104,7 @@ Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查�
 | 日誌保留天數 | 移除：呼叫紀錄與已結束的回覆工作固定保留 **30 天**，升級後第一次每日清理就會刪除更舊的資料；升級後的 INFO 會列出原本保留超過 30 天的頻道。需要更久的呼叫紀錄請先匯出。 |
 | AI 用量 | 從空白開始：從升級後才開始計算（舊的呼叫紀錄只會連到它的助理，不會計入）。 |
 
-**升級後可能不回覆的情況。** 開啟 AI 的頻道只有在助理啟用、可用在 Live Chat，而且連線就緒（啟用、網址允許、LiteLLM 有金鑰與模型）時才會回覆。升級照原樣搬設定，所以升級前就無法回覆的頻道（沒有網址、LiteLLM 沒有金鑰或模型）升級後仍然不能回覆，而且現在**不會建立回覆工作**：每段未就緒期間，對話收到一次通知、客服收到一次提醒。升級後的 WARNING 會列出這些頻道的 id。
+**升級後可能不回覆的情況。** 開啟 AI 的頻道只有在助理啟用、可用在 Live Chat，而且連線就緒（啟用、網址允許、LiteLLM 有金鑰與模型）時才會回覆。升級照原樣搬設定，所以升級前就無法回覆的頻道（沒有網址、LiteLLM 沒有金鑰或模型）升級後仍然不能回覆，而且現在**不會建立回覆工作**：每段未就緒期間，對話收到一次通知、客服收到一次提醒（每個頻道 10 分鐘內最多一次）。升級後的 WARNING 會列出這些頻道的 id。
 
 **升級前：**
 
@@ -153,16 +153,35 @@ Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查�
 
 **升級後：**看 WARNING，打開 **AI 連線**（上線檢查、**測試連線**），並替每把 LiteLLM 金鑰設好限制。
 
-**回復到 18.0.1.3.5。** 優先往前修。真的要退回時，部署 18.0.1.3.5 的程式並執行 `-u im_livechat_ai`。18.0.1.x 的頻道欄位保留了一個版本，所以頻道會回到升級當時的設定。在 18.0.2.0.0 建立或改過的助理與連線會遺失，在 18.0.2.0.0 換過的金鑰要重新輸入，在 18.0.2.0.0 新建的頻道沒有 18.0.1.3.5 的設定：請關閉它們的 AI。Odoo 會保留已移除模型的資料表，之後再升級時會沿用裡面的資料，所以回復成功後請執行一次（不會印出任何內容；內容就是 `im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql`）。它也會刪除回復期間的每月 AI 用量（這些資料列指向助理與連線）：若要依用量開立發票，請先匯出 AI 用量清單。
+**回復到 18.0.1.3.5。** 優先往前修。真的要退回時，部署 18.0.1.3.5 的程式並執行 `-u im_livechat_ai`。18.0.1.x 的頻道欄位保留了一個版本，所以頻道會回到升級當時的設定。在 18.0.2.0.0 建立或改過的助理與連線會遺失，在 18.0.2.0.0 換過的金鑰要重新輸入，在 18.0.2.0.0 新建的頻道沒有 18.0.1.3.5 的設定：請關閉它們的 AI。Odoo 會保留已移除模型的資料表，之後再升級時會沿用裡面的資料，所以回復成功後請執行一次（內容就是 `im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql`）。它會印出一行 NOTICE 說明刪了什麼；若 NOTICE 說什麼都沒刪，表示回復還沒做（2.0.0 的模型仍在）：請先用 18.0.1.3.5 的程式執行 `-u im_livechat_ai`。它也會刪除回復期間的每月 AI 用量（這些資料列指向助理與連線）：若要依用量開立發票，請先匯出 AI 用量清單。
 
 ```sql
 DO $$
+DECLARE
+  usage_rows integer := 0;
+  assistants integer := 0;
+  connections integer := 0;
+  files integer := 0;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM ir_model WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')) THEN
-    IF to_regclass('im_livechat_ai_usage_month') IS NOT NULL THEN DELETE FROM im_livechat_ai_usage_month; END IF;
-    IF to_regclass('im_livechat_ai_assistant') IS NOT NULL THEN DELETE FROM im_livechat_ai_assistant; END IF;
-    IF to_regclass('im_livechat_ai_connection') IS NOT NULL THEN DELETE FROM im_livechat_ai_connection; END IF;
+    IF to_regclass('im_livechat_ai_usage_month') IS NOT NULL THEN
+      DELETE FROM im_livechat_ai_usage_month;
+      GET DIAGNOSTICS usage_rows = ROW_COUNT;
+    END IF;
+    IF to_regclass('im_livechat_ai_assistant') IS NOT NULL THEN
+      DELETE FROM im_livechat_ai_assistant;
+      GET DIAGNOSTICS assistants = ROW_COUNT;
+    END IF;
+    IF to_regclass('im_livechat_ai_connection') IS NOT NULL THEN
+      DELETE FROM im_livechat_ai_connection;
+      GET DIAGNOSTICS connections = ROW_COUNT;
+    END IF;
     DELETE FROM ir_attachment WHERE res_model IN ('im_livechat.ai.assistant', 'im_livechat.ai.connection');
+    GET DIAGNOSTICS files = ROW_COUNT;
+    RAISE NOTICE 'im_livechat_ai rollback cleanup: deleted % AI usage row(s), % AI assistant(s), % AI connection(s), % attachment(s)',
+      usage_rows, assistants, connections, files;
+  ELSE
+    RAISE NOTICE 'im_livechat_ai rollback cleanup: nothing deleted, the AI connection and AI assistant models are still installed (run it after the rollback)';
   END IF;
 END $$;
 ```
@@ -348,7 +367,7 @@ flowchart LR
 ### 核心功能
 
 - **AI 助理與 AI 連線** -- 系統管理員建立 AI 連線（LiteLLM 或 n8n webhook，含金鑰與呼叫設定）與 AI 助理（角色：使用的連線、提示詞、歷史訊息數、錯誤訊息），並在要給訪客用的助理勾選「可用在 Live Chat」。線上客服管理員為每個頻道選一個；他們看不到網址、金鑰或提示詞。
-- **上線檢查** -- 每個連線都有上線檢查（「可以使用」或「未就緒」，附固定原因）與**測試連線**按鈕（LiteLLM `GET /models`、n8n ping）。頻道的 AI 無法回覆時不建立工作：每段未就緒期間，訪客收到一次通知、客服收到一次提醒。
+- **上線檢查** -- 每個連線都有上線檢查（「可以使用」或「未就緒」，附固定原因）與**測試連線**按鈕（LiteLLM `GET /models`、n8n ping）。頻道的 AI 無法回覆時不建立工作：每段未就緒期間，訪客收到一次通知、客服收到一次提醒（每個頻道 10 分鐘內最多一次）。通知是系統通知：從 LINE 轉進來的訪客收不到（LINE 橋接只轉送一般留言）；回覆失敗時的錯誤訊息則會送到 LINE。
 - **多輪對話上下文** -- 最近 1-200 則訊息。訪客是 `user`、AI 機器人是 `assistant`，真人客服是加上 `[真人客服 姓名]` 標記的 `user`（與 `woow_ai_contact` 相同），並以對話事件告訴 AI 不要推翻同事的說法。OpenAI 訊息一定以 user 開頭、以 user 結尾。
 - **訪客與入口網站客戶** -- 網站訪客、已登入的入口網站客戶與公開使用者都會得到回覆；內部使用者、這段對話指派的客服與機器人不會觸發 AI。
 
@@ -638,7 +657,7 @@ im_livechat_ai/
 ├── migrations/
 │   ├── 18.0.1.1.0/ 18.0.1.2.0/ 18.0.1.2.1/  # 18.0.1.x 的升級（不變）
 │   └── 18.0.2.0.0/                      # 檢查、保留欄位、建立連線與助理
-├── tests/                               # 530 個測試，含合約檢查
+├── tests/                               # 546 個測試，含合約檢查
 │   └── contract/                        # 合約 v1.2 套件（一字不差，不在這裡改）
 └── i18n/
     ├── im_livechat_ai.pot               # 英文原文
@@ -665,7 +684,7 @@ AI 連線的 API 金鑰（LiteLLM）或簽章金鑰（n8n）只存在 SQL 欄位
 
 ### XSS 防護
 
-AI 回覆由 `tools/markdown.py` 轉成 HTML（Odoo 18 沒有內建 markdown 套件）：段落與換行、`**粗體**`、`*斜體*`（`<i>`；`2*3*4` 與 `* 項目` 清單符號維持原樣）、`~~刪除線~~`、`-`／`1.` 清單、表格（`<table class="table table-sm table-bordered">`）、標題（`<h4>`）、`程式碼` 與程式碼區塊（`<pre><code>`）、引言與分隔線；超過 8 層的引言與清單會攤平顯示。後端的每段文字先用 `markupsafe` 跳脫再包進這些標籤，結果再經過 Odoo 的 `html_sanitize`。只有主機是 `web.base.url` 或網站網域的 `http(s)` 連結（markdown 或直接貼的網址）會變成連結（`target="_blank" rel="noopener noreferrer"`）；含帳號資訊（`@`）或反斜線的連結以及其他連結只留文字，所以被提示注入的回覆也貼不出可點的釣魚連結。
+AI 回覆由 `tools/markdown.py` 轉成 HTML（Odoo 18 沒有內建 markdown 套件）：段落與換行、`**粗體**`、`*斜體*`（`<i>`；`2*3*4` 與 `* 項目` 清單符號維持原樣）、`~~刪除線~~`、`-`／`1.` 清單、表格（`<table class="table table-sm table-bordered">`）、標題（`<h4>`）、`程式碼` 與程式碼區塊（`<pre><code>`）、引言與分隔線；超過 8 層的引言與清單會攤平顯示。超過 2000 個字元的一行（以跳脫後計算，`&` 算 5 個字元）不套用粗體、斜體、刪除線或標題（程式碼與連結照常）；表格最多 30 欄（更寬的照文字顯示）、3000 格（之後的列照文字顯示）。每個步驟的時間都與回覆長度成正比，任何回覆都不會卡住 worker。後端的每段文字先用 `markupsafe` 跳脫再包進這些標籤，結果再經過 Odoo 的 `html_sanitize`。只有主機是 `web.base.url` 或網站網域的 `http(s)` 連結（markdown 或直接貼的網址）會變成連結（`target="_blank" rel="noopener noreferrer"`）；含帳號資訊（`@`）或反斜線的連結以及其他連結只留文字，所以被提示注入的回覆也貼不出可點的釣魚連結。
 
 ### 迴圈防護與作者判斷
 
@@ -690,17 +709,17 @@ AI 回覆由 `tools/markdown.py` 轉成 HTML（Odoo 18 沒有內建 markdown 套
 
 ### 測試套件總覽
 
-本模組有 **530 個自動化測試**（Odoo 18.0-20250807 與 18.0-20260926），含 14 項合約檢查。所有 HTTP 呼叫都是模擬的：不需要金鑰，也不需要連網。
+本模組有 **546 個自動化測試**（Odoo 18.0-20250807 與 18.0-20260926），含 14 項合約檢查。所有 HTTP 呼叫都是模擬的：不需要金鑰，也不需要連網。
 
 | 測試檔 | 數量 | 涵蓋範圍 |
 |---|---|---|
 | `test_contract.py` | 14 | 合約 v1.2（標籤 `woow_ai_contract`）：回答、請求、向量、顯示、用詞、中和、檢查碼、機密、「可給客戶使用」、重試與時限、觸發時與執行時的未就緒處理、沒有身分區塊、連線、工作只用明確的值建立 |
 | `test_connection.py` | 17 | AI 連線：只能寫入的金鑰、換主機或類型時移除金鑰、清掉 18.0.1.x 的副本、「可給客戶使用」、上線檢查、逾時、測試連線 |
 | `test_assistant.py` | 18 | AI 助理：機器人聯絡人、複製、名稱、「可用在 Live Chat」、頻道選擇、使用中保護、誰讀得到（系統管理員、線上客服管理員） |
-| `test_runtime_reads.py` | 25 | 執行時讀什麼：n8n 內容（`assistant`、`surface`、`contact`）、呼叫紀錄、用量、內部備註、依失敗種類的提醒、觸發時與執行時的未就緒處理、上限與被擋下的訊息、並行錯誤重拋、重試與時限、非預期錯誤的程式位置 |
+| `test_runtime_reads.py` | 32 | 執行時讀什麼：n8n 內容（`assistant`、`surface`、`contact`）、呼叫紀錄、用量、內部備註、依失敗種類的提醒與其認領、觸發時與執行時的未就緒處理、上限與被擋下的訊息、「無法回覆」提醒的 10 分鐘間隔、依連線池決定的資料庫上限、並行錯誤重拋、重試與時限、非預期錯誤的程式位置、回答的作者 |
 | `test_migration_200.py` | 26 | 18.0.2.0.0 升級：正規化、共用連線、金鑰只在 SQL 比對且不進日誌、機器人聯絡人、可重複執行、各項檢查、退役設定視圖、保留天數與翻譯步驟、中和、回復後的清理 SQL |
-| `test_client_context.py` | 8 | 用戶端送來的 `default_*` context 不會設定回覆工作、呼叫紀錄、客服提醒對話或對話的欄位；一般客服的 `default_ai_*` 會被拒絕 |
-| `test_hardening.py` | 10 | 線性移除 think、格式化有長度上限、簽章連結的到期時間、依合約規則處理名稱、只有有作者時才算機器人集合 |
+| `test_client_context.py` | 13 | 用戶端送來的 `default_*` context 與使用者自己的 `ir.default` 都不會設定回覆工作、呼叫紀錄、客服提醒對話或對話的欄位；一般客服的 `default_ai_*` 與 `ir.default` 都不會設定頻道的 AI |
+| `test_hardening.py` | 14 | 線性移除 think（含 Unicode 大小寫折疊的標籤名）、線性處理標題、程式碼區塊、行內程式碼、引言與轉真人標記、有上限的表格與格式化、簽章連結的到期時間與簽章、依合約規則處理名稱、只有有作者時才算機器人集合 |
 | `test_backend.py` | 52 | 角色權限、LiteLLM 請求格式、n8n 簽章／內容／回答、重試、18.0.1.2.x 遷移 |
 | `test_edge_cases.py` | 99 | 內容、HTTP 錯誤、think 標籤、XSS、上限、紀錄 |
 | `test_handoff.py` | 41 | 入口網站訪客、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人 |
@@ -817,10 +836,10 @@ odoo.addons.im_livechat_ai
 - **兩層設定，與 Discuss AI、專案 AI 對齊（[合約 v1.2](docs/CONTRACT.md)）**：「AI 連線」（`im_livechat.ai.connection`：後端、網址、只能寫入的金鑰、模型、逾時、重試次數、文件、記錄請求內容、「可給客戶使用」、上線檢查、測試連線）與「AI 助理」（`im_livechat.ai.assistant`：機器人聯絡人、提示詞、歷史訊息數、錯誤訊息、「可用在 Live Chat」），都只給系統管理員。線上客服管理員在頻道的「AI 助理」分頁選一個可用的助理。
 - **只接 LiteLLM 與 n8n**：後端顯示為「LiteLLM（OpenAI 相容）」（存成 `openai`）；不再支援 Hermes（升級日誌會列出，但不改動）。
 - **原地升級**：每個有設定的頻道一個助理、每種不同的後端設定一個連線，金鑰只在 SQL 複製；各項檢查（低於 18.0.1.1.0、Discuss AI 的 Live Chat 橋接、退役的設定視圖）；18.0.1.x 欄位保留一個版本供回復（見[升級到 18.0.2.0.0](#升級到-180200)）。
-- **上線檢查與未就緒處理**：頻道的 AI 無法回覆時不建立回覆工作；每段未就緒期間，對話收到一次通知、客服收到一次提醒。回覆工作執行時與貼出回答前會再檢查一次（合約 3.5）。被未完成回覆上限擋下的訊息也會收到同樣的通知。
-- **執行**：連線的逾時是一次回答的時間（含重試），每次連線最多 10 秒（18.0.1.x 連線可用整個逾時）；兩種後端都只在請求沒送出與 HTTP 429／503 時重試；每次回答一筆呼叫紀錄，狀態依合約；每月 AI 用量；超過 4 MB 的文件改給連結；同事的內部備註不放進對話；訊息觸發時遇到 PostgreSQL 並行錯誤會重拋，讓 Odoo 重試請求（網頁與 RPC 請求；會攔下所有例外的呼叫端，例如部分 LINE webhook，不會重試）；同一頻道同一種失敗 10 分鐘內只提醒客服一次；整個資料庫最多 60 則未完成回覆（每個頻道 30 則）；LiteLLM 請求改以精簡的 UTF-8 JSON 送出；含 `@` 的名稱視為沒有名稱（合約 3.14）。
+- **上線檢查與未就緒處理**：頻道的 AI 無法回覆時不建立回覆工作；每段未就緒期間，對話收到一次通知、客服收到一次提醒。回覆工作執行時與貼出回答前會再檢查一次（合約 3.5）。被未完成回覆上限擋下的訊息也會收到同樣的通知。每個頻道 10 分鐘內最多提醒客服一次「無法回覆」。
+- **執行**：連線的逾時是一次回答的時間（含重試），每次連線最多 10 秒（18.0.1.x 連線可用整個逾時）；兩種後端都只在請求沒送出與 HTTP 429／503 時重試；每次回答一筆呼叫紀錄，狀態依合約；每月 AI 用量；超過 4 MB 的文件改給連結；同事的內部備註不放進對話；訊息觸發時遇到 PostgreSQL 並行錯誤會重拋，讓 Odoo 重試請求（網頁與 RPC 請求；會攔下所有例外的呼叫端，例如部分 LINE webhook，不會重試）；同一頻道同一種失敗 10 分鐘內只提醒客服一次（從提醒時起算）；整個資料庫的未完成回覆上限（`db_maxconn` 的一半，最多 60；每個頻道 30 則）；LiteLLM 請求改以精簡的 UTF-8 JSON 送出；含 `@` 的名稱視為沒有名稱（合約 3.14）。
 - **n8n 內容**：新增 `assistant` 與 `surface`；`contact` 仍是線上客服頻道。
-- **隱私**：呼叫紀錄、回覆工作與用量只給系統管理員；線上客服管理員只讀得到可用在 Live Chat 的助理；日誌不寫例外內容；保留 30 天；`data/neutralize.sql`；用戶端送來的 `default_*` context 不會設定本模組建立的工作、紀錄、提醒或對話的欄位，一般客服也不能用 `default_ai_*` 設定頻道的 AI（合約 3.5、檢查 14）。
+- **隱私**：呼叫紀錄、回覆工作與用量只給系統管理員；線上客服管理員只讀得到可用在 Live Chat 的助理；日誌不寫例外內容；保留 30 天；`data/neutralize.sql`；用戶端送來的 `default_*` context 與使用者自己的 `ir.default` 都不會設定本模組建立的工作、紀錄、提醒或對話的欄位（回覆工作以超級使用者建立、每個欄位都明確給值），一般客服也不能用 `default_ai_*` 或 `ir.default` 設定頻道的 AI（合約 3.5、檢查 14）。
 - **翻譯**：英文原文、`i18n/im_livechat_ai.pot`、依合約用詞的 zh_TW。
 - **文件**：[docs/PROTOCOL.md](docs/PROTOCOL.md)（協定移出 README）與 [docs/CONTRACT.md](docs/CONTRACT.md)（合約 v1.2）；14 項合約檢查隨測試執行。
 - **18.0.2.0.0 還沒有**：後端處理時的「輸入中…」提示（合約 3.5 第 7 點）。AI 助理的機器人聯絡人不是對話成員，而 Odoo 18 只對成員顯示輸入中；預計在 18.0.2.0.1 加上。

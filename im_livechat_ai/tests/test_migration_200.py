@@ -503,6 +503,14 @@ class TestRollbackCleanup(TransactionCase):
     def _do_block(text):
         return text[text.index('DO $$'):text.index('END $$;') + len('END $$;')]
 
+    def _run_block(self):
+        """Run the block; returns the NOTICE lines it printed (review r2 #13)."""
+        notices = self.env.cr._cnx.notices  # psycopg2 keeps the server's NOTICE lines here
+        notices.clear()
+        with file_open(self.SQL_FILE) as fp:
+            self.env.cr.execute(self._do_block(fp.read()))
+        return [line for line in notices if 'im_livechat_ai rollback cleanup' in line]
+
     def test_cleanup_after_counted_replies(self):
         channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Rolled back', 'ai_enabled': True})
         assistant = channel.sudo().ai_assistant_id
@@ -520,8 +528,10 @@ class TestRollbackCleanup(TransactionCase):
                    "WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')")
         cr.execute("SELECT count(*) FROM im_livechat_ai_usage_month")
         self.assertTrue(cr.fetchone()[0], 'a usage row exists before the cleanup')
-        with file_open(self.SQL_FILE) as fp:
-            cr.execute(self._do_block(fp.read()))
+        notices = self._run_block()
+        self.assertEqual(len(notices), 1)
+        self.assertIn('deleted 1 AI usage row(s), 1 AI assistant(s), 1 AI connection(s), ', notices[0])
+        self.assertNotIn(' 0 attachment(s)', notices[0], 'the image and its sizes')
         for table in ('im_livechat_ai_usage_month', 'im_livechat_ai_assistant', 'im_livechat_ai_connection'):
             cr.execute('SELECT count(*) FROM %s' % table)  # noqa: S608 - fixed names
             self.assertEqual(cr.fetchone()[0], 0, table)
@@ -535,10 +545,11 @@ class TestRollbackCleanup(TransactionCase):
     def test_cleanup_does_nothing_while_the_models_exist(self):
         channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Still 2.0.0'})
         self.env.flush_all()
-        with file_open(self.SQL_FILE) as fp:
-            self.env.cr.execute(self._do_block(fp.read()))
+        notices = self._run_block()
         self.env.invalidate_all()
         self.assertTrue(channel.sudo().ai_assistant_id.connection_id.exists())
+        self.assertEqual(len(notices), 1)
+        self.assertIn('nothing deleted', notices[0], 'a run before the rollback says so')
 
     def test_readmes_show_the_same_block(self):
         """In a repository checkout (CI checks it too): both READMEs carry the block of the file."""

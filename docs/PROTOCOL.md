@@ -31,12 +31,12 @@ Odoo only has technical queue caps:
 |---|---|
 | Replies at a time per conversation | one (an advisory lock per conversation); a newer visitor message supersedes the pending reply, which then answers all of them |
 | Unfinished replies per Live Chat channel | 30; system parameter `im_livechat_ai.max_active_jobs` (0 turns the cap off) |
-| Unfinished replies of the whole database | 60; system parameter `im_livechat_ai.max_active_jobs_total` (0 turns the cap off): each running reply holds a thread and a pooled database connection during its call |
-| A message a cap refuses | no reply job; the conversation gets the blocked notice once per period, the operators one alert, the server log a warning at most every 10 minutes |
+| Unfinished replies of the whole database | half of `db_maxconn`, the connection pool of one Odoo process (32 with Odoo's default of 64), at most 60; system parameter `im_livechat_ai.max_active_jobs_total` (0 turns the cap off). Each running reply holds a thread and a pooled connection of its process during its call: keep `db_maxconn` at least twice this cap on a process that runs replies |
+| A message a cap refuses | no reply job; the conversation gets the blocked notice once per period, the operators one alert per period and at most one per channel in 10 minutes, the server log a warning at most every 10 minutes |
 | Debounce | 1.5 s: rapid visitor messages get one reply |
 | Runs of one reply job | at most 3 (a run is restarted only after a crash or a restart) |
 | Age | a reply job older than 30 minutes is given up; the operators are alerted |
-| Failure alerts | the visitor gets the error message every time; the operators get at most one alert per kind of failure (HTTP 429, HTTP 500, a timeout, an aged-out job ...) and channel in 10 minutes |
+| Failure alerts | the visitor gets the error message every time; the operators get at most one alert per kind of failure (HTTP 429, HTTP 500, a timeout, an aged-out job ...) and channel in 10 minutes, counted from that alert (jobs that fail together in several threads claim it one after the other) |
 
 ## Common context
 
@@ -275,7 +275,10 @@ Every reply is treated as untrusted text: a small markdown subset (paragraphs, l
 lists, tables, headings, code) is rendered after escaping, and the result is sanitized. Only `http(s)`
 links to the site's own hosts (`web.base.url` and the websites' domains) become clickable; any other link,
 a link with userinfo (`@`) or a backslash, and every other scheme stay plain text. Quotes and lists deeper
-than 8 levels are rendered flat, so no reply can exhaust the recursion limit.
+than 8 levels are rendered flat, so no reply can exhaust the recursion limit. A line longer than 2000
+characters, counted after escaping (an `&` counts 5), is shown without bold, italics, strike-through or
+heading (code spans and links still work). A table has at most 30 columns (a wider one is shown as text) and
+3000 cells (later rows are shown as text). Every step takes time linear in the reply.
 
 ## Signed download URLs
 
@@ -304,7 +307,9 @@ is not ready (archived, no URL, a URL that is not allowed, no key or no model fo
 - no reply job is created and no backend is called;
 - the conversation gets one fixed notice per blocked period, posted as a notification (never part of the
   history, never answered);
-- the channel's operators get one alert per blocked period (an OdooBot message and a toast);
+- the channel's operators get one alert per blocked period (an OdooBot message and a toast), at most one per
+  channel in 10 minutes; the alert is claimed with one update of the channel row, so concurrent requests and
+  job threads never both alert;
 - the server log gets a warning at most once every 10 minutes per channel and process.
 
 The gate applies again when the reply job runs and before it posts the answer (contract 3.5): a job blocked
@@ -312,6 +317,10 @@ then makes no call, or posts no answer, is `skipped`, and the conversation gets 
 period. A job whose channel's AI was turned off is skipped quietly.
 
 The blocked period ends when the AI answers again (a reply job is queued).
+
+The notice is a notification: a session bridged to LINE does not forward it (the LINE bridge forwards comment
+messages only), so a LINE visitor gets no notice; the operators still get the alert. The error message of a
+failed reply is a comment and reaches LINE.
 
 **Not in 18.0.2.0.0:** the "typing…" indicator while the backend works (contract 3.5 item 7): the AI
 assistant's bot partner is not a member of the session, and Odoo 18 shows typing only for members. Planned for

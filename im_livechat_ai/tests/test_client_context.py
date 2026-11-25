@@ -157,13 +157,20 @@ class TestOwnDefaults(ClientContextCase):
     """Review r2 #2 and #3: the creating user's own ir.default rows (any employee writes them for himself)
     fill the fields create() is not given, under sudo() too (sudo keeps the uid)."""
 
+    def _own_default(self, user, model, field, value):
+        """A personal ir.default row of `user`, as ir.default.set writes it for him. Odoo 18.0-20250807 lets
+        any employee write one for any model and field; 18.0-20260926 refuses a field of a group the user
+        lacks, later cores also a model he may not create. The row is written here with sudo, to test the
+        module's own guard on every core."""
+        self.env['ir.default'].sudo().create({
+            'field_id': self.env['ir.model.fields']._get(model, field).id,
+            'json_value': json.dumps(value), 'user_id': user.id})
+
     def test_job_ignores_the_posters_own_defaults(self):
         employee = new_test_user(self.env, login='ctx_employee', name='Context Employee', groups='base.group_user')
-        Default = self.env['ir.default'].with_user(employee)
-        Default.set('im_livechat.ai.job', 'state', 'running', user_id=True)
-        Default.set('im_livechat.ai.job', 'attempts', 3, user_id=True)
-        Default.set('im_livechat.ai.job', 'started_at', '2099-01-01 00:00:00', user_id=True)
-        Default.set('im_livechat.ai.job', 'error', 'forged', user_id=True)
+        for field, value in (('state', 'running'), ('attempts', 3), ('started_at', '2099-01-01 00:00:00'),
+                             ('error', 'forged')):
+            self._own_default(employee, 'im_livechat.ai.job', field, value)
         self.assertEqual(self.env['im_livechat.ai.job'].with_user(employee).sudo().default_get(['state'])['state'],
                          'running', 'the rows are in place')
         session = self.env['discuss.channel'].create({
@@ -207,14 +214,6 @@ class TestOwnDefaults(ClientContextCase):
         job = self.Job._create_for_message(session, message)
         job.write({'state': 'running', 'started_at': '2099-01-01 00:00:00'})
         self.assertFalse(self.Job.search_count([('id', '=', job.id)] + self.Job._active_job_domain()))
-
-    def _own_default(self, user, model, field, value):
-        """A personal ir.default row of `user`, as ir.default.set writes it for him. Odoo 18.0-20250807 lets
-        any employee write one for any field; later cores refuse a field of a group the user lacks, so the
-        row is written here with sudo, to test the module's own guard on every core."""
-        self.env['ir.default'].sudo().create({
-            'field_id': self.env['ir.model.fields']._get(model, field).id,
-            'json_value': json.dumps(value), 'user_id': user.id})
 
     def test_operator_defaults_never_set_the_ai(self):
         assistant = self.channel.sudo().ai_assistant_id

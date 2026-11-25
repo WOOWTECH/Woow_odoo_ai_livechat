@@ -192,6 +192,39 @@ class TestInternalNotes(RuntimeCase):
         self.assertNotIn('標記為內部', texts)
 
 
+class TestRateLimitAlerts(RuntimeCase):
+    """After an HTTP 429 failure the operators are alerted at most once per channel
+    per 10 minutes; the visitor gets the error message every time."""
+
+    @patch(POST)
+    def test_one_alert_per_flood(self, mock_post):
+        mock_post.return_value = _json({}, status=429)
+        set_ai(self.channel, {'ai_error_message': '忙線中，請稍後再試'})
+        ResPartner = type(self.env['res.partner'])
+        bot = self.channel._get_bot_partner()
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, \
+                mute_logger(CHANNEL_LOGGER, JOB_LOGGER):
+            sessions = []
+            for i in range(10):
+                session, _g, _m = self.session(text='第 %s 位訪客' % i)
+                sessions.append(session)
+                job = run_ai_job(self.env, session)
+                self.assertEqual(job.state, 'failed')
+                self.assertTrue(job.error.startswith('HTTP 429'))
+        alerts = [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
+        self.assertEqual(len(alerts), 1)
+        for session in sessions:
+            replies = session.message_ids.filtered(lambda m: m.author_id == bot)
+            self.assertIn('忙線中', replies.body)
+        # another kind of failure still alerts
+        mock_post.return_value = _json({}, status=500)
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, \
+                mute_logger(CHANNEL_LOGGER, JOB_LOGGER):
+            session, _g, _m = self.session(text='500')
+            run_ai_job(self.env, session)
+        self.assertEqual(len([c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']), 1)
+
+
 class TestBlockedGate(RuntimeCase):
     """Contract §3.5 step 2: an AI-enabled channel that cannot answer queues no
     job; the conversation gets one notice per blocked period (a notification,

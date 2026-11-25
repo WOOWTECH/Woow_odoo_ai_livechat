@@ -92,6 +92,11 @@ DEFERRED_TRIGGER_DELAY_SECONDS = 2
 # Settings monitoring (P1-6): unfinished jobs this old, or a recovery cron
 # that has not run for this long, are reported.
 MONITOR_STALE_MINUTES = 5
+# After an HTTP 429 failure (rate limited, e.g. a flood on the LiteLLM key), the
+# operators are alerted at most once per live chat channel in this window; the
+# visitor still gets the error message every time.
+RATE_LIMIT_ALERT_MINUTES = 10
+RATE_LIMIT_ERROR_PREFIX = 'HTTP 429'
 # Who decided a handoff (im_livechat.ai.job.handoff_source)
 HANDOFF_KEYWORD = 'keyword'  # a handoff keyword in the visitor message (no backend call)
 HANDOFF_BACKEND = 'backend'  # the backend's answer ([[handoff]] / n8n "handoff": true)
@@ -851,11 +856,31 @@ class LivechatAiJob(models.Model):
         message = channel._create_bot_message(self.env, session, channel._ai_error_text(self._visitor_lang()))
         self._finish('failed', error, reply_message=message)
         self._count_usage(result, ok=False)
+        if self._rate_limit_alert_sent_recently(error):
+            _logger.info("AI job %s: HTTP 429 again in live chat channel %s; the operators were alerted in the "
+                         "last %s minutes", self.id, channel.id, RATE_LIMIT_ALERT_MINUTES)
+            return
         exc = (result or {}).get('error_exc')
         if reason is None and exc is not None:
             def reason(env):
                 return channel.with_env(env)._short_llm_error(exc)
         self._notify_failure(reason or error, visitor_told=True)
+
+    def _rate_limit_alert_sent_recently(self, error):
+        """True when this failure is an HTTP 429 and another job of the same live
+        chat channel failed with HTTP 429 in the last RATE_LIMIT_ALERT_MINUTES
+        (its operators were alerted then): one alert per flood, not one per
+        visitor message."""
+        if not (error or '').startswith(RATE_LIMIT_ERROR_PREFIX) or not self.livechat_channel_id:
+            return False
+        since = fields.Datetime.now() - timedelta(minutes=RATE_LIMIT_ALERT_MINUTES)
+        return bool(self.search_count([
+            ('livechat_channel_id', '=', self.livechat_channel_id.id),
+            ('id', '!=', self.id),
+            ('state', '=', 'failed'),
+            ('error', '=like', RATE_LIMIT_ERROR_PREFIX + '%'),
+            ('finished_at', '>=', since),
+        ], limit=1))
 
     def _has_newer_job(self):
         return bool(self.search_count([

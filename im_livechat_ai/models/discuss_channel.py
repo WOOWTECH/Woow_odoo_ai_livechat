@@ -19,7 +19,7 @@ from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context
 from odoo.tools.mimetypes import guess_mimetype
 
-from ..tools.backend import exception_frames
+from ..tools.backend import exception_frames, one_line_name, person_name
 
 _logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ _HTML_TAG_RE = re.compile(r'<[^>]+>')
 
 # Prefix of a human operator's message in the LLM history (P1-3).
 OPERATOR_PREFIX = '[真人客服 %s] '
+OPERATOR_PREFIX_NO_NAME = '[真人客服] '
 # Added to the system prompt when the history contains operator messages
 # (operator messages are user turns, aligned with Discuss AI).
 OPERATOR_SYSTEM_NOTE = (
@@ -287,7 +288,7 @@ def check_token(secret, attachment_id, checksum, token, now=None):
     if not secret or not token or '.' not in token:
         return False
     expires, signature = token.split('.', 1)
-    if not expires.isdigit() or len(expires) > 12:
+    if not (expires.isascii() and expires.isdigit()) or len(expires) > 12:
         return False
     if int(expires) < int(now if now is not None else time.time()):
         return False
@@ -295,7 +296,8 @@ def check_token(secret, attachment_id, checksum, token, now=None):
 
 
 def iso_utc(timestamp):
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace('+00:00', 'Z')
+    """YYYY-MM-DDTHH:MM:SSZ (contract 3.6)."""
+    return datetime.fromtimestamp(int(timestamp), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def redact_base64(data):
@@ -655,11 +657,13 @@ class DiscussChannel(models.Model):
                 _ai_visitor_partner(), when the caller classifies many messages
             bot_ids (set|None): result of _ai_bot_ids(), idem
         """
-        if bot_ids is None:
-            bot_ids = self._ai_bot_ids()
         author = message.author_id
-        if author and author.id in bot_ids:
-            return AUTHOR_BOT
+        if author:
+            # computed only when there is an author: guests (most visitors) never need it
+            if bot_ids is None:
+                bot_ids = self._ai_bot_ids()
+            if author.id in bot_ids:
+                return AUTHOR_BOT
 
         if message.author_guest_id or not author:
             return AUTHOR_VISITOR
@@ -710,10 +714,17 @@ class DiscussChannel(models.Model):
 
     @staticmethod
     def _ai_operator_name(author):
-        """Name visitors see for an operator: the Live Chat username when set."""
+        """Name visitors see for an operator (the Live Chat username when set),
+        by the one-line rule of contract 3.7: it is part of text the model reads."""
         author = author.sudo()
         user = author.with_context(active_test=False).user_ids.filtered(lambda u: not u.share)[:1]
-        return (user.livechat_username if user else '') or author.name or ''
+        return one_line_name((user.livechat_username if user else '') or author.name or '')
+
+    @classmethod
+    def _ai_operator_prefix(cls, author):
+        """'[真人客服 <name>] ' before an operator's message in the history."""
+        name = cls._ai_operator_name(author)
+        return OPERATOR_PREFIX % name if name else OPERATOR_PREFIX_NO_NAME
 
     # --- What the backend receives ---
 
@@ -774,7 +785,7 @@ class DiscussChannel(models.Model):
             identity.update({
                 'user_id': user.id or None,
                 'partner_id': partner.id,
-                'name': partner.name or '',
+                'name': person_name(partner.name),
                 'email': partner.email or '',
                 'lang': self._ai_installed_lang((user.lang if user else partner.lang), fallback_lang),
                 'tz': (user.tz if user else partner.tz) or '',
@@ -787,13 +798,13 @@ class DiscussChannel(models.Model):
         if guest:
             identity.update({
                 'guest_id': guest.id,
-                'name': guest.name or session.anonymous_name or '',
+                'name': person_name(guest.name or session.anonymous_name),
                 'lang': self._ai_installed_lang(guest.lang, fallback_lang),
                 'tz': guest.timezone or '',
                 'visitor_key': 'guest:%s' % guest.id,
             })
         else:
-            identity['name'] = session.anonymous_name or ''
+            identity['name'] = person_name(session.anonymous_name)
         return identity
 
     def _ai_handoff_available(self):
@@ -879,7 +890,7 @@ class DiscussChannel(models.Model):
             elif kind == AUTHOR_OPERATOR:
                 role = 'user'
                 first_operator_date = first_operator_date or msg.date
-                clean_body = (OPERATOR_PREFIX % self._ai_operator_name(msg.author_id)) + clean_body
+                clean_body = self._ai_operator_prefix(msg.author_id) + clean_body
             else:
                 role = 'assistant'
             history.append({'role': role, 'text': clean_body, 'message_id': msg.id, 'kind': kind,

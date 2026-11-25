@@ -32,11 +32,11 @@ gets signed download URLs (``/im_livechat_ai/attachment/<id>/<expires>.<hmac>``,
 valid 1 hour). See discuss_channel.py for the limits.
 """
 
+import bisect
 import json
 import logging
 import re
 import time
-from datetime import timezone
 from urllib.parse import urlsplit
 
 import requests
@@ -52,6 +52,7 @@ from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signa
     endpoint_url_allowed,
     exception_frames,
     json_dumps,
+    one_line_name,
     n8n_signature_headers,
     request_not_sent,
 )
@@ -146,8 +147,12 @@ STATE_BLOCKED = 'blocked'
 _WORD_CHARS_RE = re.compile(r"^[0-9a-z_' \-]+$")
 _PAUSE_NOTICE_PLACEHOLDER_RE = re.compile(r'%\(minutes\)[sd]')
 
-# Reasoning blocks and special tokens some models leave in the answer.
+# Reasoning blocks and special tokens some models leave in the answer. _THINK_RE is the rule; it is applied by
+# _strip_think_pairs, in linear time (the pattern itself rescans to the end of the text for every opener that has
+# no closer, which a long answer could use to hold the worker for seconds).
 _THINK_RE = re.compile(r'<(think|thinking)>.*?</\1\s*>', re.DOTALL | re.IGNORECASE)
+_THINK_OPENER_RE = re.compile(r'<(think|thinking)>', re.IGNORECASE)
+_THINK_CLOSER_RE = re.compile(r'</(think|thinking)\s*>', re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r'<(?:think|thinking)>.*$', re.DOTALL | re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'^.*?</(?:think|thinking)\s*>', re.DOTALL | re.IGNORECASE)
 _SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
@@ -169,12 +174,33 @@ class LLMEmptyResponse(ValueError):
     """The backend answered with no visible content."""
 
 
+def _strip_think_pairs(text):
+    """``_THINK_RE.sub('', text)`` in linear time: each opener is paired with
+    the nearest closer of the same name after it, leftmost first."""
+    closers = {'think': [], 'thinking': []}
+    for match in _THINK_CLOSER_RE.finditer(text):
+        closers[match.group(1).lower()].append((match.start(), match.end()))
+    starts = {name: [start for start, _end in found] for name, found in closers.items()}
+    parts, position = [], 0
+    for match in _THINK_OPENER_RE.finditer(text):
+        if match.start() < position:
+            continue  # inside a block already removed
+        name = match.group(1).lower()
+        index = bisect.bisect_left(starts[name], match.end())
+        if index == len(starts[name]):
+            continue  # no closer of this name after it (an unclosed block is removed below)
+        parts.append(text[position:match.start()])
+        position = closers[name][index][1]
+    parts.append(text[position:])
+    return ''.join(parts)
+
+
 def strip_think(text):
     """Remove reasoning blocks (<think>, <thinking>, also unclosed) and special tokens."""
     if not text:
         return ''
     text = _SPECIAL_TOKEN_RE.sub('', text)
-    text = _THINK_RE.sub('', text)
+    text = _strip_think_pairs(text)
     text = _THINK_OPEN_RE.sub('', text)
     text = _THINK_CLOSE_RE.sub('', text)
     return text.strip()
@@ -845,6 +871,8 @@ class ImLivechatChannel(models.Model):
             metadata['surface_%s' % key] = str(value)[:METADATA_MAX_VALUE]
         for key in ('partner_id', 'guest_id', 'name', 'lang', 'is_portal', 'is_guest'):
             value = identity.get(key)
+            if key == 'name':
+                value = one_line_name(value)  # one line; a name with an '@' counts as no name (contract 3.14)
             if value in (None, '', False) and not isinstance(value, bool):
                 continue
             if isinstance(value, bool):
@@ -942,7 +970,7 @@ class ImLivechatChannel(models.Model):
             'history': [{'role': e['role'], 'text': e['text'], 'attachments': attachments(e)}
                         for e in history if e is not current],
             'events': [{
-                'time': event['time'].replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                'time': event['time'].strftime('%Y-%m-%dT%H:%M:%SZ'),  # contract 3.6: UTC, no fractions
                 'kind': event['kind'],
                 'text': event['text'],
             } for event in conversation['events']],

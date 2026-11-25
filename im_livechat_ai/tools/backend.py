@@ -96,6 +96,21 @@ def request_not_sent(error):
     return isinstance(reason, NewConnectionError)
 
 
+def person_name(name):
+    """A person's name as sent to a backend (contract 3.6, 3.14): a name with
+    an '@' (a partner named after an email address) counts as no name."""
+    name = name or ''
+    return '' if '@' in name else name
+
+
+def one_line_name(name):
+    """A person's name inside text the model reads (contract 3.7, 3.14): one
+    line (white space collapsed), brackets turned into parentheses, at most 80
+    characters; a name with an '@' counts as no name."""
+    name = ' '.join((name or '').replace('[', '(').replace(']', ')').split())
+    return '' if '@' in name else name[:80]
+
+
 def exception_frames(error):
     """What the server log says about an unexpected exception: its type name
     and its code frames, never its text (the text of an HTTP library error can

@@ -42,6 +42,11 @@ MAX_INPUT_LENGTH = 100000  # characters; longer replies are cut (with a marker)
 # nesting of quotes and lists: deeper levels are rendered flat (their text), so
 # no reply can exhaust the recursion limit (a thousand '>' would)
 MAX_NESTING = 8
+# Lines (and pieces of lines) longer than this are not searched for emphasis or
+# headings: those patterns rescan to the end of the line for every opener that
+# has no closer, which a long answer could use to hold the worker for seconds.
+# Such text is still escaped and shown, links included.
+MAX_FORMATTED_LINE = 2000
 
 _FENCE_RE = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)\s*$')
 _HEADING_RE = re.compile(r'^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$')
@@ -98,6 +103,8 @@ def safe_url(url):
 def _emphasis(escaped):
     """Bold / italic / strike on already-escaped text (a Markup string)."""
     text = str(escaped)
+    if len(text) > MAX_FORMATTED_LINE:
+        return Markup(text)
     text = _BOLD_RE.sub(r'<strong>\2</strong>', text)
     text = _STRIKE_RE.sub(r'<del>\1</del>', text)
     text = _ITALIC_STAR_RE.sub(r'<i>\1</i>', text)
@@ -274,10 +281,14 @@ def _render_list(lines, i, depth=0):
     return Markup('').join(out), i
 
 
+def _heading(line):
+    return _HEADING_RE.match(line) if len(line) <= MAX_FORMATTED_LINE else None
+
+
 def _is_block_start(lines, i):
     line = lines[i]
     return bool(
-        _FENCE_RE.match(line) or _HEADING_RE.match(line) or _HR_RE.match(line)
+        _FENCE_RE.match(line) or _heading(line) or _HR_RE.match(line)
         or _LIST_RE.match(line) or _QUOTE_RE.match(line) or _is_table_start(lines, i)
     )
 
@@ -301,7 +312,7 @@ def _render_blocks(lines, depth=0):
             i += 1  # closing fence (or end of text)
             out.append(Markup('<pre><code>%s</code></pre>') % '\n'.join(code))
             continue
-        heading = _HEADING_RE.match(line)
+        heading = _heading(line)
         if heading:
             out.append(Markup('<h4>%s</h4>') % render_inline(heading.group(2)))
             i += 1

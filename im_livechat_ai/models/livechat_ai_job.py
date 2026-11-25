@@ -49,6 +49,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
+from odoo.tools import clean_context
 
 from ..tools.backend import exception_frames
 from .discuss_channel import PAUSE_HANDOFF
@@ -311,7 +312,9 @@ class LivechatAiJob(models.Model):
                 'finished_at': fields.Datetime.now(),
                 'error': 'answered together with a newer visitor message',
             })
-        job = self.sudo().create({
+        # clean_context: in the visitor's request the context comes from the client; its default_* keys
+        # (state, attempts, started_at ...) must never set fields of a job created in sudo
+        job = self.sudo().with_context(clean_context(self.env.context)).create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
             'message_id': message.id,
@@ -1013,7 +1016,8 @@ class LivechatAiJob(models.Model):
         Assistant = self.env['im_livechat.ai.assistant']
         url = '/odoo/discuss?active_id=discuss.channel_%s' % session.id
         odoobot = self.env.ref('base.partner_root')
-        Channel = self.env['discuss.channel'].with_user(SUPERUSER_ID).sudo()
+        Channel = self.env['discuss.channel'].with_user(SUPERUSER_ID).sudo().with_context(
+            clean_context(self.env.context))
         by_lang = {}
         for partner in partners:
             by_lang.setdefault(Assistant._installed_lang(partner.lang), self.env['res.partner'])

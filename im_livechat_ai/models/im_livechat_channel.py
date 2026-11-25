@@ -43,6 +43,7 @@ import requests
 
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tools import clean_context
 
 from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signature_headers are re-exported
     BACKEND_N8N,
@@ -526,8 +527,12 @@ class ImLivechatChannel(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        # The default_<field> keys of the context become values inside super().create() (default_get),
+        # where Odoo checks no field group: they count as values here.
+        defaults = {key[len('default_'):]: value for key, value in self.env.context.items()
+                    if key.startswith('default_ai_')}
         for vals in vals_list:
-            self._check_ai_config_access(vals)
+            self._check_ai_config_access({**defaults, **vals})
         channels = super().create(vals_list)
         # sudo: an operator may create a channel (AI off); the ai_* fields are manager-only.
         channels.sudo().filtered('ai_enabled')._ai_check_enable_requirements()
@@ -1208,7 +1213,8 @@ class ImLivechatChannel(models.Model):
                     vals['response_payload'] = json.dumps(redact_base64(response_payload), ensure_ascii=False,
                                                           default=str)[:MAX_LOG_PAYLOAD]
             with env.cr.savepoint():
-                return env['llm.api.log'].sudo().create(vals)
+                # clean_context: no default_* key of a client context sets a field of the log
+                return env['llm.api.log'].sudo().with_context(clean_context(env.context)).create(vals)
         except Exception as log_error:  # noqa: BLE001 - a log never breaks the reply
             _logger.error("Failed to create the AI call log: %s", type(log_error).__name__)
             return env['llm.api.log']

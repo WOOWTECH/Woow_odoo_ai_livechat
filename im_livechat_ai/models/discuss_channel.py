@@ -16,6 +16,7 @@ from markupsafe import Markup
 
 from odoo import api, fields, models
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
+from odoo.tools import clean_context
 from odoo.tools.mimetypes import guess_mimetype
 
 from ..tools.backend import exception_frames
@@ -409,6 +410,16 @@ class DiscussChannel(models.Model):
              'answers again.',
     )
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        """The client may send a context with default_<field> keys to routes
+        that open a live chat session: the AI fields of a session (pause,
+        notices) are set by this module only, never taken from that context."""
+        if any(key.startswith('default_ai_') for key in self.env.context):
+            self = self.with_context({key: value for key, value in self.env.context.items()  # noqa: PLW0642
+                                      if not key.startswith('default_ai_')})
+        return super(DiscussChannel, self).create(vals_list)
+
     def _notify_thread(self, message, msg_vals=False, **kwargs):
         """
         Override _notify_thread to trigger AI responses for visitor messages.
@@ -428,8 +439,13 @@ class DiscussChannel(models.Model):
         try:
             # Savepoint: a failure here must not abort the poster's message.
             # sudo: the poster may be a guest, a portal or a public user.
+            # clean_context: the poster's context comes from the client (Odoo's
+            # /mail/message/post applies the context it is sent, also for a
+            # guest); its default_* keys must never reach the records this
+            # module creates in sudo (reply jobs, notices, operator alerts).
+            session = self.sudo().with_context(clean_context(self.env.context))
             with self.env.cr.savepoint():
-                self.sudo()._ai_handle_new_message(message.sudo())
+                session._ai_handle_new_message(message.with_env(session.env))
         except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
             # concurrent update (e.g. two posts in the same session at once,
             # raised when the savepoint flushes Odoo's own writes): the

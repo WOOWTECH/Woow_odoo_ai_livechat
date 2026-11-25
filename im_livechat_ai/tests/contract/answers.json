@@ -1,0 +1,882 @@
+{
+ "contract": "v1",
+ "about": "Backend answers (CONTRACT.md 3.6 and 3.7). Each case is one HTTP answer to one backend call; the harness serves it from a mocked requests.post and compares the normalized result of the product's own backend call with 'expect' (or 'expect_text_only' for products that post text only, where given).",
+ "normalized": {
+  "success": {
+   "texts": "list of str, one per reply kept, <think> and special tokens removed",
+   "attachments": "int, attachments of all kept replies (0 in text-only products)",
+   "skip": "bool",
+   "handoff": "bool",
+   "reason": "str or null (handoff_reason, cleaned)",
+   "tokens": "[prompt, completion, total], compared only when the case expects it"
+  },
+  "failure": {
+   "error": "the call log status: invalid_response, http_error, timeout or error"
+  }
+ },
+ "n8n": [
+  {
+   "id": "reply_object",
+   "body": {
+    "reply": {
+     "text": "您好，我是客服。"
+    }
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "您好，我是客服。"
+    ]
+   }
+  },
+  {
+   "id": "reply_string",
+   "body": {
+    "reply": "營業時間是 9:00 到 18:00。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "營業時間是 9:00 到 18:00。"
+    ]
+   }
+  },
+  {
+   "id": "replies_mixed",
+   "body": {
+    "replies": [
+     "第一則",
+     {
+      "text": "第二則"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "第一則",
+     "第二則"
+    ]
+   }
+  },
+  {
+   "id": "replies_eleven",
+   "about": "at most 10 replies are used",
+   "body": {
+    "replies": [
+     "回覆 1",
+     "回覆 2",
+     "回覆 3",
+     "回覆 4",
+     "回覆 5",
+     "回覆 6",
+     "回覆 7",
+     "回覆 8",
+     "回覆 9",
+     "回覆 10",
+     "回覆 11"
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "回覆 1",
+     "回覆 2",
+     "回覆 3",
+     "回覆 4",
+     "回覆 5",
+     "回覆 6",
+     "回覆 7",
+     "回覆 8",
+     "回覆 9",
+     "回覆 10"
+    ]
+   }
+  },
+  {
+   "id": "skip",
+   "body": {
+    "skip": true
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": true,
+    "handoff": false,
+    "reason": null,
+    "texts": []
+   }
+  },
+  {
+   "id": "skip_with_reply",
+   "about": "skip without handoff wins over a reply",
+   "body": {
+    "skip": true,
+    "reply": "不會貼出"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": true,
+    "handoff": false,
+    "reason": null,
+    "texts": []
+   }
+  },
+  {
+   "id": "output",
+   "body": {
+    "output": "這是 n8n AI Agent 的回答。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "這是 n8n AI Agent 的回答。"
+    ]
+   }
+  },
+  {
+   "id": "item_list",
+   "about": "an n8n item list: its first item",
+   "body": [
+    {
+     "output": "第一個項目"
+    },
+    {
+     "output": "第二個項目"
+    }
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "第一個項目"
+    ]
+   }
+  },
+  {
+   "id": "think_removed",
+   "body": {
+    "reply": "<think>先想一想</think>答案是 42。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "答案是 42。"
+    ]
+   }
+  },
+  {
+   "id": "handoff_alone",
+   "body": {
+    "handoff": true
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": null,
+    "texts": []
+   }
+  },
+  {
+   "id": "handoff_skip",
+   "body": {
+    "handoff": true,
+    "skip": true
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": null,
+    "texts": []
+   }
+  },
+  {
+   "id": "handoff_skip_reply",
+   "about": "handoff cancels skip",
+   "body": {
+    "handoff": true,
+    "skip": true,
+    "reply": "我請同事協助您。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": null,
+    "texts": [
+     "我請同事協助您。"
+    ]
+   }
+  },
+  {
+   "id": "handoff_reason_spaces",
+   "body": {
+    "handoff": true,
+    "handoff_reason": "  客戶\n  要求\t真人  "
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": "客戶 要求 真人",
+    "texts": []
+   }
+  },
+  {
+   "id": "handoff_reason_long",
+   "about": "at most 300 characters are kept",
+   "body": {
+    "handoff": true,
+    "handoff_reason": "長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": "長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長長",
+    "texts": []
+   }
+  },
+  {
+   "id": "handoff_not_boolean",
+   "about": "only JSON true is a handoff",
+   "body": {
+    "handoff": "true",
+    "reply": "好的"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的"
+    ]
+   }
+  },
+  {
+   "id": "reason_without_handoff",
+   "body": {
+    "reply": "好的",
+    "handoff_reason": "不算數"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的"
+    ]
+   }
+  },
+  {
+   "id": "unknown_keys",
+   "body": {
+    "answer": "沒有約定的鍵"
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "replies_not_list",
+   "body": {
+    "replies": "不是清單"
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "replies_empty_list",
+   "body": {
+    "replies": []
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "reply_not_object",
+   "body": {
+    "replies": [
+     42
+    ]
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "reply_text_not_string",
+   "body": {
+    "reply": {
+     "text": 42
+    }
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "output_not_string",
+   "body": {
+    "output": {
+     "text": "物件"
+    }
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "empty_reply",
+   "body": {
+    "reply": ""
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "empty_item_list",
+   "body": [],
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "json_string",
+   "body": "只是一段字",
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "not_json",
+   "raw": "<html>Bad Gateway</html>",
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "http_500",
+   "status": 500,
+   "body": {
+    "message": "workflow error"
+   },
+   "expect": {
+    "error": "http_error"
+   }
+  },
+  {
+   "id": "attachment_only",
+   "about": "a reply with only an attachment: valid where replies post files",
+   "body": {
+    "reply": {
+     "text": "",
+     "attachments": [
+      {
+       "url": "https://files.example.com/report.pdf",
+       "name": "report.pdf"
+      }
+     ]
+    }
+   },
+   "expect": {
+    "attachments": 1,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     ""
+    ]
+   },
+   "expect_text_only": {
+    "error": "invalid_response"
+   }
+  }
+ ],
+ "openai": [
+  {
+   "id": "content_string",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "您好，營業時間是 9:00 到 18:00。"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "您好，營業時間是 9:00 到 18:00。"
+    ]
+   }
+  },
+  {
+   "id": "content_parts",
+   "about": "text and output_text parts, joined with a line break",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": [
+        {
+         "type": "text",
+         "text": "第一段"
+        },
+        {
+         "type": "output_text",
+         "text": "第二段"
+        },
+        {
+         "type": "image_url",
+         "image_url": {
+          "url": "https://files.example.com/a.png"
+         }
+        }
+       ]
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "第一段\n第二段"
+    ]
+   }
+  },
+  {
+   "id": "think_and_special_tokens",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "<|im_start|><think>推理過程</think>答案<|im_end|>"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "答案"
+    ]
+   }
+  },
+  {
+   "id": "reasoning_ignored",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "答案",
+       "reasoning_content": "這段是推理"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "答案"
+    ]
+   }
+  },
+  {
+   "id": "no_choices",
+   "body": {
+    "id": "chatcmpl-contract",
+    "object": "chat.completion"
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "empty_choices",
+   "body": {
+    "choices": []
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "empty_content",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": ""
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "null_content",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": null
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "content_not_text",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": 42
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "usage_standard",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "好"
+      },
+      "finish_reason": "stop"
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 10,
+     "completion_tokens": 4,
+     "total_tokens": 14
+    }
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好"
+    ],
+    "tokens": [
+     10,
+     4,
+     14
+    ]
+   }
+  },
+  {
+   "id": "usage_aliases",
+   "about": "input/output aliases; total is their sum when missing",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "好"
+      },
+      "finish_reason": "stop"
+     }
+    ],
+    "usage": {
+     "input_tokens": 12,
+     "output_tokens": 3
+    }
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好"
+    ],
+    "tokens": [
+     12,
+     3,
+     15
+    ]
+   }
+  },
+  {
+   "id": "usage_total_missing",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "好"
+      },
+      "finish_reason": "stop"
+     }
+    ],
+    "usage": {
+     "prompt_tokens": 7,
+     "completion_tokens": 2
+    }
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好"
+    ],
+    "tokens": [
+     7,
+     2,
+     9
+    ]
+   }
+  },
+  {
+   "id": "http_401",
+   "status": 401,
+   "body": {
+    "error": {
+     "message": "Invalid API key"
+    }
+   },
+   "expect": {
+    "error": "http_error"
+   }
+  },
+  {
+   "id": "not_json",
+   "raw": "upstream connect error",
+   "expect": {
+    "error": "invalid_response"
+   }
+  }
+ ],
+ "sse": [
+  {
+   "id": "full_stream",
+   "about": "keepalive comment, an event other than message, deltas, finish_reason, usage in the last chunk, [DONE]",
+   "chunks": [
+    ": keepalive\n\n",
+    "event: progress\ndata: {\"step\":\"tool\",\"choices\":[{\"delta\":{\"content\":\"不算\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"營業時間是 \"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"9:00 到 18:00。\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":5,\"total_tokens\":25}}\n\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "營業時間是 9:00 到 18:00。"
+    ],
+    "tokens": [
+     20,
+     5,
+     25
+    ]
+   }
+  },
+  {
+   "id": "finish_without_done",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好的\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的"
+    ]
+   }
+  },
+  {
+   "id": "no_end",
+   "about": "neither [DONE] nor a finish_reason",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"說到一半\"}}]}\n\n"
+   ],
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "think_in_deltas",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"<think>\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"推理\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"</think>\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"答案\"}}]}\n\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "答案"
+    ]
+   }
+  },
+  {
+   "id": "split_chunks",
+   "about": "an event split across network chunks",
+   "chunks": [
+    "data: {\"choices\":[{\"delta\":{\"con",
+    "tent\":\"你好\"}}]}\n",
+    "\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "你好"
+    ]
+   }
+  },
+  {
+   "id": "crlf_lines",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好\"}}]}\r\n\r\n",
+    "data: [DONE]\r\n\r\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好"
+    ]
+   }
+  },
+  {
+   "id": "only_done",
+   "chunks": [
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "error_chunk",
+   "chunks": [
+    "data: {\"error\":{\"message\":\"model overloaded\"}}\n\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "error": "invalid_response"
+   }
+  },
+  {
+   "id": "usage_repeated_with_zeros",
+   "about": "a later usage chunk with zeros keeps the real counts",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好\"}}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2,\"total_tokens\":10}}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好"
+    ],
+    "tokens": [
+     8,
+     2,
+     10
+    ]
+   }
+  }
+ ]
+}

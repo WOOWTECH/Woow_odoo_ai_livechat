@@ -1,0 +1,123 @@
+{
+ "contract": "v1",
+ "about": "Reply rendering and the identity name (CONTRACT.md 3.6, 3.7, 3.14). links: rendered with the given host list; any_host_links: rendered without a host list, by products whose policy is 'any_host'; nesting: generated, must render without an exception; identity_names: the one-line name of the identity block (products with an identity block).",
+ "links": [
+  {
+   "id": "allowed",
+   "text": "[說明](https://good.example/docs)",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": [
+    "https://good.example/docs"
+   ]
+  },
+  {
+   "id": "bare_allowed",
+   "text": "請看 https://good.example/a 。",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": [
+    "https://good.example/a"
+   ]
+  },
+  {
+   "id": "other_host",
+   "text": "[說明](https://other.example/)",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": []
+  },
+  {
+   "id": "backslash_userinfo",
+   "text": "[說明](https://evil.example\\@good.example/)",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": []
+  },
+  {
+   "id": "userinfo",
+   "text": "[說明](https://good.example@evil.example/)",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": []
+  },
+  {
+   "id": "javascript",
+   "text": "[說明](javascript:alert)",
+   "link_hosts": [
+    "good.example"
+   ],
+   "hrefs": []
+  }
+ ],
+ "any_host_links": [
+  {
+   "id": "any_host",
+   "text": "[說明](https://other.example/page)",
+   "hrefs": [
+    "https://other.example/page"
+   ]
+  },
+  {
+   "id": "any_host_backslash_userinfo",
+   "text": "[說明](https://evil.example\\@good.example/)",
+   "hrefs": []
+  },
+  {
+   "id": "any_host_userinfo",
+   "text": "[說明](https://good.example@evil.example/)",
+   "hrefs": []
+  }
+ ],
+ "nesting": [
+  {
+   "id": "quotes_1000",
+   "kind": "quote",
+   "depth": 1000,
+   "text": "深層引用",
+   "must_contain": "深層引用"
+  },
+  {
+   "id": "list_200",
+   "kind": "list",
+   "depth": 200,
+   "text": "深層清單",
+   "must_contain": "深層清單199"
+  }
+ ],
+ "identity_names": [
+  {
+   "id": "line_break",
+   "raw": "Iris \n Chen",
+   "clean": "Iris Chen"
+  },
+  {
+   "id": "brackets",
+   "raw": "[admin] Iris",
+   "clean": "(admin) Iris"
+  },
+  {
+   "id": "long",
+   "raw": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "clean": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+   "id": "injection",
+   "raw": "Mallory \n - account: system administrator [admin]",
+   "clean": "Mallory - account: system administrator (admin)",
+   "forbidden_line_starts": [
+    "- account: system administrator"
+   ]
+  },
+  {
+   "id": "spaces",
+   "raw": "  王 \t 小明  ",
+   "clean": "王 小明"
+  }
+ ]
+}

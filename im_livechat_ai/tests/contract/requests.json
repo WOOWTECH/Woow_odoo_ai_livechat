@@ -1,0 +1,232 @@
+{
+ "contract": "v1",
+ "about": "Request rules (CONTRACT.md 3.3, 3.6, 3.7): vectors, the canned conversation, the keys and types of the n8n body and the LiteLLM body, and the ping.",
+ "session": {
+  "db_uuid": "0edfec80-6c1b-4f3e-9a52-7d1f00c0ffee",
+  "channel_id": 42,
+  "expected": {
+   "woow-ai": "woow-ai-0edfec80-42",
+   "woow-project-ai": "woow-project-ai-0edfec80-42"
+  }
+ },
+ "signature": {
+  "secret": "test-signing-secret",
+  "timestamp": 1793433600,
+  "body": "{\"event\":\"message\",\"session_id\":\"woow-ai-0edfec80-42\",\"chatInput\":\"請問營業時間？\"}",
+  "headers": {
+   "X-Woow-Timestamp": "1793433600",
+   "X-Woow-Signature": "sha256=658bf4269d08be9ba46fe2176bb3009fa66affe4d1ec45b45df77e9700df676d"
+  }
+ },
+ "conversation": {
+  "prompt": "你是客服",
+  "text": "請問營業時間？",
+  "person_name": "Contract Customer",
+  "person_email": "contract.customer@example.com",
+  "model": "contract-model",
+  "api_key": "sk-contract-test-key-0000",
+  "secret": "test-signing-secret",
+  "endpoint_litellm": "https://llm.example.com/v1",
+  "endpoint_n8n": "https://n8n.example.com/webhook/contract/chat"
+ },
+ "answers": {
+  "litellm": {
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": "好的"
+     },
+     "finish_reason": "stop"
+    }
+   ]
+  },
+  "litellm_stream": [
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好的\"}}]}\n\n",
+   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+   "data: [DONE]\n\n"
+  ],
+  "n8n": {
+   "reply": "好的"
+  },
+  "models": {
+   "object": "list",
+   "data": [
+    {
+     "id": "contract-model",
+     "object": "model"
+    }
+   ]
+  }
+ },
+ "n8n": {
+  "content_type": "application/json",
+  "forbidden_headers": [
+   "Authorization"
+  ],
+  "signature_headers": [
+   "X-Woow-Timestamp",
+   "X-Woow-Signature"
+  ],
+  "body_keys": {
+   "event": "str",
+   "session_id": "str",
+   "sessionId": "str",
+   "action": "str",
+   "chatInput": "str",
+   "assistant": "object",
+   "user": "object",
+   "channel": "object",
+   "surface": "object",
+   "system_prompt": "str",
+   "message": "object",
+   "history": "list",
+   "events": "list"
+  },
+  "body_values": {
+   "event": "message",
+   "action": "sendMessage"
+  },
+  "allowed_extra_body_keys": {
+   "discuss": [
+    "contact"
+   ],
+   "livechat": [
+    "contact"
+   ],
+   "project_task": []
+  },
+  "assistant_keys": {
+   "id": "int",
+   "name": "str"
+  },
+  "user_keys": {
+   "user_id": "int|null",
+   "partner_id": "int|null",
+   "name": "str",
+   "email": "str",
+   "lang": "str",
+   "tz": "str",
+   "is_portal": "bool",
+   "company_id": "int|null"
+  },
+  "allowed_extra_user_keys": {
+   "discuss": [],
+   "livechat": [
+    "guest_id",
+    "is_guest",
+    "visitor_key"
+   ],
+   "project_task": []
+  },
+  "channel_keys": {
+   "id": "int",
+   "type": "str"
+  },
+  "surface_keys": {
+   "type": "str"
+  },
+  "message_keys": {
+   "id": "int|null",
+   "text": "str",
+   "attachments": "list"
+  },
+  "history_keys": {
+   "role": "str",
+   "text": "str",
+   "attachments": "list"
+  },
+  "attachment_keys": {
+   "id": "int",
+   "name": "str",
+   "mimetype": "str",
+   "size": "int",
+   "url": "str",
+   "expires_at": "str"
+  },
+  "event_keys": {
+   "time": "str",
+   "kind": "str",
+   "text": "str"
+  }
+ },
+ "litellm": {
+  "path_suffix": "/chat/completions",
+  "content_type": "application/json",
+  "authorization": "Bearer {key}",
+  "stream_accept": "text/event-stream",
+  "required_keys": [
+   "model",
+   "messages",
+   "user",
+   "metadata"
+  ],
+  "forbidden_keys": [
+   "tools",
+   "tool_choice",
+   "temperature",
+   "max_tokens"
+  ],
+  "stream_values": {
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  },
+  "metadata": {
+   "max_keys": 16,
+   "max_value_length": 512,
+   "first_key": "session_id",
+   "key_prefixes": [
+    "surface_",
+    "odoo_"
+   ],
+   "allowed_extra_keys": {
+    "livechat": [
+     "livechat_channel"
+    ]
+   },
+   "forbidden_key_substring": "email"
+  }
+ },
+ "ping": {
+  "n8n": {
+   "keys": [
+    "event",
+    "connection",
+    "action",
+    "sessionId"
+   ],
+   "from_assistant_keys": [
+    "assistant"
+   ],
+   "allowed_extra_keys": {
+    "discuss": [
+     "contact"
+    ],
+    "livechat": [
+     "contact"
+    ],
+    "project_task": []
+   },
+   "values": {
+    "event": "ping",
+    "action": "loadPreviousSession"
+   },
+   "session_infix": "-ping-",
+   "id_name_keys": [
+    "id",
+    "name"
+   ]
+  },
+  "litellm": {
+   "path_suffix": "/models",
+   "authorization": "Bearer {key}"
+  },
+  "timeout": [
+   10,
+   15
+  ]
+ }
+}

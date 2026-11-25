@@ -1,0 +1,161 @@
+{
+ "contract": "v1",
+ "about": "zh_TW glossary (CONTRACT.md 3.11): exact msgids and their msgstr, labels by field and selection key (checked through fields_get in zh_TW), banned variants (checked against every msgstr) and banned msgids.",
+ "msgids": {
+  "AI Connection": "AI 連線",
+  "AI Connections": "AI 連線",
+  "AI Assistant": "AI 助理",
+  "AI Assistants": "AI 助理",
+  "Backend": "後端",
+  "LiteLLM (OpenAI compatible)": "LiteLLM（OpenAI 相容）",
+  "n8n webhook": "n8n webhook",
+  "Endpoint URL": "後端網址",
+  "API Key": "API 金鑰",
+  "Signing Secret": "簽章金鑰",
+  "API Key Configured": "已設定 API 金鑰",
+  "Remove API Key": "移除 API 金鑰",
+  "Model": "模型",
+  "Timeout (seconds)": "逾時（秒）",
+  "Stream Replies": "串流回覆",
+  "Retries": "重試次數",
+  "Documents Users Send": "使用者傳送的文件",
+  "Send the files to the model": "把檔案送給模型",
+  "Download links only": "只給下載連結",
+  "Download Domains": "下載網域白名單",
+  "Max File Size (MB)": "檔案大小上限（MB）",
+  "Log Request Content": "記錄請求內容",
+  "Safe for Customers": "可給客戶使用",
+  "Available in Live Chat": "可用在 Live Chat",
+  "Readiness": "上線檢查",
+  "Ready": "可以使用",
+  "Blocked": "未就緒",
+  "<strong>Not ready:</strong>": "<strong>未就緒：</strong>",
+  "Readiness Details": "檢查結果",
+  "Ready to use.": "可以使用。",
+  "Test Connection": "測試連線",
+  "Connection OK (HTTP %s).": "連線正常（HTTP %s）。",
+  "System Prompt": "系統提示詞",
+  "History Messages": "歷史訊息數",
+  "Welcome Message": "歡迎訊息",
+  "Error Message": "錯誤訊息",
+  "Sorry, I cannot answer right now. Please try again later.": "抱歉，我現在無法回覆，請稍後再試。",
+  "You do not have permission to use this AI assistant.": "您沒有使用這個 AI 助理的權限。",
+  "Bot Partner": "機器人聯絡人",
+  "Reply Processing": "回覆處理方式",
+  "Push Key": "推送金鑰",
+  "Archived": "已封存",
+  "Reply Jobs": "回覆工作",
+  "Pending": "等待中",
+  "Running": "處理中",
+  "Done": "完成",
+  "Failed": "失敗",
+  "Skipped": "已略過",
+  "Runs": "執行次數",
+  "Run After": "最早執行時間",
+  "Trigger Message": "觸發訊息",
+  "Reply Message": "回覆訊息",
+  "Call Logs": "呼叫紀錄",
+  "AI Usage": "AI 用量",
+  "Prompt Tokens": "提示 Token 數",
+  "Completion Tokens": "回覆 Token 數",
+  "Total Tokens": "總 Token 數",
+  "Configuration": "配置",
+  "Discuss": "討論",
+  "Live Chat": "線上客服",
+  "Operator": "客服人員"
+ },
+ "selection": {
+  "connection": {
+   "backend_type": {
+    "openai": "LiteLLM（OpenAI 相容）",
+    "n8n": "n8n webhook"
+   },
+   "document_mode": {
+    "file": "把檔案送給模型",
+    "link": "只給下載連結"
+   },
+   "readiness": {
+    "ok": "可以使用",
+    "blocked": "未就緒"
+   }
+  },
+  "job": {
+   "state": {
+    "pending": "等待中",
+    "running": "處理中",
+    "done": "完成",
+    "failed": "失敗",
+    "skipped": "已略過"
+   }
+  }
+ },
+ "fields": {
+  "connection": {
+   "backend_type": "後端",
+   "endpoint_url": "後端網址",
+   "api_key": "API 金鑰",
+   "api_key_set": "已設定 API 金鑰",
+   "model": "模型",
+   "timeout_seconds": "逾時（秒）",
+   "openai_stream": "串流回覆",
+   "max_retries": "重試次數",
+   "document_mode": "使用者傳送的文件",
+   "download_domains": "下載網域白名單",
+   "max_download_mb": "檔案大小上限（MB）",
+   "log_payload": "記錄請求內容",
+   "customer_safe": "可給客戶使用",
+   "readiness": "上線檢查",
+   "readiness_reason": "檢查結果"
+  },
+  "assistant": {
+   "system_prompt": "系統提示詞",
+   "max_history": "歷史訊息數",
+   "error_message": "錯誤訊息",
+   "partner_id": "機器人聯絡人"
+  },
+  "job": {
+   "run_count": "執行次數",
+   "run_after": "最早執行時間",
+   "message_id": "觸發訊息",
+   "reply_message_id": "回覆訊息"
+  }
+ },
+ "required_fields": {
+  "connection": [
+   "backend_type",
+   "endpoint_url",
+   "api_key",
+   "model",
+   "timeout_seconds",
+   "max_retries",
+   "document_mode",
+   "log_payload",
+   "customer_safe",
+   "readiness",
+   "readiness_reason"
+  ],
+  "assistant": [
+   "system_prompt",
+   "max_history",
+   "error_message",
+   "partner_id"
+  ],
+  "job": [
+   "state"
+  ]
+ },
+ "banned_msgstr": [
+  "端點",
+  "存取金鑰",
+  "Bot 聯絡人",
+  "招呼語",
+  "歡迎詞",
+  "尚未就緒",
+  "最大歷史訊息數",
+  "模型（選填）",
+  "Hermes"
+ ],
+ "banned_msgids": [
+  "n8n Webhook"
+ ]
+}

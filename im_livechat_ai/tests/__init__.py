@@ -18,3 +18,4 @@ from . import test_connection
 from . import test_assistant
 from . import test_runtime_reads
 from . import test_migration_200
+from . import test_contract

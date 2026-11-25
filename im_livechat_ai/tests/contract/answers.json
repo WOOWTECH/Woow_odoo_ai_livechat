@@ -1,5 +1,5 @@
 {
- "contract": "v1.1",
+ "contract": "v1.2",
  "about": "Backend answers (CONTRACT.md 3.6 and 3.7). Each case is one HTTP answer to one backend call; the harness serves it from a mocked requests.post and compares the normalized result of the product's own backend call with 'expect' (or 'expect_text_only' for products that post text only, where given).",
  "normalized": {
   "success": {

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Contract v1.1 (docs/CONTRACT.md, section 5): the thirteen shared checks of
+"""Contract v1.2 (docs/CONTRACT.md, section 5): the fourteen shared checks of
 tests/contract/harness.py, run on Live Chat AI.
 
 Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no
@@ -15,7 +15,10 @@ own code paths:
   (``spec['history']``) is the visitor's message with the file, the
   assistant's answer and an operator's message (Live Chat's conversation
   event), created without the trigger;
-- Test Connection: the button of the AI connection, or of the AI assistant.
+- Test Connection: the button of the AI connection, or of the AI assistant;
+- a post with a forged context (check 14): the visitor's message_post from a
+  superuser environment with the context applied after sudo(), so only the
+  module's own cleaning drops the ``default_*`` keys.
 
 Never edit tests/contract/ here: a change is a new contract version.
 """
@@ -268,6 +271,13 @@ class TestContract(ContractChecks, TransactionCase):
     def contract_gate_post(self, handle, text):
         handle['posted'] |= self._contract_post(handle['session'], handle['person'], text)
 
+    def contract_post_with_context(self, spec, context):
+        _connection, _assistant, channel = self._contract_records(spec)
+        session, person = self._contract_session(channel, spec)
+        session.sudo().with_context(**context).message_post(
+            body=spec['text'], author_id=person.id, message_type='comment', subtype_xmlid='mail.mt_comment')
+        return self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
+
     def contract_gate_state(self, handle):
         session = handle['session']
         jobs = self.env['im_livechat.ai.job'].search_count([('discuss_channel_id', '=', session.id)])
@@ -277,7 +287,7 @@ class TestContract(ContractChecks, TransactionCase):
         ], order='id')
         return {'jobs': jobs, 'notices': notices.mapped('message_type')}
 
-    # --- the thirteen checks (Odoo 18 collects only the test methods a class defines itself) ---
+    # --- the fourteen checks (Odoo 18 collects only the test methods a class defines itself) ---
 
     def test_contract_01_answers(self):
         self.contract_check_01_answers()
@@ -317,3 +327,6 @@ class TestContract(ContractChecks, TransactionCase):
 
     def test_contract_13_connections(self):
         self.contract_check_13_connections()
+
+    def test_contract_14_job_rows(self):
+        self.contract_check_14_job_rows()

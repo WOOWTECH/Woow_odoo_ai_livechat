@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Contract v1.1 checks, shared by Discuss AI, Project AI and Live Chat AI (docs/CONTRACT.md).
+"""Contract v1.2 checks, shared by Discuss AI, Project AI and Live Chat AI (docs/CONTRACT.md).
 
 This file, ``__init__.py``, the four JSON fixtures, ``SHA256SUMS`` and ``READY`` are copied byte for byte into
 ``<module>/tests/contract/``; never edit them in a product repo (a change is a new contract version).
@@ -17,10 +17,10 @@ How a product uses it (its own ``tests/test_contract.py``, imported in ``tests/_
 
         def test_contract_01_answers(self):
             self.contract_check_01_answers()
-        ...                                                # one wrapper per check, 01 to 13
+        ...                                                # one wrapper per check, 01 to 14
 
 Odoo 18 collects only the ``test*`` methods a test class defines itself, so the product writes the
-thirteen one-line wrappers; check 07 fails when one is missing, skipped, or does not call its check.
+fourteen one-line wrappers; check 07 fails when one is missing, skipped, or does not call its check.
 Run them at the default or the info log level, never warn or error (check 08 reads every record).
 
 Class attributes (the product sets them; check 07 compares the product's values with CONTRACT.md 3.1,
@@ -72,6 +72,11 @@ Adapter hooks (the product implements them; ``spec`` is a dict, see ``contract_s
   ``contract_gate_post(handle, text)``, ``contract_gate_state(handle)`` -> {'jobs': int, 'notices':
   [message_type, ...]} (jobs of the conversation; messages the product posted about the block),
   ``contract_gate_run(handle)``: run the conversation's pending reply job once, in the test transaction.
+- ``contract_post_with_context(spec, context)``: the person of ``spec`` posts ``spec['text']`` through the
+  product's real path (message_post, the person as author) from a superuser environment with ``context``
+  applied after ``sudo()``: Odoo 18's own sudo() drops ``default_*`` keys only when it switches into
+  superuser mode, so this way only the product's own cleaning can drop them. Return the job row(s) that
+  post created (no job is run).
 
 Requests: the harness reads the body a product passes to ``requests.post``: ``data=`` bytes (n8n must
 send the signed bytes that way), or for LiteLLM also ``json=`` (serialized as requests does). A ``str``
@@ -98,11 +103,12 @@ from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import new_test_user
 from odoo.tools.misc import file_open
 
-CONTRACT_VERSION = 'v1.1'
+CONTRACT_VERSION = 'v1.2'
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = ('answers', 'requests', 'render', 'glossary')
 CHECKS = ('01_answers', '02_requests', '03_vectors', '04_render', '05_glossary', '06_neutralize', '07_sums',
-          '08_secrets', '09_customer_safe', '10_retries', '11_gate', '12_identity_block', '13_connections')
+          '08_secrets', '09_customer_safe', '10_retries', '11_gate', '12_identity_block', '13_connections',
+          '14_job_rows')
 PRODUCT_FLAGS = ('surface_type', 'session_prefix', 'text_only', 'streams', 'identity_block', 'link_policy',
                  'speaker_label', 'events')
 SECRET_KEY = 'sk-contract-secret-7f3a9c'
@@ -339,6 +345,9 @@ class ContractChecks:
         raise NotImplementedError
 
     def contract_gate_run(self, handle):
+        raise NotImplementedError
+
+    def contract_post_with_context(self, spec, context):
         raise NotImplementedError
 
     # --- helpers ---
@@ -1047,6 +1056,29 @@ class ContractChecks:
             self.assertEqual(self.contract_gate_state(handle)['notices'], ['notification'],
                              'blocked when the job runs: one notice')
         self.assertFalse(post.called, 'no backend call for a job blocked when it runs')
+
+    # --- 14: job rows from explicit values only ---
+
+    def contract_check_14_job_rows(self):
+        """3.5 step 3: a context's ``default_<field>`` keys never set a field of the job row a post creates:
+        the product drops them before the trusted create, also when the caller already runs in superuser
+        mode (Odoo's sudo() cleans the context only when it switches into that mode)."""
+        names = contract_fixture('requests')['products'][self.contract_module]['job_fields']
+        forged = {
+            'default_%s' % names['state']: 'running',
+            'default_%s' % names['runs']: 3,
+            'default_%s' % names['started']: '2099-01-01 00:00:00',
+            'default_%s' % names['error']: 'forged',
+        }
+        with self._contract_patch_post() as post, self._contract_patch_sleep():
+            jobs = self.contract_post_with_context(self.contract_spec(backend='openai'), forged)
+        self.assertFalse(post.called, 'the post only queues a job')
+        self.assertEqual(len(jobs), 1, 'the post queued one job')
+        jobs.invalidate_recordset()
+        self.assertEqual(jobs[names['state']], 'pending', 'a forged default_%s' % names['state'])
+        self.assertEqual(jobs[names['runs']], 0, 'a forged default_%s' % names['runs'])
+        self.assertFalse(jobs[names['started']], 'a forged default_%s' % names['started'])
+        self.assertFalse(jobs[names['error']], 'a forged default_%s' % names['error'])
 
     # --- 13: connections ---
 

@@ -1,7 +1,8 @@
-# AI products contract, version 1.1
+# AI products contract, version 1.2
 
-- **Version:** v1.1, 2026-11-25. It replaces v1. The rules of v1 stay; v1.1 states rules that v1's fixtures
-  only implied, adds the speaker label (3.14) and the run-time gate (3.5), and its checks prove more.
+- **Version:** v1.2, 2026-11-25. It replaces v1.1, which replaced v1. The rules of v1 stay; v1.1 states rules
+  that v1's fixtures only implied, adds the speaker label (3.14) and the run-time gate (3.5), and its checks
+  prove more; v1.2 adds the rule that rows created for a post get explicit values only (3.5, check 14).
 - **Products:**
   - Discuss AI (`woow_ai_contact`);
   - Project AI (`woow_ai_task`);
@@ -60,10 +61,11 @@ The three products are separate. Each keeps its own runtime core and ships on it
 | Files in replies | attached from the download domains | attached from the download domains | text only |
 | Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] ` and `[負責同事 <name>] ` in the customer chat | no |
 | Conversation events in the n8n `events` | none | none | yes |
+| Job fields: state, runs, start, error | `state`, `run_count`, `started_at`, `error` | `state`, `run_count`, `started_at`, `error` | `state`, `attempts`, `started_at`, `error` |
 
 **Test values.** `requests.json` ("products") holds the values of this table that the tests use, per module:
 `surface_type`, `session_prefix`, `text_only`, `streams`, `identity_block`, `link_policy`, `speaker_label` and
-`events`. Check 7 compares the product's test class with them.
+`events`; check 7 compares the product's test class with them. It also names the job fields check 14 forges.
 
 **About the `contact` key.** It means different things in Discuss AI and Live Chat. New n8n workflows read `assistant`.
 
@@ -197,6 +199,15 @@ Every product uses these field names. The zh_TW labels are in 3.11.
      - The person then gets the error message.
      - Live Chat alerts its operators instead.
    - Job kinds are product-specific.
+   - **Explicit values only.** The job is created in the poster's request, and that request carries the
+     client's context: Odoo's `/mail/message/post` applies it, and a guest, a portal user or an employee can
+     send `default_<field>` keys in it. `create` fills every field it is not given from such keys, also under
+     `sudo()`. So every row a product creates with `sudo()` while it handles a post or a public or portal
+     route (the job, and call logs, files, chats) is created with those keys dropped
+     (`with_context(clean_context(self.env.context))`; `with_context(**values)` only merges). Odoo 18's
+     `sudo()` drops them only when it switches into superuser mode; code already in that mode, or a context
+     applied after `sudo()`, keeps them. A forged running state with a future start would pin the
+     conversation, and a forged run count would make every message fail without a call.
 4. **One job per conversation at a time.**
    - An advisory lock in the product's own namespace, `crc32('<module>.job')`.
    - The newest job supersedes older ones, unless the surface uses the per-author policy.
@@ -488,15 +499,15 @@ The other sections stay as each repository has them. Protocol details live in `d
 ## 5. Contract tests
 
 **Where the tests live.**
-- The package's `harness.py` holds the thirteen checks.
+- The package's `harness.py` holds the fourteen checks.
 - Each product's own `tests/test_contract.py` provides the glue:
   - the class attributes and adapter hooks that the harness docstring describes;
-  - one wrapper per check, named `test_contract_01_answers` … `test_contract_13_connections`.
+  - one wrapper per check, named `test_contract_01_answers` … `test_contract_14_job_rows`.
 - Odoo 18 collects only the test methods a class defines itself, which is why the wrappers are needed. Check 7 fails when one is missing, skipped, or does not call its check.
 - The class is tagged `post_install`, `-at_install`, `woow_ai_contract`, and imported in `tests/__init__.py`.
 - Run them at Odoo's default or info log level. Check 8 turns the `odoo` loggers to DEBUG while it runs.
 
-**The thirteen checks:**
+**The fourteen checks:**
 1. **Answers.** Every case of `answers.json` (n8n, LiteLLM, and SSE where the product streams) goes through the product's own backend call with `requests.post` mocked. The normalized result equals `expect`, or `expect_text_only` in text-only products.
 2. **Requests.** One canned conversation ("你是客服", "請問營業時間？") runs as a whole turn:
    - with n8n, signed and unsigned;
@@ -523,7 +534,7 @@ The other sections stay as each repository has them. Protocol details live in `d
      is no dynamic SQL.
    - Run over seeded records, it leaves the state of 3.10.
 7. **Sums.** `SHA256SUMS` matches the files, and `READY` holds its SHA-256. In a repository checkout
-   `docs/CONTRACT.md` is there. The product glue defines the thirteen wrappers, none skipped, each calling its
+   `docs/CONTRACT.md` is there. The product glue defines the fourteen wrappers, none skipped, each calling its
    check, and its values equal the table of 3.1.
 8. **Secrets.** Four failures (HTTP 401, a read timeout, an unexpected exception and a header error) on a LiteLLM
    connection with a key, on a streamed one where the product streams (plus an error inside the stream), and on an
@@ -553,6 +564,9 @@ The other sections stay as each repository has them. Protocol details live in `d
     - A new n8n connection waits 120 s.
     - The API key never comes back from `read` or an export.
     - A user who is not a system administrator cannot read connections.
+14. **Job rows.** A person posts through the product's real path, from a superuser environment, with a
+    context that carries `default_<state>`, `default_<runs>`, `default_<start>` and `default_<error>` (the
+    job fields of 3.1): the job row is pending, with no run, no start and no error.
 
 **What the checks do not cover.** Each product's own suite covers these:
 - the roles of assistants, jobs, call logs and usage (3.2), beyond the connection rule of check 13;
@@ -568,7 +582,7 @@ The other sections stay as each repository has them. Protocol details live in `d
 
 ## 6. Package files and digests
 
-**Copies.** The source is the `contract/v1.1/` folder of the release workspace, until a repository has merged this
+**Copies.** The source is the `contract/v1.2/` folder of the release workspace, until a repository has merged this
 version. A repository copies it byte for byte:
 - `docs/CONTRACT.md` (this file) to `docs/CONTRACT.md`;
 - `MODULE/tests/contract/` to `<module>/tests/contract/`.
@@ -581,8 +595,8 @@ in `tests/contract/`, holds the SHA-256 of `SHA256SUMS`; check 7 compares them.
 | File | SHA-256 |
 |---|---|
 | `__init__.py` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| `answers.json` | `6f0aa499a646d6a573ac33dc0889b9141a7ba2d81d30e4a901eab6b52a8af642` |
-| `glossary.json` | `061c00113f3aa4baf22bae16c3b888a1440afaf8ebd98358f3721c309144f0ce` |
-| `harness.py` | `90ba22d5d173f5cae040e06b0aa930babaecb8b63311c2c88e9eac7f8d677118` |
-| `render.json` | `9bd44c0f1eaa25f54562d392705ac7f1f91d7ca3cc23f0bb1da36a130402a389` |
-| `requests.json` | `153bfabe57450492654ea1d397771ddd5a33ac3a082eed31993e070ef865ce3b` |
+| `answers.json` | `6c9191bc203a383f228192c002374c254627b03de1254397e212593d7871bb6a` |
+| `glossary.json` | `3d6506ddb5060d1f3d80f3e049fe9a00bd036edfb828d316f9189a4d1d0384ed` |
+| `harness.py` | `14589b7698169b32d3007404aba8576aea22fb692af1dba26c58036164ac9ac3` |
+| `render.json` | `8c1a4a615c3b5533f137305cf4b20595659106129b90576f01be32a0062b90ce` |
+| `requests.json` | `2585e7b83e3514892b8c212fa23ac35526032896ab019aa44dbbe39b4fbdba89` |

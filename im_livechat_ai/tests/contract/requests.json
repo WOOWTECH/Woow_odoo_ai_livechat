@@ -1,5 +1,5 @@
 {
- "contract": "v1.1",
+ "contract": "v1.2",
  "about": "Request rules (CONTRACT.md 3.3, 3.6, 3.7, 3.14): vectors, the canned conversation and its earlier turn, speaker labels, the keys and types of the n8n body and the LiteLLM body, the ping, and the fixed values of each product (3.1).",
  "session": {
   "db_uuid": "0edfec80-6c1b-4f3e-9a52-7d1f00c0ffee",
@@ -277,7 +277,13 @@
    "identity_block": true,
    "link_policy": "any_host",
    "speaker_label": false,
-   "events": false
+   "events": false,
+   "job_fields": {
+    "state": "state",
+    "runs": "run_count",
+    "started": "started_at",
+    "error": "error"
+   }
   },
   "woow_ai_task": {
    "surface_type": "project_task",
@@ -287,7 +293,13 @@
    "identity_block": true,
    "link_policy": "any_host",
    "speaker_label": true,
-   "events": false
+   "events": false,
+   "job_fields": {
+    "state": "state",
+    "runs": "run_count",
+    "started": "started_at",
+    "error": "error"
+   }
   },
   "im_livechat_ai": {
    "surface_type": "livechat",
@@ -297,7 +309,13 @@
    "identity_block": false,
    "link_policy": "site_hosts",
    "speaker_label": false,
-   "events": true
+   "events": true,
+   "job_fields": {
+    "state": "state",
+    "runs": "attempts",
+    "started": "started_at",
+    "error": "error"
+   }
   }
  }
 }

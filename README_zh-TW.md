@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">Live Chat AI Integration / 即時聊天 AI 整合</h1>
+  <h1 align="center">Live Chat AI Integration / 線上客服 AI 整合</h1>
 </p>
 
 <p align="center">
@@ -10,19 +10,22 @@
   <img src="https://img.shields.io/badge/Odoo-18.0-purple?logo=odoo" alt="Odoo 18"/>
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python" alt="Python 3.10+"/>
   <img src="https://img.shields.io/badge/License-LGPL--3-green" alt="License"/>
-  <img src="https://img.shields.io/badge/AI%20後端-OpenAI%20相容%20%7C%20n8n-412991" alt="AI 後端"/>
+  <img src="https://img.shields.io/badge/AI%20後端-LiteLLM%20%7C%20n8n-412991" alt="AI 後端"/>
   <img src="https://img.shields.io/badge/PostgreSQL-16-blue?logo=postgresql" alt="PostgreSQL"/>
   <a href="https://github.com/WOOWTECH/Woow_odoo_ai_livechat/actions/workflows/odoo-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/WOOWTECH/Woow_odoo_ai_livechat/odoo-tests.yml?label=Odoo%20tests" alt="Odoo tests"/></a>
 </p>
 
 <p align="center">
-  每個即時聊天頻道各自選一個 AI 後端（OpenAI 相容，例如 LiteLLM、Hermes，或 n8n Webhook）自動回覆訪客，<br/>
+  用 AI 助理回覆 Odoo 線上客服的訪客：每個頻道選一個 AI 助理，助理的 AI 連線是 LiteLLM 或 n8n webhook。<br/>
   回覆工作不會遺失、客服可隨時接手。Odoo 只負責記錄、轉送、管理，其餘都交給後端。
 </p>
 
 <p align="center">
   <a href="README.md">English</a> &bull;
+  <a href="#三個獨立的-ai-產品">三個獨立的 AI 產品</a> &bull;
+  <a href="#對齊合約-v1">對齊（合約 v1）</a> &bull;
   <a href="#概述">概述</a> &bull;
+  <a href="#升級到-180200">升級到 18.0.2.0.0</a> &bull;
   <a href="#升級到-180121">升級到 18.0.1.2.1</a> &bull;
   <a href="#升級到-180120">升級到 18.0.1.2.0</a> &bull;
   <a href="#從-18010x-升級">從 18.0.1.0.x 升級</a> &bull;
@@ -32,9 +35,10 @@
   <a href="#截圖">截圖</a> &bull;
   <a href="#安裝">安裝</a> &bull;
   <a href="#設定">設定</a> &bull;
-  <a href="#ai-後端litellmhermesn8n">AI 後端</a> &bull;
+  <a href="#ai-後端litellm-與-n8n">AI 後端</a> &bull;
+  <a href="#協定">協定</a> &bull;
   <a href="#模組結構">模組結構</a> &bull;
-  <a href="#安全性">安全性</a> &bull;
+  <a href="#隱私與安全">隱私與安全</a> &bull;
   <a href="#測試">測試</a> &bull;
   <a href="#疑難排解">疑難排解</a> &bull;
   <a href="#相依模組">相依模組</a> &bull;
@@ -45,20 +49,101 @@
 
 ---
 
+## 三個獨立的 AI 產品
+
+2026-11-24 起，discuss AI、專案 AI、Live Chat AI 是三個獨立產品：各有自己的執行核心，各自下載、各自部署，不共用程式也不共用資料。
+
+| 產品 | 模組 | repo |
+|---|---|---|
+| Discuss AI | `woow_ai_contact`、`woow_ai_contact_portal_discuss` | Gitea `woow-paas/Woow_odoo_discuss_ai`（GitHub 鏡像 `WOOWTECH/Woow_odoo_discuss_ai`） |
+| 專案 AI | `woow_ai_task` | Gitea `woow-paas/Woow_odoo_project_ai` |
+| Live Chat AI（本 repo） | `im_livechat_ai` | GitHub `WOOWTECH/Woow_odoo_ai_livechat` |
+
+Live Chat AI 原地升級（18.0.2.0.0）。曾經把線上客服頻道搬到 Discuss AI 核心的橋接模組 `woow_ai_contact_livechat` 已在 Discuss AI 18.0.2.1.0 移除，沒有任何站台安裝過；裝著它時本模組會拒絕升級。
+
+## 對齊（合約 v1）
+
+三個產品靠同一份書面合約 [docs/CONTRACT.md](docs/CONTRACT.md) 維持一致的設定方式與運作方式：連線與助理的欄位、角色與選單、一則訊息怎麼處理、n8n 與 LiteLLM 的請求格式、使用者看到什麼、紀錄與用量、`neutralize.sql`、繁中用詞、升級規則。**這一版（18.0.2.0.0）實作合約 v1。** Live Chat 是只回文字的產品：LiteLLM 回覆不串流、系統訊息沒有身分區塊、只有本站網址會變成可點的連結（合約 3.1）。
+
+合約套件一字不差地放在 `im_livechat_ai/tests/contract/`（測試資料、共用檢查與 `SHA256SUMS`；用 `cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS` 核對）。`tests/test_contract.py` 用本模組自己的程式跑合約的 12 項檢查（測試標籤 `woow_ai_contract`）。不要在這裡改合約套件：合約要改就出新的合約版本。
+
+---
+
 ## 概述
 
-**im_livechat_ai** 是由 [WOOWTECH](https://github.com/WOOWTECH) 開發的 Odoo 18 模組，讓 AI 自動回覆即時聊天的訪客。網站訪客或已登入的入口網站客戶在啟用 AI 的頻道發訊息時，模組會在**同一筆交易**中建立一個「AI 回覆工作」；交易寫入完成後，再把對話送到**這個頻道的 AI 後端**，取得回覆後以頻道的機器人身分回覆訪客。
+**im_livechat_ai** 讓 AI 回覆 Odoo 線上客服的訪客。網站訪客或已登入的入口網站客戶在開啟 AI 的頻道發訊息時，模組會在**同一筆交易**中建立一個回覆工作；交易完成後，再把對話送到**這個頻道的 AI 助理**所用的後端，取得回覆後以助理的機器人聯絡人身分張貼到對話。
 
-每個頻道有自己的後端連線，由系統管理員在頻道的 **AI** 分頁（即時聊天 → 設定 → 頻道）設定：
+和 Discuss AI、專案 AI 一樣分兩層（合約 3.2）：
 
-| 後端類型 | 端點網址 | 存取金鑰（Token） | 常見後端 |
+| 層 | 誰設定 | 在哪裡 | 內容 |
 |---|---|---|---|
-| **OpenAI 相容（LiteLLM、Hermes…）** | 結尾為 `/v1` 的基礎網址，系統自動加上 `/chat/completions` | API 金鑰，以 `Authorization: Bearer <token>` 送出 | LiteLLM、Hermes、任何 OpenAI 相容伺服器 |
-| **n8n Webhook** | 完整的正式 Webhook 網址（Chat Trigger 的 `.../webhook/<id>/chat` 也可以） | 選填的 `X-Woow-Signature`（HMAC-SHA256）簽章密鑰，**不會送出**；空白則不簽章 | n8n 工作流程（Webhook＋AI Agent＋Respond to Webhook，或 Chat Trigger） |
+| **AI 連線** | 系統管理員 | 線上客服 > 配置 > AI 連線 | 大腦在哪裡：**LiteLLM**（OpenAI chat completions：結尾為 `/v1` 的基礎網址、API 金鑰、模型）或 **n8n webhook**（正式網址、選填的簽章金鑰）；逾時、重試次數、文件怎麼送、記錄請求內容、「可給客戶使用」、上線檢查與**測試連線** |
+| **AI 助理** | 系統管理員 | 線上客服 > 配置 > AI 助理 | 角色：名稱與頭像（它的機器人聯絡人）、使用的 AI 連線、系統提示詞、歷史訊息數、錯誤訊息；勾選**「可用在 Live Chat」**後，線上客服頻道才能選它 |
+| **線上客服頻道**的「AI 助理」分頁 | 線上客服管理員 | 線上客服 > 配置 > 頻道 | **由 AI 回覆**、選哪個 AI 助理（只能選可用在 Live Chat 的）、歡迎訊息、轉真人相關文字、暫停與等候分鐘數、選填的轉真人關鍵字 |
 
-Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查商品、Odoo MCP 等）、審核與權限都屬於後端。客服隨時可以接手：客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話。沒有預設網址、也沒有預設模型：系統管理員填好頻道連線之前 AI 不會回覆。設定 App 裡已沒有本模組的任何設定。
+Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查商品、Odoo MCP 等）、審核與權限都屬於後端。客服隨時可以接手：客服在對話中發言，或訪客要求真人客服時，AI 會暫停回覆這段對話。沒有預設網址、也沒有預設模型：系統管理員建好 AI 連線與 AI 助理、線上客服管理員選好助理之前，AI 不會回覆。設定 App 裡沒有本模組的任何設定。
 
-請求格式與 `woow_ai_contact`（docs/PROTOCOL.md）的 n8n 一節相容：標頭、簽章、session id、內容與回覆格式都一樣，為本模組寫的 n8n 工作流程，之後改用 `woow_ai_contact` 也能直接沿用。
+**限制設在 LiteLLM 金鑰上。** 每個線上客服用的連線各給一把 LiteLLM 虛擬金鑰，在那裡設每分鐘請求數與 Token 數、同時請求數與預算。Odoo 沒有用量限制，只有技術性的佇列上限：每段對話一次一則回覆、每個線上客服頻道最多 30 則未完成的回覆（系統參數 `im_livechat_ai.max_active_jobs`；0 表示不限制）、1.5 秒合併連發訊息、每個回覆工作最多處理 3 次、超過 30 分鐘的回覆工作放棄。**AI 用量**每月統計回覆數與 Token 數，作為人工開立發票的參考。詳見 [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps)。
+
+---
+
+## 升級到 18.0.2.0.0
+
+`-u im_livechat_ai`（或平台的升級檢查，版本號改變時會執行）會把每個頻道的後端設定搬到兩層：
+
+| 項目 | 結果 |
+|---|---|
+| 開啟 AI、或有後端網址、或有系統提示詞的頻道 | 每個頻道各得到**自己的 AI 助理**（名稱、提示詞、歷史訊息數、錯誤訊息；沿用頻道原本的機器人聯絡人），並勾選**「可用在 Live Chat」**，頻道選用它。**由 AI 回覆**維持原狀。 |
+| 後端類型、網址、金鑰、模型、文件、逾時、重試次數 | **每種不同的設定一個 AI 連線**：設定與金鑰完全相同的頻道共用一個。數值依 18.0.1.3.5 實際執行的規則換算（網址正規化；n8n 逾時 0 換成 120 秒、LiteLLM 換成 45 秒；低於 10 秒的換成 10 秒；重試最多 2 次；歷史訊息數 0 換成 50）。 |
+| 金鑰 | **只在 SQL 裡**複製與比對：不會進到 Python、日誌、說明或例外訊息。18.0.1.x 的欄位保留一份給回復版本用；在 18.0.2.0.0 更換或移除金鑰時，頻道上的那份會清掉。 |
+| 「可給客戶使用」 | LiteLLM 一律勾選；n8n 要等系統管理員勾選。Live Chat 只在頻道分頁顯示警告。 |
+| 記錄請求內容 | 新連線一律關閉；原本有記錄的頻道，已存的內容會清除。舊的呼叫紀錄會連到它的助理與連線。 |
+| 選單 | 線上客服 > 配置：「AI 連線」「AI 助理」「回覆工作」「呼叫紀錄」「AI 用量」，只有系統管理員看得到。線上客服管理員照樣使用頻道的「AI 助理」分頁。 |
+| Hermes | 不再支援（只接 LiteLLM 或 n8n）。伺服器日誌會列出看起來像 Hermes 的連線（INFO，只有 id）；不會改動它們。 |
+| 翻譯 | 重新載入本模組附的翻譯：管理員改過的本模組翻譯會被換回內附版本。 |
+
+**升級後可能不回覆的情況。** 開啟 AI 的頻道只有在助理啟用、可用在 Live Chat，而且連線就緒（啟用、網址允許、LiteLLM 有金鑰與模型）時才會回覆。升級照原樣搬設定，所以升級前就無法回覆的頻道（沒有網址、LiteLLM 沒有金鑰或模型）升級後仍然不能回覆，而且現在**不會建立回覆工作**：每段未就緒期間，對話收到一次通知、客服收到一次提醒。升級後的 WARNING 會列出這些頻道的 id。
+
+**升級前：**
+
+1. 確認版本：`SELECT latest_version FROM ir_module_module WHERE name = 'im_livechat_ai';` 必須是 18.0.1.1.0 以上（已知站台都是 18.0.1.3.5）。
+2. 執行這段唯讀盤點（18.0.1.2.0 以上；只印 id 與是非值）：
+
+   ```sql
+   SELECT id, ai_enabled,
+          COALESCE(btrim(ai_endpoint_url), '') <> '' AS has_url,
+          ai_api_token_secret IS NOT NULL AS has_key,
+          COALESCE(ai_backend_type, 'openai') AS backend,
+          COALESCE(btrim(ai_model), '') <> '' AS has_model
+     FROM im_livechat_channel
+    WHERE ai_enabled OR COALESCE(btrim(ai_endpoint_url), '') <> ''
+    ORDER BY id;
+   ```
+
+   `ai_enabled` 為真卻沒有網址，或 `backend = 'openai'` 卻沒有金鑰或模型的，升級後會是未就緒的頻道：先在 18.0.1.3.5 補好，或關閉它的 AI。
+
+**以下情況升級會停止，而且什麼都不改：**
+
+- 資料庫低於 18.0.1.1.0：先升到 18.0.1.3.5；
+- `woow_ai_contact_livechat` 是已安裝、待升級或待移除：先解除安裝；
+- 18.0.1.1.0 已退役的設定視圖（`im_livechat_ai.res_config_settings_view_form_livechat_ai`）還在，而且不是原封不動的原版（改過、被別的視圖繼承、或有別的 xmlid），或還有別的設定視圖用到已移除的 `livechat_ai_*` 欄位：請人工檢查這些視圖。原封不動的退役視圖會自動刪除。
+
+**升級後：**看 WARNING，打開 **AI 連線**（上線檢查、**測試連線**），並替每把 LiteLLM 金鑰設好限制。
+
+**回復到 18.0.1.3.5。** 優先往前修。真的要退回時，部署 18.0.1.3.5 的程式並執行 `-u im_livechat_ai`。18.0.1.x 的頻道欄位保留了一個版本，所以頻道會回到升級當時的設定。在 18.0.2.0.0 建立或改過的助理與連線會遺失，在 18.0.2.0.0 換過的金鑰要重新輸入，在 18.0.2.0.0 新建的頻道沒有 18.0.1.3.5 的設定：請關閉它們的 AI。Odoo 會保留已移除模型的資料表，之後再升級時會沿用裡面的資料，所以回復成功後請執行一次（不會印出任何內容）：
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM ir_model WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')) THEN
+    IF to_regclass('im_livechat_ai_assistant') IS NOT NULL THEN DELETE FROM im_livechat_ai_assistant; END IF;
+    IF to_regclass('im_livechat_ai_connection') IS NOT NULL THEN DELETE FROM im_livechat_ai_connection; END IF;
+    DELETE FROM ir_attachment WHERE res_model IN ('im_livechat.ai.assistant', 'im_livechat.ai.connection');
+  END IF;
+END $$;
+```
+
+它會移除金鑰並釋出機器人聯絡人，之後再升級時每個頻道又會得到一個助理，沿用它的機器人聯絡人。**不要用解除安裝來回復：**解除安裝會刪掉本模組的資料表，包括連線與金鑰、助理、回覆工作與呼叫紀錄。
 
 ---
 
@@ -114,7 +199,7 @@ Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查�
 
 ### 上線須知：重啟或部署後的回覆
 
-AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程序停止（重啟、部署、worker 自動回收）時正在處理的回覆，以及「等候真人逾時後」的 AI 回覆，都由排程 **Live Chat AI: Recover Reply Jobs**（每 2 分鐘）送出，所以會慢 **約 1-2 分鐘**。**一定要有排程程序**：Odoo 要以 `max_cron_threads >= 1` 執行（或另外跑一個排程程序，例如 `odoo --no-http --max-cron-threads=1`）。監看位置：每個頻道 **AI** 分頁的「**AI 回覆工作**」區塊（排程上次執行時間、超過 5 分鐘未完成的工作數，有問題會顯示警告），或 **即時聊天 → 設定 → AI 回覆工作**。
+AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程序停止（重啟、部署、worker 自動回收）時正在處理的回覆，以及「等候真人逾時後」的 AI 回覆，都由排程 **Live Chat AI: Recover Reply Jobs**（每 2 分鐘）送出，所以會慢 **約 1-2 分鐘**。**一定要有排程程序**：Odoo 要以 `max_cron_threads >= 1` 執行（或另外跑一個排程程序，例如 `odoo --no-http --max-cron-threads=1`）。18.0.2.0.0 起由系統管理員在 AI 助理表單的「**回覆處理方式**」區塊（排程上次執行時間、超過 5 分鐘未完成的工作數，有問題會顯示警告）與 **線上客服 > 配置 > 回覆工作** 監看。
 
 從 18.0.1.0.x 升級後（直接升到 18.0.1.2.0 時，18.0.1.1.0 與 18.0.1.2.0 的腳本都會跑），系統管理員要：
 
@@ -131,11 +216,11 @@ AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程�
 | 沒有此模組 | 使用此模組 |
 |---|---|
 | 僅能手動回覆聊天 | AI 全天候自動回覆，客服可隨時接手 |
-| 只能接一種 AI | 每個頻道各自接 LiteLLM、Hermes 或 n8n 工作流程，金鑰各自獨立 |
+| 只能接一種 AI | AI 助理使用 LiteLLM 或 n8n 連線，每個頻道選一個助理 |
 | 訊息可能沒人回 | 回覆工作有紀錄，重啟也會補回；連發多則只回一次 |
 | 無法轉真人 | 客服發言或訪客說「真人」「客服」就暫停 AI 並通知客服 |
-| 金鑰誰都看得到 | 金鑰只有系統管理員能設定、儲存後不再顯示；n8n 的密鑰從不送出 |
-| 對話內容到處存 | API 日誌預設不存對話內容，且只有管理員看得到 |
+| 金鑰誰都看得到 | 金鑰只有系統管理員能設定、儲存後不再顯示、不進日誌；n8n 的簽章金鑰從不送出 |
+| 對話內容到處存 | 呼叫紀錄預設不存對話內容，且只有系統管理員看得到 |
 | 權限混在 Odoo 裡 | Odoo 只記錄與轉送；工具與權限由後端負責 |
 
 ---
@@ -167,7 +252,7 @@ AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程�
  |       |  最近 N 則歷史、客服訊息加標記          |  openai：/v1/chat/      | |
  |       v                                    |    completions          | |
  |  _generate_ai_reply() ---- POST ---------->|  n8n：簽章 Webhook       | |
- |       |  逾時依頻道設定、最多重試 2 次         |                        | |
+ |       |  逾時依連線設定、最多重試 2 次         |                        | |
  |       |<-------- 回覆 ----------------------|                        | |
  |       |                                    +------------------------+ |
  |       v                                                               |
@@ -183,9 +268,9 @@ AI 回覆平常由收到訪客訊息的 Odoo 程序裡的執行緒送出。程�
 ```mermaid
 sequenceDiagram
     participant V as 網站訪客
-    participant O as Odoo 即時聊天
+    participant O as Odoo 線上客服
     participant J as AI 回覆工作
-    participant L as 頻道的 AI 後端（openai／n8n）
+    participant L as 助理的 AI 連線（LiteLLM／n8n）
 
     V->>O: 發送聊天訊息
     O->>O: _notify_thread()
@@ -211,7 +296,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A[新訊息] --> B{AI 已啟用的<br/>即時聊天？}
+    A[新訊息] --> B{AI 已啟用的<br/>線上客服？}
     B -->|否| E[一般聊天流程]
     B -->|是| C{作者}
     C -->|AI 機器人 / OdooBot| E
@@ -224,7 +309,7 @@ flowchart LR
     F --> G[交易完成後處理<br/>等 1.5 秒、對話加鎖]
     G --> I{有新訊息或已暫停？}
     I -->|是| S[略過]
-    I -->|否| L[呼叫頻道的 AI 後端<br/>逾時依頻道設定]
+    I -->|否| L[呼叫助理的 AI 連線<br/>逾時依連線設定]
     L --> M{成功？}
     M -->|是| R[發送 AI 回覆]
     M -->|否，可重試| W[等 3 秒／10 秒] --> L
@@ -238,8 +323,8 @@ flowchart LR
 
 ### 核心功能
 
-- **每個頻道一個後端** -- OpenAI 相容（LiteLLM、Hermes…）或 n8n Webhook，各自的端點網址與存取金鑰，由系統管理員在頻道的 AI 分頁設定；即時聊天管理員只看得到「連線是否已設定」。
-- **模型改為文字欄位** -- 選填；OpenAI 相容後端啟用 AI 時必填（LiteLLM 需要），Hermes 會忽略，n8n 不使用；有值才送出。
+- **AI 助理與 AI 連線** -- 系統管理員建立 AI 連線（LiteLLM 或 n8n webhook，含金鑰與呼叫設定）與 AI 助理（角色：使用的連線、提示詞、歷史訊息數、錯誤訊息），並在要給訪客用的助理勾選「可用在 Live Chat」。線上客服管理員為每個頻道選一個；他們看不到網址、金鑰或提示詞。
+- **上線檢查** -- 每個連線都有上線檢查（「可以使用」或「未就緒」，附固定原因）與**測試連線**按鈕（LiteLLM `GET /models`、n8n ping）。頻道的 AI 無法回覆時不建立工作：每段未就緒期間，訪客收到一次通知、客服收到一次提醒。
 - **多輪對話上下文** -- 最近 1-200 則訊息。訪客是 `user`、AI 機器人是 `assistant`，真人客服是加上 `[真人客服 姓名]` 標記的 `user`（與 `woow_ai_contact` 相同），並以對話事件告訴 AI 不要推翻同事的說法。OpenAI 訊息一定以 user 開頭、以 user 結尾。
 - **訪客與入口網站客戶** -- 網站訪客、已登入的入口網站客戶與公開使用者都會得到回覆；內部使用者、這段對話指派的客服與機器人不會觸發 AI。
 
@@ -247,53 +332,53 @@ flowchart LR
 
 - **有紀錄的回覆工作**（`im_livechat.ai.job`）-- 和訪客訊息在同一筆交易建立，訊息寫入成功才有工作；交易完成後才開始處理。
 - **連發只回一次** -- 等 1.5 秒合併連發訊息；每段對話一把 PostgreSQL advisory lock（跨 prefork worker 與排程程序都有效）；有更新工作的舊工作會被略過，由最新的工作帶完整上下文回覆。
-- **呼叫有上限** -- 每次呼叫最多等「**等待後端回覆的秒數**」（每個頻道各自設定；0＝預設：OpenAI 相容 45 秒、n8n 120 秒；10-300 秒），最多重試 2 次（先等 3 秒、再等 10 秒），每個工作最多處理 3 次。OpenAI 相容後端任何失敗都會重試；n8n 只在連不上或回 HTTP 429／503 時重試，讀取逾時一律不重試（agent 可能還在跑；同一個工作流程不會跑兩次）。
+- **呼叫有上限** -- 連線的逾時涵蓋整個回答，包含重試（10 - 300 秒；預設 LiteLLM 45 秒、n8n 120 秒）。最多重試 2 次（0 - 2，預設 1；先等 3 秒、再等 10 秒，且在逾時之內），而且只在請求沒送出或後端回 HTTP 429／503 時重試，讀取逾時一律不重試（後端可能還在處理；同一個工作流程不會跑兩次）。每個工作最多處理 3 次。
 - **補救排程** -- 每 2 分鐘把因重啟或當機而停在「待處理／處理中」的工作重新執行；機器人已經回覆過的不會重複回覆。超過 30 分鐘仍未完成的工作會放棄。等候真人逾時後的延後回覆也由它執行（會在等候結束的時間觸發）。需要排程程序（見[上線須知](#上線須知重啟或部署後的回覆)）。
-- **監看** -- 頻道 AI 分頁的「**AI 回覆工作**」區塊（即時聊天管理員）顯示排程上次執行時間與超過 5 分鐘仍在「待處理／處理中」的工作數；排程超過 5 分鐘沒跑或有卡住的工作時顯示警告。
-- **失敗處理** -- 全部重試失敗時，訪客收到頻道的錯誤訊息（預設繁中），客服會收到通知（OdooBot 訊息與不會自動消失的提示）。
-- **看得到的佇列** -- **即時聊天 → 設定 → AI 回覆工作** 可看每個工作的狀態、處理次數、後端呼叫次數與簡短錯誤。
+- **監看** -- AI 助理表單的「**回覆處理方式**」區塊（系統管理員）顯示排程上次執行時間與超過 5 分鐘仍在「等待中／處理中」的工作數；排程超過 5 分鐘沒跑或有卡住的工作時顯示警告。
+- **失敗處理** -- 全部重試失敗時，訪客收到 AI 助理的錯誤訊息（空白時用訪客語言的預設訊息），客服會收到通知（OdooBot 訊息與不會自動消失的提示；HTTP 429 時每個頻道 10 分鐘內只通知一次）。
+- **看得到的佇列** -- **線上客服 > 配置 > 回覆工作**（系統管理員）可看每個工作的狀態、處理次數、後端呼叫次數與簡短錯誤。
 
 ### 轉真人客服（暫停）
 
 兩種暫停，記在對話上（`discuss.channel.ai_paused_until`、`ai_pause_reason`）：
 
 - **客服發言**（`operator`）-- 內部使用者在對話中發言後，AI 在這段對話暫停 **30 分鐘**（**真人接手後暫停**，每個頻道可調 1-1440）；之後客服每次發言都延長到「現在 + 30 分鐘」（不會縮短）。這段期間 AI 完全不出聲：不回覆、不送通知。
-- **訪客要求真人**（`handoff`）-- **由後端決定**（負責人決策 40，與 woow_ai_contact_livechat 同一套協定）：訪客訊息照常交給後端，後端的回答表示要轉人時才轉。OpenAI 相容後端（LiteLLM、Hermes）在回覆最後加一行 `[[handoff]]`（不分大小寫，可有空白、反引號或 markdown 跳脫 `\[\[handoff\]\]`）；n8n 回 `"handoff": true`（最上層或 item list 的第一項，可加 `"handoff_reason"`，最多保留 300 字），或在 `output` 結尾寫標記。Odoo 拿掉標記、先張貼回覆文字（沒有文字就張貼頻道的**轉接訊息**；有 `handoff` 時忽略 `skip`），然後轉真人：AI **等候 10 分鐘**（**等候真人分鐘數**，1-1440）、通知客服（附原因）、回覆工作記下這次轉接（**轉真人判斷來源**＝AI 後端、**轉真人原因**）。後端回答途中客服插話，答案丟掉、不轉。**Odoo 為此加的唯一提示文字**：有客服（Live Chat 頻道的操作員裡有內部使用者）的頻道，OpenAI 請求的 system 訊息最後加一行「訪客要求真人客服、想跟真人說話時，在回覆最後單獨一行寫 [[handoff]]，系統就會轉接真人客服（不要說無法轉接；只問電話或聯絡方式不算）。When the visitor asks for a human, end your reply with a line [[handoff]] and Odoo hands the conversation to a human operator.」；n8n 改看 `channel.livechat.handoff_available`。**轉真人關鍵字**是選用的前置篩選，**預設空白**：訪客訊息含其中之一時直接轉真人、不呼叫後端（中文出現在任何位置都算，英文字詞要整個字／片語相符、不分大小寫）。
+- **訪客要求真人**（`handoff`）-- **由後端決定**（負責人決策 40，與 Discuss AI 同一套協定）：訪客訊息照常交給後端，後端的回答表示要轉人時才轉。LiteLLM 後端在回覆最後加一行 `[[handoff]]`（不分大小寫，可有空白、反引號或 markdown 跳脫 `\[\[handoff\]\]`）；n8n 回 `"handoff": true`（最上層或 item list 的第一項，可加 `"handoff_reason"`，最多保留 300 字），或在 `output` 結尾寫標記。Odoo 拿掉標記、先張貼回覆文字（沒有文字就張貼頻道的**轉接訊息**；有 `handoff` 時忽略 `skip`），然後轉真人：AI **等候 10 分鐘**（**等候真人分鐘數**，1-1440）、通知客服（附原因）、回覆工作記下這次轉接（**轉真人判斷來源**＝AI 後端、**轉真人原因**）。後端回答途中客服插話，答案丟掉、不轉。**Odoo 為此加的唯一提示文字**：有客服（Live Chat 頻道的操作員裡有內部使用者）的頻道，LiteLLM 請求的 system 訊息最後加一行「訪客要求真人客服、想跟真人說話時，在回覆最後單獨一行寫 [[handoff]]，系統就會轉接真人客服（不要說無法轉接；只問電話或聯絡方式不算）。When the visitor asks for a human, end your reply with a line [[handoff]] and Odoo hands the conversation to a human operator.」；n8n 改看 `channel.livechat.handoff_available`。**轉真人關鍵字**是選用的前置篩選，**預設空白**：訪客訊息含其中之一時直接轉真人、不呼叫後端（中文出現在任何位置都算，英文字詞要整個字／片語相符、不分大小寫）。
 - **等候通知** -- 等候期間訪客的第一則訊息會收到一則固定回覆（**等候通知**，預設「已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 10 分鐘後繼續為您服務。」；`%(minutes)s` 會換成等候分鐘數）。每次等候只送一次（`discuss.channel.ai_pause_notice_sent`），不呼叫後端。
 - **客服接手** -- 等候期間客服一發言，就改成客服暫停，從這次發言起算 30 分鐘，即使等候設得更長也一樣（等候設 120 分鐘時，AI 不會因此安靜 120 分鐘）；等候通知與延後回覆都會安靜取消。
 - **逾時自動接回** -- 等候結束時若沒有客服回覆，AI 會回答訪客在等候期間寫的所有訊息，訪客不必再發一次：每則等候期間的訊息都有一個延後的回覆工作（`im_livechat.ai.job.deferred`），到期時間是等候結束，補救排程會在那個時間被觸發，由最新的工作一次回答全部（其他略過）。等候結束後約 1 分鐘內會收到回答（排程喚醒時間）。
 
 ### 隱私與維運
 
-- **AI API 日誌只有即時聊天管理員看得到** -- 只記時間、後端類型、模型、token、耗時、狀態、HTTP 狀態碼與簡短錯誤。
-- **AI 設定只有即時聊天管理員能看、能改** -- 頻道的 AI 欄位（提示詞、模型、轉真人關鍵字、錯誤訊息等）只開放給 Live Chat 管理員；一般客服、員工、入口網站客戶都讀不到。後端連線（類型、端點網址、存取金鑰、記錄對話內容）與「測試連線」只開放給系統管理員。AI 機器人的聯絡人由系統建立，不能指定成其他人。
+- **呼叫紀錄只有系統管理員看得到** -- 每次回答一筆：時間、助理、連線、後端類型、模型、Token、耗時、狀態（`ok`、`http_error`、`timeout`、`invalid_response`、`error`）、HTTP 狀態碼與例外類型名稱。
+- **設定依角色分開** -- AI 連線與 AI 助理只有系統管理員能用（金鑰只能寫入）。頻道的「AI 助理」分頁給線上客服管理員，他們只看得到助理的說明與狀態，看不到網址、金鑰或提示詞；一般客服、員工、入口網站客戶都讀不到。AI 機器人的聯絡人由系統建立，不能指定成其他人。
 - **AI 回覆只對自家網址產生連結** -- 只有 `web.base.url` 與網站網域的網址會變成可點的連結，其他網址只顯示文字。
-- **預設不存對話內容** -- **記錄對話內容**（每個頻道各自設定、只有系統管理員能改、預設關閉）只在除錯時暫時打開；關閉時會清除這個頻道已保存的內容。保存的內容不含金鑰。
-- **保留天數** -- 超過頻道 **日誌保留天數**（預設 14 天）的日誌與已結束的回覆工作每天自動刪除。
-- **簡短錯誤** -- 測試按鈕與日誌只顯示狀態碼和一句說明；完整錯誤只寫伺服器日誌。
+- **預設不存對話內容** -- **記錄請求內容**（每個 AI 連線各自設定、預設關閉）只在除錯時暫時打開；關閉時會清除這個連線已保存的內容。保存的內容不含金鑰。
+- **保留天數** -- 超過 30 天的呼叫紀錄與已結束的回覆工作每天自動刪除。**AI 用量**每個助理、連線、頻道、每月保留一筆。
+- **簡短錯誤** -- 測試按鈕與紀錄只顯示狀態碼和一句說明；伺服器日誌只寫 id、狀態碼與例外類型名稱，絕不寫上游回應或例外內容。
 
 ### AI 身分揭露
 
 - **歡迎訊息** -- 頻道啟用 AI 時，聊天視窗顯示 **AI 歡迎訊息**（新頻道預設「您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。」），取代 Odoo 原本的歡迎訊息。
-- **機器人頭像** -- AI 訊息的作者是機器人聯絡人，名稱是 **機器人名稱**，頭像是模組附的機器人圖（`static/img/ai_bot.png`）。
-- **身分說明** -- Odoo 不再自動加身分說明：角色由後端（或頻道選填的系統提示詞）決定。
-- **限制** -- 聊天視窗標題（以及歡迎訊息的作者）仍顯示這段對話指派的真人客服，因為 Odoo 每段即時聊天都會指派一位客服；本模組沒有改這部分。
+- **機器人頭像** -- AI 訊息的作者是 AI 助理的機器人聯絡人，名稱與圖片跟著助理（助理沒有圖片時用模組附的機器人圖 `static/img/ai_bot.png`）。
+- **身分說明** -- Odoo 不加身分說明：角色由後端（或助理選填的系統提示詞）決定。
+- **限制** -- 聊天視窗標題（以及歡迎訊息的作者）仍顯示這段對話指派的真人客服，因為 Odoo 每段線上客服都會指派一位客服；本模組沒有改這部分。
 
 ### 安全
 
 - **Markdown 回覆、XSS 防護** -- AI 回覆以內建的小型轉換器顯示 markdown（段落、`**粗體**`、清單、表格、標題、`程式碼` 與程式碼區塊）；所有文字先跳脫、結果再經過淨化；只有連到本站網域的連結會變成連結。
 - **迴圈防護** -- AI 機器人、OdooBot 與對話指派的客服不會觸發 AI。
-- **繁體中文** -- 給訪客與客服看的文字都是繁中，介面附完整 `zh_TW` 翻譯。
+- **繁體中文** -- 原文是英文，附完整 `zh_TW` 翻譯（合約用詞）；給訪客的預設文字與給客服的提醒依每個人的語言。
 
 ---
 
 ## 截圖
 
-> 截圖是 18.0.1.0.0 版拍的。18.0.1.2.0 起 AI 分頁改為「**AI 後端連線**」區塊（後端類型、端點網址、存取金鑰、模型）。
+> 截圖是 18.0.1.0.0 版拍的。18.0.2.0.0 起頻道的「AI 助理」分頁只選 AI 助理；後端設定在 AI 連線與 AI 助理上。
 
-### 即時聊天頻道總覽
+### 線上客服頻道總覽
 
-<p align="center"><img src="docs/screenshots/livechat_channel_list.png" alt="即時聊天頻道列表" width="720"/></p>
+<p align="center"><img src="docs/screenshots/livechat_channel_list.png" alt="線上客服頻道列表" width="720"/></p>
 
 ### AI 整合設定分頁（18.0.1.0.0 版面）
 
@@ -303,9 +388,9 @@ flowchart LR
 
 <p align="center"><img src="docs/screenshots/admin_discuss_view.png" alt="管理員 Discuss 檢視" width="720"/></p>
 
-### 訪客端即時聊天小工具
+### 訪客端線上客服小工具
 
-<p align="center"><img src="docs/screenshots/visitor_livechat_page.png" alt="訪客即時聊天頁面" width="720"/></p>
+<p align="center"><img src="docs/screenshots/visitor_livechat_page.png" alt="訪客線上客服頁面" width="720"/></p>
 
 ### 測試結果
 
@@ -334,10 +419,10 @@ flowchart LR
    - 點擊 **更新應用程式列表**。
 
 3. **安裝模組**：
-   - 搜尋 **"Live Chat AI"** 或 **"即時聊天 AI"**。
+   - 搜尋 **"Live Chat AI"** 或 **"線上客服 AI"**。
    - 點擊 **安裝**。
 
-4. **為每個頻道設定 AI 後端**（見[設定](#設定)）；設定好之前 AI 不會回覆。
+4. **建立 AI 連線與 AI 助理，再到頻道選擇助理**（見[設定](#設定)）；設定好之前 AI 不會回覆。
 
 ### Docker / Podman 部署
 
@@ -391,251 +476,104 @@ Woow_odoo_ai_livechat/
 - **網路：** 所有服務共享 `odoo-ailivechat-network` 橋接網路，支援內部主機名稱解析。
 - **資料持久化：** PostgreSQL 資料和 Odoo 檔案儲存皆以 bind volume 掛載，確保重啟後資料不遺失。
 - **健康檢查：** PostgreSQL 容器包含健康檢查；Odoo 會等待資料庫就緒後才啟動。
-- **密碼：** 資料庫密碼只放在 `.env`；`odoo.conf` 不放資料庫帳密（由官方映像從環境變數帶入）。AI 後端的網址與金鑰不放在這裡，由系統管理員在各即時聊天頻道的 AI 分頁填寫。
+- **密碼：** 資料庫密碼只放在 `.env`；`odoo.conf` 不放資料庫帳密（由官方映像從環境變數帶入）。AI 後端的網址與金鑰不放在這裡，由系統管理員在「線上客服 > 配置 > AI 連線」填寫。
 
 ---
 
 ## 設定
 
-所有設定都在頻道上：**即時聊天 → 設定 → 頻道 →（頻道）→ AI 整合** 分頁。
+**線上客服 > 配置** 裡給系統管理員的是「AI 連線」「AI 助理」「回覆工作」「呼叫紀錄」「AI 用量」；線上客服管理員使用頻道的「AI 助理」分頁。
 
-### 步驟 1：後端連線（只有系統管理員）
+### 步驟 1：AI 連線（系統管理員）
 
-| 欄位 | 說明 | 預設值 |
-|------|------|--------|
-| **後端類型**（`ai_backend_type`） | 「OpenAI 相容（LiteLLM、Hermes…）」或「n8n Webhook」；即時聊天管理員只能看、不能改 | OpenAI 相容 |
-| **端點網址**（`ai_endpoint_url`） | OpenAI 相容：結尾為 `/v1` 的基礎網址（貼上 `/chat/completions` 會自動去掉）。n8n：完整的正式 Webhook 網址。只接受 `https://`；`http://` 只限 `localhost`、`127.0.0.1`、`::1` 與結尾為 `.svc.cluster.local` 的主機（`http://hermes:8642/v1` 這種短名稱會被拒絕） | 空白 |
-| **存取金鑰（Token）**（`ai_api_token`） | OpenAI 相容（必填）：API 金鑰（`Authorization: Bearer <token>`）。n8n（選填）：簽章密鑰（不會送出）；空白則請求不簽章，例如公開的 Chat Trigger。只寫不讀：儲存後不再顯示（表單會顯示是否已儲存），留空即保留 | 空白 |
-| **模型（選填）**（`ai_model`） | 文字欄位。OpenAI 相容後端啟用 AI 時必填（LiteLLM 需要）；Hermes 會忽略；n8n 不使用。即時聊天管理員可以改 | 空白 |
-| **訪客傳的檔案**（`ai_document_mode`） | OpenAI 相容後端：**直接附檔（LiteLLM／OpenAI）** 把訪客的文件（PDF、Word、Excel、文字檔）原封不動附上，LiteLLM／OpenAI 可直接讀；**只給下載連結（Hermes 等）** 改給簽章下載連結，由後端自己下載。圖片兩種模式都直接附上；n8n 一律只給連結。見[訪客傳的檔案](#訪客傳的檔案)。即時聊天管理員可以改 | 直接附檔（升級時 Hermes 頻道設為只給下載連結） |
-| **測試連線** | OpenAI 相容：用頻道的模型送一個小的 chat completion。n8n：送 `{"event": "ping", ..., "action": "loadPreviousSession"}`（有密鑰時會簽章），要回 HTTP 200；Chat Trigger 不會因此執行 agent。只顯示狀態碼和一句說明 | -- |
-| **記錄對話內容**（`ai_log_payload`） | 在這個頻道的 AI API 日誌保存請求與回應內容；關閉時清除 | 關閉 |
+| 欄位 | 說明 | 預設 |
+|---|---|---|
+| **後端**（`backend_type`） | 「LiteLLM（OpenAI 相容）」（存成 `openai`）或「n8n webhook」（`n8n`）。 | LiteLLM |
+| **後端網址**（`endpoint_url`） | LiteLLM：結尾為 `/v1` 的基礎網址（會自動加上 `/chat/completions`）。n8n：完整的正式 webhook 網址（Chat Trigger：`…/webhook/<id>/chat`）。只能用 `https://`；`http://` 只限 `localhost`、`127.0.0.1`、`::1` 與結尾為 `.svc.cluster.local` 的主機。 | （空白） |
+| **API 金鑰**（`api_key`） | LiteLLM（必填）：以 `Authorization: Bearer` 送出。n8n：選填的**簽章金鑰**，用來產生 `X-Woow-Signature`（不會送出；空白則不簽章）。只能寫入：儲存後不再顯示；留空則保留。變更後端主機或後端類型、或按**移除 API 金鑰**，都會移除它。 | （空白） |
+| **模型**（`model`） | 僅 LiteLLM：LiteLLM 的模型名稱，用來選擇部署。沒有模型的 LiteLLM 連線可以儲存，但未就緒。 | （空白） |
+| **逾時（秒）**（`timeout_seconds`） | 一次回答的總時間，包含重試，10 - 300。回覆不串流：訪客收到完整回答，時間到則收到錯誤訊息。 | LiteLLM 45、n8n 120 |
+| **重試次數**（`max_retries`） | 0 - 2；只在請求沒送出、或後端回 HTTP 429／503 時重試（先等 3 秒、再等 10 秒，且在逾時之內）。 | 1 |
+| **使用者傳送的文件**（`document_mode`） | LiteLLM：「把檔案送給模型」（4 MB 以內的文件以 `file` 部分送出）或「只給下載連結」（簽章連結）。圖片一律內嵌；n8n 一律收到連結。 | 把檔案送給模型 |
+| **記錄請求內容**（`log_payload`） | 僅供除錯：在呼叫紀錄保存請求與回應內容；關閉時清除。 | 關閉 |
+| **可給客戶使用**（`customer_safe`） | LiteLLM 一律勾選（只用來聊天：Odoo 從不送工具）。n8n：確認工作流程不查公司資料、不呼叫工具、不跨對話保留記憶後才勾選；變更網址或類型時自動取消。Live Chat 只在頻道上顯示警告，不會拒絕。 | n8n：不勾選 |
+| **上線檢查**（`readiness`） | 「可以使用」或「未就緒」，附固定的原因（已封存、沒有網址、網址不允許、LiteLLM 沒有金鑰或模型）。 | -- |
+| **測試連線** | LiteLLM：帶金鑰 `GET {endpoint}/models`（模型不在清單時顯示警告）。n8n：送出簽章的 `{"event": "ping", …}`，要回 HTTP 200。只顯示 HTTP 狀態碼與一句說明。 | -- |
 
-即時聊天管理員看不到上面這些欄位，只會看到一行：「後端連線已設定（由系統管理員管理）」或「尚未設定後端連線，請系統管理員填寫」。他們不能讀寫網址、金鑰與記錄對話內容，連線不完整時也不能啟用 AI。
+### 步驟 2：AI 助理（系統管理員）
 
-### 步驟 2：在頻道啟用 AI（即時聊天管理員）
+| 欄位 | 說明 | 預設 |
+|---|---|---|
+| **名稱**與圖片 | 訪客看到的 AI 回覆作者；機器人聯絡人會跟著改（沒有圖片時用模組附的機器人頭像）。 | -- |
+| **AI 連線**（`connection_id`） | 大腦在哪裡。多個助理可以共用一個連線。 | -- |
+| **可用在 Live Chat**（`livechat_available`） | 勾選時，線上客服管理員才能為頻道選這個助理。每個線上客服頻道都可能有匿名訪客：只對要回答一般大眾的助理勾選。 | 不勾選 |
+| **說明** | 線上客服管理員選助理時會看到。 | （空白） |
+| **系統提示詞**（`system_prompt`） | 選填，每次請求都會送出。 | （空白） |
+| **歷史訊息數**（`max_history`） | 送給後端作為上下文的最近訊息數，1 - 200。 | 50 |
+| **錯誤訊息**（`error_message`） | 後端失敗時貼給訪客。空白：使用訪客語言的預設訊息（繁中：抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。）。 | （空白） |
+| **機器人聯絡人**（`partner_id`） | 自動建立、保持封存、標記「AI 機器人」的聯絡人。 | 自動 |
+| **回覆處理方式** | 回覆怎麼處理、補救排程上次執行時間與卡住的回覆工作（所有頻道），有問題時顯示警告。 | -- |
 
-勾選 **啟用 AI 整合**。連線必須完整（網址；OpenAI 相容後端還要金鑰與模型）；啟用的當下會建立機器人聯絡人。
+開啟 AI 的頻道正在用的助理或連線，不能封存、取消勾選或改成未就緒：請先關閉該頻道的 AI，或為它選別的助理。
 
-檢查規則：數值範圍每次儲存都會檢查（AI 開或關都一樣），啟用 AI 時會全部再檢查一次；送出請求時歷史訊息數會再限制在範圍內。
+### 步驟 3：頻道的「AI 助理」分頁（線上客服管理員）
 
-### 設定欄位一覽
+| 欄位 | 說明 | 預設 |
+|---|---|---|
+| **AI 助理**（`ai_assistant_id`） | 可用在 Live Chat 的助理之一；會顯示它的說明。 | （空白） |
+| **由 AI 回覆**（`ai_enabled`） | 讓這個頻道由 AI 回覆；需要一個可以回覆的助理。 | 關閉 |
+| **AI 狀態**（`ai_state`） | 「關閉」「可以使用」或「未就緒」並附原因（固定句子，絕不含網址或金鑰）；助理的連線沒有標示「可給客戶使用」時顯示警告。 | -- |
+| **AI 歡迎訊息**（`ai_welcome_message`） | 開啟 AI 時聊天視窗的歡迎訊息，讓訪客知道正在和 AI 對話。 | 繁中：您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。 |
+| **測試連線** | 系統管理員才看得到：測試助理的連線（n8n ping 會帶頻道與助理）。 | -- |
 
-| 欄位 | 類型 | 預設值 | 說明 |
-|------|------|--------|------|
-| `ai_enabled` | Boolean | `False` | 啟用/停用 AI 整合 |
-| `ai_backend_type` | Selection | `openai` | 後端類型（只有系統管理員能改） |
-| `ai_endpoint_url` | Char | -- | 端點網址（只有系統管理員能讀寫） |
-| `ai_api_token` | Char（只寫） | -- | 存取金鑰（只有系統管理員能寫；值存在不屬於 ORM 的 SQL 欄位；n8n 可留空） |
-| `ai_model` | Char | -- | 模型（選填） |
-| `ai_document_mode` | Selection | `file` | 訪客傳的檔案：`file` 直接附檔（LiteLLM／OpenAI）、`link` 只給下載連結（Hermes 等） |
-| `ai_system_prompt` | Text | -- | 選填的系統提示詞；空白時 Odoo 不送 system 訊息，只有對話事件（客服發言、等候真人逾時） |
-| `ai_max_history` | Integer | `50` | 最大歷史訊息數，用於建構對話上下文（1-200） |
-| `ai_max_retries` | Integer | `2` | 呼叫失敗後的重試次數（0-2；先等 3 秒、再等 10 秒；n8n 只在連不上或回 429／503 時重試） |
-| `ai_request_timeout` | Integer | `0` | 等待後端回覆的秒數：0＝預設（OpenAI 相容 45 秒、n8n 120 秒；智居顧問回答整棟規劃的長問題要 112 秒），否則 10-300 秒。測試連線按鈕維持自己的短逾時。超過約 120 秒時，請確認後端前面的代理（例如 Cloudflare）與 Odoo 的 `limit_time_real` 允許：長呼叫期間回收的 worker 會在 `limit_time_real` 後被終止，再由補救排程重試 |
-| `ai_error_message` | Text | 抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，我們的客服人員會盡快與您聯繫。 | 全部重試失敗後發送給訪客的訊息（同時通知客服） |
-| `ai_handoff_pause_minutes` | Integer | `30` | 客服發言後 AI 暫停回覆的分鐘數，客服每次發言都會延長（1-1440） |
-| `ai_handoff_wait_minutes` | Integer | `10` | 訪客要求真人後，AI 等候客服的分鐘數；逾時沒有客服回覆就由 AI 接回（1-1440） |
-| `ai_handoff_keywords` | Char | 空白 | 選用的轉真人前置篩選（轉真人由後端決定，見[轉真人客服（暫停）](#轉真人客服暫停)）：以逗號分隔；訪客訊息含其中之一時不呼叫後端、直接轉真人。中文出現在任何位置都算，英文字詞要整個字／片語相符、不分大小寫。例如 `找真人,轉人工,talk to a human` |
-| `ai_handoff_message` | Text | 已幫您通知客服，請稍候。 | 訪客要求真人時回覆一次的訊息 |
-| `ai_pause_notice` | Text | 已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 %(minutes)s 分鐘後繼續為您服務。 | 等候期間訪客第一則訊息收到的固定回覆（每次等候一次）；`%(minutes)s` 換成等候分鐘數，其他文字照原樣送出 |
-| `ai_bot_partner_id` | Many2one | 自動建立 | 機器人聯絡人（已封存、標籤「AI 機器人」、機器人頭像），作為 AI 訊息的作者 |
-| `ai_bot_name` | Char | `AI 客服助理` | 機器人在聊天中的顯示名稱 |
-| `ai_welcome_message` | Text | 您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。 | 啟用 AI 時聊天視窗的歡迎訊息 |
-| `ai_log_payload` | Boolean | `False` | 記錄對話內容（只有系統管理員能改） |
-| `ai_log_retention_days` | Integer | `14` | 這個頻道的 AI API 日誌與已結束回覆工作的保留天數（1-3650） |
+### 步驟 4：轉真人客服（線上客服管理員）
 
-### 步驟 3：轉真人客服與暫停
+| 欄位 | 說明 | 預設 |
+|---|---|---|
+| **真人接手後暫停（分鐘）**（`ai_handoff_pause_minutes`） | 客服發言後 AI 不出聲的時間（每次發言都延長），1 - 1440。 | `30` |
+| **要求真人後等候（分鐘）**（`ai_handoff_wait_minutes`） | 訪客要求真人後，AI 等客服接手多久才再回答，1 - 1440。 | `10` |
+| **轉真人關鍵字**（`ai_handoff_keywords`） | 選用的前置篩選（由後端判斷是否轉真人，見[轉真人客服（暫停）](#轉真人客服暫停)）：以逗號分隔；訪客訊息含其中之一時直接轉真人、不呼叫後端。中文出現在任何位置都算，英文字詞要整個字／片語相符，不分大小寫。例如 `找真人,轉人工,talk to a human`。 | （空白） |
+| **轉接訊息**（`ai_handoff_message`） | 訪客要求真人時送出一次。 | 繁中：已幫您通知客服，請稍候。 |
+| **等候通知**（`ai_pause_notice`） | 等候期間訪客的第一則訊息收到一次；`%(minutes)s` 會換成等候分鐘數（其他文字照原樣送出）。 | 繁中：已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 %(minutes)s 分鐘後繼續為您服務。 |
 
-暫停狀態存在對話上：`discuss.channel.ai_paused_until`（「AI 暫停到」）、`ai_pause_reason`（`operator` 客服發言／`handoff` 訪客要求真人）、`ai_pause_notice_sent`（這次等候已送過等候通知）。行為見[轉真人客服（暫停）](#轉真人客服暫停)。
+暫停狀態記在對話上：`discuss.channel.ai_paused_until`、`ai_pause_reason`（`operator`／`handoff`）與 `ai_pause_notice_sent`。新頻道的預設文字使用建立者的語言。
 
-### UI 操作按鈕與選單
+### 步驟 5：監看（系統管理員）
 
-- **測試連線**（系統管理員）-- 測試頻道的後端，只顯示狀態碼和一句說明。
-- **AI API 日誌**（頻道上的按鈕，即時聊天管理員）-- 開啟這個頻道的 AI API 日誌（後端、模型、token、耗時、狀態、HTTP 狀態碼），預設顯示最近 7 天；只有打開「記錄對話內容」時才有對話內容。
-- **AI 回覆工作**（即時聊天 → 設定）-- 回覆佇列，可篩選待處理／處理中、失敗、略過與轉真人；等候真人期間的延後回覆會標示「延後」，到「預定處理時間」才處理。
-- **AI 回覆工作監看**（頻道 AI 分頁）-- 排程上次執行時間與卡住的工作（見[上線須知](#上線須知重啟或部署後的回覆)）。
-- **AI API 日誌**（即時聊天 → 設定）-- 全部頻道的 AI API 日誌。
+- **回覆工作**：佇列，可篩選等待中／處理中、失敗、已略過與轉真人的工作；等候真人期間的延後回覆標示為**延後**，到**最早執行時間**才執行。
+- **呼叫紀錄**：每次回答一筆：狀態（`ok`、`http_error`、`timeout`、`invalid_response`、`error`）、HTTP 狀態碼、耗時、Token、助理、連線與對話。只有開啟**記錄請求內容**時才有內容。
+- **AI 用量**：每個助理、連線、頻道、每月（UTC）的回覆數、失敗回覆數與 Token 數。
+- AI 助理表單的**回覆處理方式**：補救排程上次執行時間與卡住的工作（見[上線須知](#上線須知重啟或部署後的回覆)）。
 
 ---
 
-## AI 後端：LiteLLM、Hermes、n8n
+## AI 後端：LiteLLM 與 n8n
 
-三種後端的設定方式都一樣（系統管理員，在頻道的 AI 分頁）：**後端類型**、**端點網址**、**存取金鑰（Token）**，按 **測試連線**，再由即時聊天管理員啟用 AI。每個頻道可以接不同的後端。
-
-### LiteLLM（OpenAI 相容）
+### LiteLLM
 
 | 欄位 | 值 |
 |---|---|
-| 後端類型 | OpenAI 相容（LiteLLM、Hermes…） |
-| 端點網址 | `https://litellm.example.com/v1` |
-| 存取金鑰（Token） | 給這個頻道用的 LiteLLM 虛擬金鑰（`sk-...`），只允許指定模型，設好預算與速率上限 |
-| 模型（選填） | 必填，例如 `chatgpt-pool/gpt-6-sol` |
+| 後端 | 「LiteLLM（OpenAI 相容）」 |
+| 後端網址 | `https://litellm.example.com/v1` |
+| API 金鑰 | 這個連線專用的 LiteLLM 虛擬金鑰（`sk-...`），限定模型，並設每分鐘請求數與 Token 數、同時請求數與預算：**限制設在金鑰上** |
+| 模型 | 必填，例如 `chatgpt-pool/gpt-6-sol` |
 
-### Hermes（OpenAI 相容）
-
-| 欄位 | 值 |
-|---|---|
-| 後端類型 | OpenAI 相容（LiteLLM、Hermes…） |
-| 端點網址 | `http://hermes.<namespace>.svc.cluster.local:8642/v1`（叢集內），或代理會讓 `/v1` 以 Bearer 通過的公開 `https://` 網址 |
-| 存取金鑰（Token） | Hermes 的 `API_SERVER_KEY` |
-| 模型（選填） | 任意文字，例如 `hermes-agent`（Hermes 會忽略、用自己的模型；但 OpenAI 相容後端啟用 AI 時本模組需要有值） |
-| 訪客傳的檔案 | **只給下載連結（Hermes 等）**：Hermes 不收 `file` 片段，由它的 agent 下載簽章連結 |
-
-Hermes 會載入自己的工具：給即時聊天（匿名訪客）用的頻道，請接只載入公開、唯讀工具的 Hermes。
-
-### 請求格式（OpenAI 相容）
-
-```http
-POST {端點網址}/chat/completions
-Authorization: Bearer <存取金鑰>
-Content-Type: application/json
-```
-
-```json
-{
-  "model": "chatgpt-pool/gpt-6-sol",
-  "messages": [
-    {"role": "system", "content": "<頻道系統提示詞與對話事件；兩者都沒有就不送>"},
-    {"role": "user", "content": "請問營業時間？"}
-  ],
-  "user": "woow-ai-0edfec80-42",
-  "metadata": {"session_id": "woow-ai-0edfec80-42", "odoo_guest_id": "7", "odoo_name": "訪客", "odoo_lang": "zh_TW",
-               "odoo_is_portal": "false", "odoo_is_guest": "true", "livechat_channel": "官網客服"}
-}
-```
-
-- `model` 有值才送；不送 `tools`、`temperature`、`max_tokens`、`stream`（由後端決定）。不串流，逾時依頻道的「等待後端回覆的秒數」（預設 45 秒）。
-- `messages` 一定以 user 開頭、以 user 結尾：第一則訪客訊息之前的歡迎訊息會拿掉；最後一則訪客訊息之後的機器人訊息會移到它前面（若會變成第一則，就合併成開頭的一則 user 引述）。
-- `user` 與 `metadata.session_id` 是 `woow-ai-<database.uuid 前 8 碼>-<discuss.channel id>`，同一段對話固定不變。`metadata` 的值都是字串，不含 email。
-- 回覆：一般的 chat completion，取 `choices[0].message.content`（文字或文字片段）；`<think>` 區塊會移除。
-- 帶附件的訪客訊息會變成內容片段清單，見[訪客傳的檔案](#訪客傳的檔案)。
-
-### n8n Webhook
+### n8n
 
 | 欄位 | 值 |
 |---|---|
-| 後端類型 | n8n Webhook |
-| 端點網址 | **正式（production）** Webhook 網址，例如 `https://n8n.example.com/webhook/livechat-ai`（或 `http://n8n.<namespace>.svc.cluster.local:5678/webhook/livechat-ai`） |
-| 存取金鑰（Token） | 建議填隨機產生的簽章密鑰，例如 `openssl rand -hex 32`；同一個值放進 n8n 的環境變數 `WOOW_AI_SIGNING_SECRET`。也可以留空（工作流程不驗簽章，請求就不簽章） |
-| 模型（選填） | 不使用 |
+| 後端 | 「n8n webhook」 |
+| 後端網址 | **正式** webhook 網址，例如 `https://n8n.example.com/webhook/livechat-ai`，或叢集內的 `http://n8n.<namespace>.svc.cluster.local:5678/webhook/livechat-ai`；Chat Trigger：`…/webhook/<id>/chat` |
+| 簽章金鑰 | 建議填：隨機產生（`openssl rand -hex 32`），同一個值放進工作流程的環境變數 `WOOW_AI_SIGNING_SECRET`；公開的 Chat Trigger 留空（請求不簽章） |
+| 可給客戶使用 | 確認工作流程不查公司資料、不呼叫工具、不跨對話保留記憶後才勾選 |
 
-請求（`POST {端點網址}`），精簡的 UTF-8 JSON，**沒有 `Authorization` 標頭**；有密鑰時才加上兩個簽章標頭：
+接著按**測試連線**（HTTP 200），在這個連線上建立 AI 助理並勾選「可用在 Live Chat」；線上客服管理員在頻道選它，再開啟**由 AI 回覆**。
 
-```http
-Content-Type: application/json
-X-Woow-Timestamp: 1793430000
-X-Woow-Signature: sha256=<hex HMAC-SHA256(密鑰, "<X-Woow-Timestamp>.<原始 body>")>
-```
+---
 
-```json
-{
-  "event": "message",
-  "session_id": "woow-ai-0edfec80-42",
-  "contact": {"id": 3, "name": "官網客服"},
-  "user": {"user_id": null, "partner_id": null, "guest_id": 7, "name": "訪客", "email": "", "lang": "zh_TW",
-           "tz": "Asia/Taipei", "is_portal": false, "is_guest": true, "company_id": null, "visitor_key": "guest:7"},
-  "channel": {"id": 42, "type": "livechat",
-              "livechat": {"livechat_channel_id": 3, "livechat_channel_name": "官網客服", "channel_id": 3,
-                           "channel_name": "官網客服", "operator_name": "客服小明", "country_code": "TW",
-                           "visitor_kind": "guest", "handoff_available": true}},
-  "system_prompt": "",
-  "message": {"id": 991, "text": "請問營業時間？", "attachments": []},
-  "history": [{"role": "assistant", "text": "您好，有什麼可以幫您？", "attachments": []}],
-  "events": [{"time": "2026-11-01T07:55:00Z", "kind": "operator", "text": "..."}],
-  "action": "sendMessage",
-  "sessionId": "woow-ai-0edfec80-42",
-  "chatInput": "請問營業時間？"
-}
-```
+## 協定
 
-- `action`、`sessionId`、`chatInput` 是 n8n **Chat Trigger** 會讀的欄位（值同 `session_id` 與 `message.text`）；Webhook 節點的工作流程可以忽略。
-- `contact` 是即時聊天頻道；`channel` 是這段對話（`discuss.channel`）。`message` 是正在回答的訪客訊息；`history` 是其餘上下文（真人客服是開頭為 `[真人客服 姓名] ` 的 `user`）。`events` 是模型必須知道的事實（`operator`：客服在對話中發言過；`resume`：等候真人逾時、沒有客服回覆），沒有時是 `[]`。`attachments` 是訪客訊息的檔案：`{"id", "name", "mimetype", "size", "url", "expires_at"}`，附 1 小時有效的簽章下載網址（不內嵌任何內容）；機器人與客服的訊息一律是 `[]`。見[訪客傳的檔案](#訪客傳的檔案)。
-- `user` 依 woow_ai_contact docs/LIVECHAT.md 的訪客表（訪客、入口網站使用者、員工以訪客身分、沒有使用者的聯絡人、公開使用者）。即時聊天訪客多半是匿名的：`channel.type` 是 `livechat` 或 `user.is_guest` 為 true 時，只能給模型公開資料的工具。
-- **測試連線** 會送 `{"event": "ping", "contact": {...}, "action": "loadPreviousSession", "sessionId": "woow-ai-ping-<頻道 id>"}`；非 `message` 的事件請回 HTTP 200（例如 `{"skip": true}`）。Chat Trigger 會自己回應 `loadPreviousSession`，不會執行 agent。
-
-回覆：HTTP 200 的 JSON，在頻道的「等待後端回覆的秒數」內（預設 120 秒）：
-
-```json
-{"reply": {"text": "markdown 文字"}}
-{"reply": "text"}
-{"replies": [{"text": "第一則"}, {"text": "第二則"}]}
-{"skip": true}
-{"output": "markdown 文字"}
-{"output": "好的，我幫您轉接真人客服，請稍候。", "handoff": true, "handoff_reason": "訪客要求專人"}
-```
-
-**轉真人**（負責人決策 40）：`channel.livechat.handoff_available` 為 true（頻道有客服）時，回 `"handoff": true`（JSON 布林值，最上層或 item list 的第一項），可加 `"handoff_reason"`（最多保留 300 字，會寫在給客服的通知並存在回覆工作上）。同一個回答的文字先張貼，然後 Odoo 暫停 AI、通知客服並記下轉接；只回 `{"handoff": true}` 會張貼頻道的轉接訊息；有 `handoff` 時忽略 `skip`。只能回 `output` 的 Chat Trigger 工作流程，改在結尾加一行 `[[handoff]]`（張貼前會拿掉）。
-
-`reply` 發一則訊息、`replies` 發多則（最多 10 則）、`skip` 不發（工作完成但沒有訊息）、`output`（n8n AI Agent 與 Chat Trigger 的預設回覆）發一則。也接受 n8n 的項目清單（`[{"reply": ...}]`、`[{"output": ...}]`）。其他（非 200、不是 JSON、沒有 `reply`／`replies`／`skip`／`output`、文字是空的）都算錯誤：訪客收到頻道的錯誤訊息、客服收到通知、AI API 日誌留下 HTTP 狀態碼。Agent 失敗時請回非 200（例如 502）。每次呼叫依頻道的「等待後端回覆的秒數」逾時（預設 120 秒），只有連不上或 n8n 回 429／503 時才重試；讀取逾時（agent 可能還在跑）或其他回應都不重試。不跟隨轉址。回覆附件不支援（只送文字）。
-
-#### 驗證簽章（必做）
-
-驗證**原始位元組**（在 Webhook 節點開啟 *Raw Body*），時間戳與現在相差超過 300 秒就拒絕，並用固定時間比較。Code 節點（需要 `NODE_FUNCTION_ALLOW_BUILTIN=crypto`；密鑰放在環境變數，不要寫在工作流程裡）：
-
-```js
-const crypto = require('crypto');
-const SECRET = $env.WOOW_AI_SIGNING_SECRET;
-const item = $input.first();
-const raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');
-const h = Object.fromEntries(Object.entries(item.json.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
-const ts = String(h['x-woow-timestamp'] || '');
-if (!/^\d+$/.test(ts) || Math.abs(Date.now() / 1000 - Number(ts)) > 300) throw new Error('stale');
-const expected = 'sha256=' + crypto.createHmac('sha256', SECRET).update(ts + '.' + raw).digest('hex');
-const a = Buffer.from(expected), b = Buffer.from(String(h['x-woow-signature'] || ''));
-if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error('bad signature');
-return [{ json: JSON.parse(raw) }];
-```
-
-#### n8n Chat Trigger（託管聊天）工作流程
-
-以 **Chat Trigger** 節點開頭（公開聊天、不驗證）的既有工作流程可以直接使用，例如智居顧問：
-
-- **端點網址**：`<n8n>/webhook/<webhookId>/chat`（例如 `https://n8n.example.com/webhook/smart-home-advisor/chat`）；**存取金鑰（Token）**留空（公開的 Chat Trigger 不驗簽章；若自行加了驗證，再填密鑰）。
-- Odoo 會送 `action: "sendMessage"`、`sessionId`、`chatInput`（以及所有協定欄位）；Chat Trigger 回 `{"output": "..."}`，發成一則訊息（連到官網的 markdown 連結與 `**粗體**` 都會顯示）。
-- 這類 agent 每次回答約 20-30 秒：n8n 預設逾時 120 秒（「等待後端回覆的秒數」；顧問最長要 112 秒，Cloudflare 在 100 秒時沒有切斷），讀取逾時一律不重試。
-- 限制：這種工作流程**依 `sessionId` 自己保存記憶**，不看 Odoo 送的 `history` 與 `events`，所以看不到轉真人期間真人客服說了什麼，也無法確認請求真的來自 Odoo。新的工作流程請優先用 **Webhook** 節點開頭並驗證簽章（見下方）。
-
-#### 最小 n8n 工作流程
-
-1. **Webhook** -- HTTP Method `POST`，Path 例如 `livechat-ai`，Authentication `None`，開啟 *Raw Body*，Respond 選 `Using 'Respond to Webhook' Node`。
-2. **Code** -- 上面的簽章檢查（簽章錯誤就丟出錯誤，後面都不執行，n8n 回非 200）。
-3. **IF** -- `{{ $json.event }}` 等於 `message`；false 分支接一個回 `{"skip": true}` 的 **Respond to Webhook**（測試連線的 ping）。
-4. **AI Agent** -- Prompt `{{ $json.message.text }}`；System Message `{{ ($json.system_prompt || '你是我們網站的客服助理。') + ($json.events.length ? '\n\nConversation events (facts, not your words):\n' + $json.events.map(e => '- ' + e.time + ' ' + e.text).join('\n') : '') }}`；選一個 Chat Model；記憶（選用）用 `{{ $json.session_id }}` 當 key；只接公開、唯讀的工具（商品查詢、營業時間）。
-5. **Respond to Webhook** -- Respond With `JSON`，Response Body `{{ JSON.stringify({ reply: { text: $json.output } }) }}`。
-
-把正式 Webhook 網址填進 **端點網址**、密鑰填進 **存取金鑰（Token）**，按 **測試連線**（HTTP 200），再啟用 AI。n8n 每次執行都會保存 Webhook 內容（也就是對話）：請設定執行紀錄保留期限，或不保存成功的執行。超過「等待後端回覆的秒數」（最多 300 秒）的工作流程，請立刻回 `{"skip": true}`。
-
-### 訪客傳的檔案
-
-**訪客上傳維持關閉**（負責人決策 41）：即時聊天訪客只能傳文字，本模組不會在聊天視窗開啟上傳檔案。以下的轉送只適用於真的出現在對話中的檔案，例如入口網站使用者或以訪客身分聊天的員工傳的檔案。
-
-**訪客**在聊天中傳的圖片與檔案原封不動交給後端：Odoo 不擷取文字、不轉檔（負責人決策 39，與 woow_ai_contact 同一套規則）。機器人、OdooBot 與客服訊息的附件一律不送。
-
-**OpenAI 相容後端**：帶檔案的那則訪客訊息，user 內容會變成片段清單：
-
-```json
-{"role": "user", "content": [
-  {"type": "text", "text": "請看報價單\n[附件] 報價單.pdf（application/pdf，85.2 KB）：檔案已附在這則訊息"},
-  {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
-  {"type": "file", "file": {"filename": "報價單.pdf", "file_data": "data:application/pdf;base64,..."}}
-]}
-```
-
-| 檔案 | 怎麼送 |
-|---|---|
-| 圖片（png、jpeg、gif、webp；依內容判斷類型，不看檔名） | `image_url` data URI，兩種模式都一樣。只看最近 3 則訪客訊息，最多 4 張，每張 5 MB 以內。 |
-| 文件（PDF、Word `docx`、Excel `xlsx`／`xls`、`txt`／`md`／`csv`／`tsv`／`json`），**訪客傳的檔案＝直接附檔** | `file` 片段，原始位元組與原始 mimetype，另加一行 `[附件] <檔名>（<mimetype>，<大小>）：檔案已附在這則訊息`。只看最近 5 則訪客訊息，最多 5 個，每個 5 MB 以內。 |
-| **只給下載連結** 模式的文件、較早的檔案、其他檔案（壓縮檔、音訊、影片…）、超過上限的檔案 | 一行 `[附件] <檔名>（<mimetype>，<大小>）：<簽章網址>`；因為上限被略過的檔案再加一行 `[附件說明] <檔名>：<原因>`。 |
-| 危險或會執行的類型：html、svg、xml、javascript、執行檔與腳本、含執行檔的 zip、Odoo 看不到內容的壓縮檔（rar、7z、tar、gz…） | 一律只給連結，不內嵌（檢查檔名、上傳的類型與內容）。 |
-
-同一個請求的 data URI 合計上限 **7 MB**（圖片優先、新的優先；Hermes 會拒絕超過 10 MB 的請求）。上限都是 `models/discuss_channel.py` 開頭的常數。
-
-**n8n**：`message.attachments` 與 `history[].attachments` 是 `{"id", "name", "mimetype", "size", "url", "expires_at"}`，不內嵌內容，工作流程需要時自己下載。
-
-**簽章下載網址**（兩種後端）：`GET {web.base.url}/im_livechat_ai/attachment/<id>/<expires>.<hex HMAC-SHA256(database.secret, "im_livechat_ai|<id>|<checksum>|<expires>")>`，1 小時有效。只提供即時聊天對話中訊息的附件，一律以下載方式回應（`Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`、`Cache-Control: private, no-store`）；過期、簽章錯誤或其他附件都回 404。網址以系統參數 **`web.base.url`** 組成，它必須是網站的公開網址（後端從那裡下載；同一台伺服器有多個資料庫時，這個網址必須經由 db filter 對到這個資料庫）。
-
-**日誌**：開啟「記錄對話內容」時，每個 data URI 的 base64 會存成 `<N bytes base64 omitted>`。
+請求與回應的格式在 [docs/PROTOCOL.md](docs/PROTOCOL.md)：LiteLLM 的請求內容與 metadata、n8n 的請求內容與簽章、接受的回答與轉真人、測試連線、訪客檔案與簽章下載網址、回覆顯示、呼叫紀錄與用量，以及 AI 無法回覆時會怎樣。格式依[合約 v1](docs/CONTRACT.md)：為 Discuss AI 寫的 n8n 工作流程讀同樣的鍵（`assistant`、`user`、`channel`、`surface`、`message`、`history`、`events`）；Live Chat 另外送 `contact`（線上客服頻道），給為 18.0.1.x 寫的工作流程使用。
 
 ---
 
@@ -643,86 +581,84 @@ return [{ json: JSON.parse(raw) }];
 
 ```
 im_livechat_ai/
-├── __init__.py                   # 解除安裝時刪除金鑰欄位
-├── __manifest__.py               # 版本 18.0.1.2.0
+├── __init__.py                          # 解除安裝時刪除 18.0.1.x 的金鑰欄位
+├── __manifest__.py                      # v18.0.2.0.0
 ├── models/
-│   ├── im_livechat_channel.py    # 頻道 AI 欄位、每個頻道的後端連線（只寫的金鑰欄位）、
-│   │                             #   openai／n8n 請求、簽章、回覆解析、重試、
-│   │                             #   機器人聯絡人、轉真人關鍵字、AI 分頁監看
-│   ├── discuss_channel.py        # _notify_thread 攔截：客服發言暫停、轉真人、
-│   │                             #   建立工作；作者判斷；訪客身分；
-│   │                             #   _ai_conversation／_build_llm_messages；
-│   │                             #   訪客檔案（上限、簽章網址）
-│   ├── livechat_ai_job.py        # im_livechat.ai.job：回覆佇列、postcommit 執行緒、
-│   │                             #   advisory lock、補救排程、通知客服
-│   └── llm_api_log.py            # llm.api.log：AI API 日誌（預設只存中繼資料）、
-│                                 #   每個頻道的保留天數
+│   ├── ai_connection.py                 # im_livechat.ai.connection「AI 連線」：後端、網址、
+│   │                                    #   只能寫入的金鑰（只在 SQL 欄位）、模型、逾時、
+│   │                                    #   重試次數、上線檢查、測試連線、使用中保護
+│   ├── ai_assistant.py                  # im_livechat.ai.assistant「AI 助理」：機器人聯絡人、
+│   │                                    #   提示詞、歷史訊息數、錯誤訊息、「可用在 Live Chat」
+│   ├── ai_migration.py                  # 18.0.1.x 頻道設定 -> 連線與助理
+│   ├── ai_usage.py                      # im_livechat.ai.usage.month：每月用量（SQL upsert）
+│   ├── im_livechat_channel.py           # 頻道「AI 助理」分頁（助理、狀態）、轉真人文字、
+│   │                                    #   請求、簽章、解析回答、重試與時限、未就緒
+│   │                                    #   處理、呼叫紀錄
+│   ├── discuss_channel.py               # _notify_thread：客服發言暫停、轉真人、建立工作；
+│   │                                    #   判斷作者；訪客身分；對話內容；訪客檔案
+│   ├── livechat_ai_job.py               # im_livechat.ai.job：回覆佇列、交易後執行緒、
+│   │                                    #   advisory lock、補救排程、通知客服、計算用量
+│   └── llm_api_log.py                   # llm.api.log：呼叫紀錄（每次回答一筆）
 ├── tools/
-│   └── markdown.py               # AI 回覆 markdown -> 淨化過的 HTML
+│   ├── backend.py                       # 網址規則、n8n 簽章、精簡 JSON、重試規則
+│   └── markdown.py                      # AI 回覆 markdown -> 淨化後的 HTML
 ├── controllers/
-│   └── main.py                   # 訪客附件的簽章下載（/im_livechat_ai/attachment/...）
-├── views/
-│   ├── im_livechat_channel_views.xml  # 頻道表單的「AI 整合」分頁
-│   ├── llm_api_log_views.xml          # AI API 日誌（選單：AI API 日誌）
-│   └── livechat_ai_job_views.xml      # 回覆工作（選單：AI 回覆工作）
+│   └── main.py                          # 訪客附件的簽章下載
+├── views/                               # AI 連線、AI 助理、頻道「AI 助理」分頁、
+│                                        #   回覆工作、呼叫紀錄、AI 用量
 ├── data/
-│   └── ai_data.xml               # 「AI 機器人」標籤、預設機器人、每日日誌清理排程、
-│                                 #   每 2 分鐘的回覆工作補救排程
+│   ├── ai_data.xml                      # 「AI 機器人」標籤、預設機器人聯絡人、排程
+│   └── neutralize.sql                   # 中和後的副本不會呼叫真正的後端
 ├── security/
-│   └── ir.model.access.csv       # 日誌與工作：只有即時聊天管理員（讀取／刪除）
+│   └── ir.model.access.csv              # 系統管理員（線上客服管理員可讀可選的助理）
 ├── migrations/
-│   ├── 18.0.1.1.0/               # 從 18.0.1.0.x：清空頻道金鑰、關閉 AI、清理日誌
-│   └── 18.0.1.2.0/               # 系統參數 -> 每個頻道，再刪除 im_livechat_ai.* 參數；
-│                                 #   每個頻道的「訪客傳的檔案」（Hermes：只給連結）
-├── tests/                        # 390 項測試（見「測試」）
+│   ├── 18.0.1.1.0/ 18.0.1.2.0/ 18.0.1.2.1/  # 18.0.1.x 的升級（不變）
+│   └── 18.0.2.0.0/                      # 檢查、保留欄位、建立連線與助理
+├── tests/                               # 491 個測試，含合約檢查
+│   └── contract/                        # 合約 v1 套件（一字不差，不在這裡改）
 └── i18n/
-    └── zh_TW.po                  # 繁體中文翻譯
+    ├── im_livechat_ai.pot               # 英文原文
+    └── zh_TW.po                         # 繁體中文（合約用詞）
 ```
 
-儲存庫另有 `odoo-ailivechat/`（本機 Docker，掛載上面的模組）、`.github/workflows/odoo-tests.yml`（自動測試）與 `docs/`。
+repo 另外有 `docs/`（[CONTRACT.md](docs/CONTRACT.md)、[PROTOCOL.md](docs/PROTOCOL.md)、計畫與截圖）、`odoo-ailivechat/`（本機 Docker 環境，掛載上面的模組）與 `.github/workflows/odoo-tests.yml`（CI）。
 
 ---
 
-## 安全性
+## 隱私與安全
 
-### 後端連線與金鑰
+### 金鑰
 
-端點網址、存取金鑰與記錄對話內容都加上 `groups='base.group_system'`，其他人新增或修改時也會被擋；即時聊天管理員只看得到「連線已設定」的計算欄位與後端類型（唯讀）。金鑰存在不屬於 ORM 的 SQL 欄位（`ai_api_token_secret`）：讀取頻道永遠拿不到它，表單欄位只寫不讀，複製頻道時不會複製網址與金鑰，解除安裝模組時會刪除這個欄位。n8n 的金鑰是選填，只用來計算 `X-Woow-Signature`，不會送出（n8n 會保存每次執行的標頭）。不跟隨轉址，金鑰不會被送到別的主機。介面上的錯誤與日誌都不含上游回應內容。
+AI 連線的 API 金鑰（LiteLLM）或簽章金鑰（n8n）只存在 SQL 欄位 `api_key_secret`（不是 ORM 欄位）：讀取、搜尋、匯出與表單都拿不到，複製連線不會帶過去，後端的通訊協定、主機、連接埠或後端類型改變時會移除。伺服器日誌只寫金鑰被更新或移除、由誰（id）。連線與助理只有系統管理員能用；執行時以 sudo 讀取。n8n 的簽章金鑰從不送出，只送內容的 HMAC。不跟隨轉址，所以金鑰不會被送到別的主機。解除安裝會刪掉本模組的資料表，連線與金鑰也一起刪除。
 
-### API 日誌與對話內容
+### 紀錄與對話內容
 
-`llm.api.log` 與 `im_livechat.ai.job` 只有即時聊天管理員看得到。日誌預設不存對話內容（訪客檔案的 base64 也一律不存，只留 `<N bytes base64 omitted>`）；「記錄對話內容」（每個頻道各自設定）只用於短暫除錯，關閉時會清除這個頻道已保存的內容。每日清理排程依各頻道的保留天數（預設 14 天）刪除舊資料。
+呼叫紀錄、回覆工作與用量只有系統管理員看得到。呼叫紀錄只存 HTTP 狀態碼與例外類型名稱，絕不存上游回應、標頭或金鑰。對話內容只在連線開啟**記錄請求內容**時保存（檔案的 base64 改存成 `<N bytes base64 omitted>`）；關閉時清除。伺服器日誌只寫 id、uid 與 HTTP 狀態碼；未預期的例外再加上類型名稱與程式位置，絕不寫例外內容。呼叫紀錄與已結束的工作 30 天後刪除；用量會保留。
+
+### 訪客與客戶
+
+線上客服的訪客大多是匿名的。LiteLLM 連線只用來聊天（Odoo 只送對話，從不送工具），一律「可給客戶使用」。n8n 工作流程只應使用公開、唯讀的工具；頻道的助理所用連線沒有標示可給客戶使用時，頻道分頁會顯示警告。LiteLLM 的系統訊息沒有身分區塊，LiteLLM 也拿不到訪客的 email（只有 n8n 會收到）。
 
 ### XSS 防護
 
-AI 回覆由 `tools/markdown.py` 轉成 HTML（與 woow_ai_contact 同一個不需套件的轉換器；Odoo 18 沒有內建 markdown 套件）：段落與換行、`**粗體**`、`*斜體*`（`<i>`；`2*3*4` 與 `* 項目` 清單不受影響）、`~~刪除線~~`、`-`／`1.` 清單、表格（`<table class="table table-sm table-bordered">`）、標題（`<h4>`）、`程式碼` 與程式碼區塊（`<pre><code>`）、引言與分隔線。後端送來的每段文字都先用 `markupsafe` 跳脫才包進這些標籤，結果再經過 Odoo 的 `html_sanitize`。只有主機是 `web.base.url` 或網站網域的 `http(s)` 連結（markdown 或裸網址）會變成連結（`target="_blank" rel="noopener noreferrer"`），其他連結只留文字，避免提示注入的釣魚連結。
+AI 回覆由 `tools/markdown.py` 轉成 HTML（Odoo 18 沒有內建 markdown 套件）：段落與換行、`**粗體**`、`*斜體*`（`<i>`；`2*3*4` 與 `* 項目` 清單符號維持原樣）、`~~刪除線~~`、`-`／`1.` 清單、表格（`<table class="table table-sm table-bordered">`）、標題（`<h4>`）、`程式碼` 與程式碼區塊（`<pre><code>`）、引言與分隔線；超過 8 層的引言與清單會攤平顯示。後端的每段文字先用 `markupsafe` 跳脫再包進這些標籤，結果再經過 Odoo 的 `html_sanitize`。只有主機是 `web.base.url` 或網站網域的 `http(s)` 連結（markdown 或直接貼的網址）會變成連結（`target="_blank" rel="noopener noreferrer"`）；含帳號資訊（`@`）或反斜線的連結以及其他連結只留文字，所以被提示注入的回覆也貼不出可點的釣魚連結。
 
 ### 迴圈防護與作者判斷
 
-- **頻道 AI 機器人**（`ai_bot_partner_id`）、**預設 AI 機器人**（`im_livechat_ai.partner_ai_bot`）與 **OdooBot**（`base.partner_root`）不會觸發 AI。
-- 擁有**內部使用者帳號**的聯絡人是客服：發言會暫停 AI，並以標記過的同事訊息送給後端。
-- 這段對話**指派的客服**若沒有內部使用者帳號（例如 Odoo 聊天機器人），視為機器人。
-- **網站訪客、入口網站客戶與公開使用者**都是訪客。
+1. **排除機器人** -- AI 助理的機器人聯絡人、以前標記「AI 機器人」的頻道機器人、預設 AI 機器人與 OdooBot 都不會觸發 AI。
+2. **客服** -- 有內部（非 share）使用者的聯絡人是客服：他們發言會讓 AI 暫停，並以標記過的同事發言送給後端；他們的內部備註不會送出。
+3. **對話指派的客服** -- 沒有內部使用者的指派客服（例如 Odoo chatbot）視為機器人。
+4. **訪客** -- 網站訪客、入口網站使用者與公開使用者是訪客。
 
 ### 輸入驗證
 
-| 驗證項目 | 詳細說明 |
-|----------|----------|
-| 端點網址 | 必須是 `https://`；`http://` 只限 `localhost`、`127.0.0.1`、`::1` 與 `*.svc.cluster.local`（儲存時檢查，每次呼叫前再檢查） |
-| 歷史訊息數 | 必須介於 1-200 之間 |
-| 最大重試次數 | 必須介於 0-2 之間 |
-| 暫停／等候分鐘數 | 必須介於 1-1440 之間 |
-| 日誌保留天數 | 必須介於 1-3650 之間 |
-| 檢查時機 | 每次儲存都檢查（AI 開或關）；啟用 AI 時全部再檢查；送出時再限制歷史訊息數 |
-| 必填欄位 | 啟用 AI 時，必須有端點網址與金鑰；OpenAI 相容後端還要有模型 |
+- 後端網址必須是 `https://`；`http://` 只限 `localhost`、`127.0.0.1`、`::1` 與 `*.svc.cluster.local` 主機（儲存時檢查，每次呼叫前再檢查一次）。
+- 逾時（10 - 300 秒）、重試次數（0 - 2）、歷史訊息數（1 - 200）、暫停與等候分鐘數（1 - 1440）儲存時檢查；回覆時再把歷史訊息數限制在範圍內。
+- 開啟 AI 的頻道一定有可以回覆的助理：開啟 AI 時就需要一個，正在使用的助理或連線不能封存、取消勾選或改成未就緒。
 
-### 最佳實踐
+### neutralize.sql
 
-1. **每個頻道用專用的金鑰**（LiteLLM 設定可用模型、每月預算與速率上限；n8n 用隨機簽章密鑰）。
-2. **定期輪換 API 金鑰**，降低金鑰洩漏風險。
-3. **監控 API 日誌與回覆工作**，定期檢查失敗或被略過的工作。
-4. **「記錄對話內容」除錯完立刻關閉**。
-5. **限制系統提示詞範圍**，避免 AI 回覆超出客服範疇。
+中和後的副本（`odoo neutralize`）不會呼叫真正的後端：連線清掉網址與金鑰並封存（「可給客戶使用」回到 LiteLLM 的預設），18.0.1.x 的頻道欄位也清掉網址與金鑰。每個頻道的**由 AI 回覆**開關保留。每段指令都有檢查，所以還在 18.0.1.x 的副本也能中和。
 
 ---
 
@@ -730,22 +666,23 @@ AI 回覆由 `tools/markdown.py` 轉成 HTML（與 woow_ai_contact 同一個不�
 
 ### 測試套件總覽
 
-本模組包含 **390 項自動化測試**。所有 HTTP 呼叫都用 mock，不需要金鑰或網路。
+本模組有 **491 個自動化測試**（Odoo 18.0-20250807），含 12 項合約檢查。所有 HTTP 呼叫都是模擬的：不需要金鑰，也不需要連網。
 
-| 測試套件 | 檔案 | 測試數 | 說明 |
-|----------|------|:---:|------|
-| 核心單元測試 | `test_im_livechat_ai.py` | 22 | 頻道欄位與預設值、驗證、後端呼叫、測試連線、日誌 |
-| 頻道整合測試 | `test_discuss_channel.py` | 18 | 訊息攔截、訪客判斷、對話上下文建構 |
-| 端對端整合測試 | `test_integration.py` | 9 | 完整流程、重試、錯誤訊息、每個頻道各自的連線 |
-| 邊界情境測試 | `test_edge_cases.py` | 97 | 回應格式、HTTP 錯誤、think 標籤、XSS、上限、日誌 |
-| 後端連線測試 | `test_backend.py` | 54 | 連線權限（即時聊天管理員與系統管理員）、只寫的金鑰、網址規則、OpenAI 請求格式、n8n 簽章／內容／回覆、各後端的重試規則、n8n Chat Trigger（不需密鑰、`output` 回覆）、每個頻道的「等待後端回覆的秒數」、每個頻道的日誌設定、18.0.1.2.0 與 18.0.1.1.0 升級腳本 |
-| 回覆工作測試 | `test_ai_job.py` | 38 | 與訊息同交易建立、合併連發、加鎖、略過、重試、補救排程 |
-| 轉真人測試 | `test_handoff.py` | 43 | 入口網站客戶、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人、中文預設 |
-| 分支審查修正 | `test_review_fixes.py` | 20 | AI 設定權限、機器人聯絡人保護、測試連線權限、哪些訊息會觸發、後端呼叫期間不留交易 |
-| 後端決定轉真人 | `test_backend_handoff.py` | 16 | 負責人決策 40：n8n `handoff` 有無文字、item list、`output` 標記、忽略 `skip`、原因最多 300 字、`handoff_available`；openai `[[handoff]]` 拿掉並轉接、只有標記、標記變體、沒標記不轉、只有有客服的頻道才加 system 那行、後端回答途中客服插話；關鍵字預設空白、設定的關鍵字仍不呼叫後端直接轉、升級清掉 1.1.0 預設清單 |
-| 回覆格式 | `test_reply_markdown.py` | 8 | Markdown 回覆：真實的智居顧問回覆（表格、粗體、商品連結、外站連結只留文字）、標題、清單、程式碼、段落、連結網域限制、所有 HTML 都跳脫 |
-| 訪客檔案 | `test_attachments.py` | 23 | 圖片成為 `image_url` data URI（依內容判斷類型）、文件成為原始位元組與類型的 `file` 片段、連結模式、危險類型只給連結、大小／數量／時間上限與 7 MB 總量（含 `[附件說明]`）、只用訪客訊息、n8n 附件與簽章網址、簽章下載路由（有效 200 並帶安全標頭；過期、簽章錯誤、非即時聊天附件 404）、日誌不存 base64、升級時的「訪客傳的檔案」規則 |
-| 暫停與身分揭露 | `test_pause_disclosure.py` | 42 | 明確轉真人關鍵字、客服暫停與等候真人、等候通知、逾時自動接回、範圍檢查、文字模型、沒有設定頁、AI 分頁工作監看、AI 身分揭露、18.0.1.1.0 升級腳本可重跑 |
+| 測試檔 | 數量 | 涵蓋範圍 |
+|---|---|---|
+| `test_contract.py` | 12 | 合約 v1（標籤 `woow_ai_contract`）：回答、請求、向量、顯示、用詞、中和、檢查碼、機密、「可給客戶使用」、重試與時限、未就緒處理、沒有身分區塊 |
+| `test_connection.py` | 17 | AI 連線：只能寫入的金鑰、換主機或類型時移除金鑰、清掉 18.0.1.x 的副本、「可給客戶使用」、上線檢查、逾時、測試連線 |
+| `test_assistant.py` | 15 | AI 助理：機器人聯絡人、複製、名稱、「可用在 Live Chat」、頻道選擇、使用中保護 |
+| `test_runtime_reads.py` | 14 | 執行時讀什麼：n8n 內容（`assistant`、`surface`、`contact`）、呼叫紀錄、用量、內部備註、HTTP 429 提醒、未就緒處理、並行錯誤重拋、重試與時限 |
+| `test_migration_200.py` | 21 | 18.0.2.0.0 升級：正規化、共用連線、金鑰只在 SQL 比對且不進日誌、機器人聯絡人、可重複執行、各項檢查、退役設定視圖、中和 |
+| `test_backend.py` | 52 | 角色權限、LiteLLM 請求格式、n8n 簽章／內容／回答、重試、18.0.1.2.x 遷移 |
+| `test_edge_cases.py` | 99 | 內容、HTTP 錯誤、think 標籤、XSS、上限、紀錄 |
+| `test_handoff.py` | 41 | 入口網站訪客、客服暫停、轉真人關鍵字、客服角色、機器人聯絡人 |
+| `test_ai_job.py` | 39 | 在訪客交易建立工作、合併連發、鎖、略過、重試、補救排程 |
+| `test_pause_disclosure.py` | 36 | 等候真人、等候通知、自動接回、範圍、AI 身分揭露 |
+| `test_security_limits.py` | 27 | 連結白名單繞過（反斜線、帳號資訊）、每個頻道即時與延後回覆工作的上限 |
+| `test_attachments.py` | 24 | 訪客檔案：圖片與文件（4 MB）、連結模式、危險類型、總量、簽章下載 |
+| 其他 | 94 | 頻道欄位、`discuss.channel` 掛鉤、整合、審查修正、後端判斷轉真人、markdown 回覆、已由其他自動回覆處理的訊息 |
 
 ### 執行測試
 
@@ -754,20 +691,19 @@ AI 回覆由 `tools/markdown.py` 轉成 HTML（與 woow_ai_contact 同一個不�
 odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
   --without-demo=all --test-enable --test-tags /im_livechat_ai --stop-after-init
 
-# Docker 環境中執行
-docker compose run --rm odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
-  --without-demo=all --test-enable --test-tags /im_livechat_ai --stop-after-init
+# 只跑合約檢查（請在正式站核心 18.0.20250807 上跑）
+odoo -d test_db -i im_livechat_ai --test-enable --test-tags woow_ai_contract --stop-after-init
 ```
 
-請確認日誌裡有 `odoo.addons.im_livechat_ai.tests` 的 `Starting ...` 行：標籤選不到任何測試時，結尾一樣會顯示「0 failed」。
+確認日誌有 `odoo.addons.im_livechat_ai.tests` 的 `Starting ...` 行（合約有 12 行 `Starting TestContract.test_contract_`）：選不到任何測試的標籤也會以「0 failed」結束。
 
 ### 自動測試（GitHub Actions）
 
-`.github/workflows/odoo-tests.yml` 在每個 PR 用 `odoo:18.0` 容器與 PostgreSQL 16 執行同樣的指令；Odoo 結束碼不是 0、沒有任何 `im_livechat_ai` 測試開始、或日誌出現 `FAIL`、`ERROR`、`CRITICAL` 時就判定失敗。請在主分支的保護規則把這個檢查設為必須通過，PR 沒過就不能合併。
+`.github/workflows/odoo-tests.yml` 在每個 PR 執行同樣的指令（Odoo `odoo:18.0` 容器＋PostgreSQL 16），Odoo 結束碼不是 0、沒有任何 `im_livechat_ai` 測試開始、或日誌出現 `FAIL`、`ERROR`、`CRITICAL` 時就失敗。請用這個檢查保護主分支，紅燈的 PR 不能合併。
 
 ### 實測
 
-18.0.1.0.0 的 15 情境端對端測試計畫保留在 `docs/plans/`。18.0.1.2.0 請在測試站每種後端各接一個真的確認：**測試連線**成功、連發 3 則只得到 1 個回覆、客服發言後 AI 暫停、說「我要找真人」會暫停並通知客服、n8n 工作流程驗證簽章通過。
+18.0.1.0.0 的 15 個端到端情境保留在 `docs/plans/`。18.0.2.0.0 請在測試資料庫用每種後端實測：AI 連線的**測試連線**成功、頻道顯示「可以使用」、連發三則只回一次、客服發言後 AI 暫停、「我要找真人」會暫停並通知、n8n 工作流程驗證簽章成功。
 
 ---
 
@@ -775,29 +711,29 @@ docker compose run --rm odoo -d test_db -i website_sale,website_livechat,portal,
 
 ### AI 沒有回覆
 
-1. **剛從 18.0.1.0.x 升級**：所有頻道的 AI 都已關閉，請設定後端後逐一重新啟用（見[從 18.0.1.0.x 升級](#從-18010x-升級)）。
-2. **後端設定好了嗎**：頻道 AI 分頁顯示「後端連線已設定（由系統管理員管理）」，且 **測試連線**（系統管理員）成功。
+1. **剛升到 18.0.2.0.0**：設定不完整的頻道會是未就緒，請看升級的 WARNING 與頻道的 **AI 狀態**。從 18.0.1.0.x 升級時，所有頻道的 AI 都已關閉（見[從 18.0.1.0.x 升級](#從-18010x-升級)）。
+2. **可以使用了嗎**：頻道的「AI 助理」分頁顯示「可以使用」；否則 **AI 狀態**會說明原因。AI 連線的**測試連線**（系統管理員）成功。
 3. **是否暫停中**：客服剛發言（預設 30 分鐘內）AI 不回覆；訪客要求真人後的等候期間（預設 10 分鐘）AI 只送一次等候通知，等候結束才由補救排程回答。
-4. **排程程序**：頻道 AI 分頁的「AI 回覆工作」區塊若警告「Live Chat AI: Recover Reply Jobs」超過 5 分鐘沒執行，請啟動排程程序（`max_cron_threads >= 1`）。
+4. **排程程序**：AI 助理表單的「回覆處理方式」區塊若警告「Live Chat AI: Recover Reply Jobs」超過 5 分鐘沒執行，請啟動排程程序（`max_cron_threads >= 1`）。
 5. **誰發的訊息**：內部使用者（例如登入後台的管理員直接在小工具測試）發言會讓 AI 暫停，不會得到回覆；請用訪客或入口網站帳號測試。
-6. **AI 回覆工作**：找到這則訊息的工作：`略過`（較新的訊息已回覆）、`失敗`（看錯誤欄）、一直`待處理`（補救排程是否啟用？）。
+6. **回覆工作**：找到這則訊息的工作：`已略過`（較新的訊息已回覆）、`失敗`（看錯誤欄）、一直`等待中`（補救排程是否啟用？）。
 7. **伺服器日誌**：搜尋 `odoo.addons.im_livechat_ai`。
 
 ### AI 不知道商品價格
 
-18.0.1.2.0 起 Odoo 不再查商品。請讓後端自己有商品工具（例如 Hermes 或 n8n 搭配 Odoo MCP），且給即時聊天訪客用的只開放公開資料。
+18.0.1.2.0 起 Odoo 不再查商品。請讓後端自己有商品工具（例如搭配 Odoo MCP 的 n8n 工作流程），且給線上客服訪客用的只開放公開資料。
 
 ### API 記錄顯示錯誤
 
 | 錯誤 | 原因 | 處理方式 |
 |------|------|----------|
-| `HTTP 401` | 金鑰無效或已撤銷（n8n：簽章被拒） | 在頻道 AI 分頁填入有效金鑰；n8n 工作流程要用同一個密鑰 |
+| `HTTP 401` | 金鑰無效或已撤銷（n8n：簽章被拒） | 在 AI 連線填入有效金鑰；n8n 工作流程要用同一個簽章金鑰 |
 | `HTTP 403` | 金鑰沒有使用此模型的權限 | 在 LiteLLM 允許這把金鑰使用該模型，或換模型 |
-| `HTTP 404` | 網址或模型不存在 | OpenAI 相容：網址要以 `/v1` 結尾；n8n：用正式 Webhook 網址並啟用工作流程 |
+| `HTTP 404` | 網址或模型不存在 | LiteLLM：網址要以 `/v1` 結尾；n8n：用正式 webhook 網址並啟用工作流程 |
 | `HTTP 3xx` | 網址會轉址（例如登入代理） | 不跟隨轉址：改填最終網址，或叢集內的 `*.svc.cluster.local` 網址 |
 | `HTTP 429` | 呼叫太頻繁或額度已用完 | 檢查金鑰在 LiteLLM 的速率與預算 |
-| `HTTP 5xx` | 後端或上游服務故障 | OpenAI 相容會自動重試（3 秒、10 秒）；n8n 只重試 503；檢查後端狀態 |
-| 逾時／無法連線 | 網路或防火牆 | Odoo 必須連得到端點網址；每次呼叫依頻道的「等待後端回覆的秒數」逾時（預設 45 秒、n8n 120 秒） |
+| `HTTP 5xx` | 後端或上游服務故障 | 只重試 503（與 429），等 3 秒、10 秒；檢查後端狀態 |
+| 逾時／無法連線 | 網路或防火牆 | Odoo 必須連得到後端網址；每次回答依連線的逾時結束（預設 45 秒、n8n 120 秒） |
 | `回應格式不正確` | n8n 回覆沒有 `reply`／`replies`／`skip` | 在 Respond to Webhook 節點回 `{"reply": {"text": ...}}` |
 
 ### Docker 相關問題
@@ -821,7 +757,7 @@ odoo.addons.im_livechat_ai
 
 | 模組 | 類型 | 用途 |
 |------|------|------|
-| `im_livechat` | Odoo 核心模組（必要） | 提供即時聊天頻道模型（`im_livechat.channel`）和即時聊天小工具 |
+| `im_livechat` | Odoo 核心模組（必要） | 提供線上客服頻道模型（`im_livechat.channel`）和線上客服小工具 |
 | `mail` | Odoo 核心模組（必要） | 提供 `discuss.channel`、`mail.message` 及訊息基礎架構 |
 
 **Python 相依套件：**
@@ -834,7 +770,7 @@ odoo.addons.im_livechat_ai
 
 > 無需安裝額外的 Python 套件，所有相依套件皆包含在標準 Odoo 18 安裝中。
 
-**外部服務：** 每個頻道一個：提供 `/v1/chat/completions` 的 OpenAI 相容伺服器（LiteLLM、Hermes…），或有 Webhook 工作流程的 n8n。
+**外部服務：** 每個 AI 連線一個：LiteLLM 伺服器（`/v1/chat/completions`），或有 webhook 工作流程的 n8n。
 
 ---
 
@@ -843,11 +779,24 @@ odoo.addons.im_livechat_ai
 - 儲存庫根目錄的 `im_livechat_ai/` 是唯一正本；平台映像改成從這個 repo 的版本標籤同步，不再各自修改。
 - 模型、視圖、資料或遷移有變更時要升版本號：平台發版的升級檢查只在版本號改變時才會執行模組升級。
 - 提交訊息用一句話寫明改了什麼、為什麼。PR 依 `.github/pull_request_template.md`（改了什麼／為什麼／怎麼測）填寫，且必須通過 **Odoo tests** 檢查。
+- 改到合約範圍（連線或助理欄位、角色、佇列、請求格式、錯誤、紀錄與用量、中和、用詞）時，依 [docs/CONTRACT.md](docs/CONTRACT.md) 第 4 節的審查清單（PR 範本裡也有），可能需要出新的合約版本。
 - 不要提交金鑰或密碼：只提交 `*.example` 範本；`.env`、`config/odoo.conf` 與 `.playwright-cli/` 已列入 `.gitignore`。
 
 ---
 
 ## 更新日誌
+
+### v18.0.2.0.0
+
+- **兩層設定，與 Discuss AI、專案 AI 對齊（[合約 v1](docs/CONTRACT.md)）**：「AI 連線」（`im_livechat.ai.connection`：後端、網址、只能寫入的金鑰、模型、逾時、重試次數、文件、記錄請求內容、「可給客戶使用」、上線檢查、測試連線）與「AI 助理」（`im_livechat.ai.assistant`：機器人聯絡人、提示詞、歷史訊息數、錯誤訊息、「可用在 Live Chat」），都只給系統管理員。線上客服管理員在頻道的「AI 助理」分頁選一個可用的助理。
+- **只接 LiteLLM 與 n8n**：後端顯示為「LiteLLM（OpenAI 相容）」（存成 `openai`）；不再支援 Hermes（升級日誌會列出，但不改動）。
+- **原地升級**：每個有設定的頻道一個助理、每種不同的後端設定一個連線，金鑰只在 SQL 複製；各項檢查（低於 18.0.1.1.0、Discuss AI 的 Live Chat 橋接、退役的設定視圖）；18.0.1.x 欄位保留一個版本供回復（見[升級到 18.0.2.0.0](#升級到-180200)）。
+- **上線檢查與未就緒處理**：頻道的 AI 無法回覆時不建立回覆工作；每段未就緒期間，對話收到一次通知、客服收到一次提醒。
+- **執行**：連線的逾時涵蓋整個回答；兩種後端都只在請求沒送出與 HTTP 429／503 時重試；每次回答一筆呼叫紀錄，狀態依合約；每月 AI 用量；超過 4 MB 的文件改給連結；同事的內部備註不放進對話；訊息觸發時遇到 PostgreSQL 並行錯誤會重拋，讓 Odoo 重試請求；HTTP 429 後每個頻道 10 分鐘內只提醒客服一次；LiteLLM 請求改以精簡的 UTF-8 JSON 送出。
+- **n8n 內容**：新增 `assistant` 與 `surface`；`contact` 仍是線上客服頻道。
+- **隱私**：呼叫紀錄、回覆工作與用量只給系統管理員；日誌不寫例外內容；保留 30 天；`data/neutralize.sql`。
+- **翻譯**：英文原文、`i18n/im_livechat_ai.pot`、依合約用詞的 zh_TW。
+- **文件**：[docs/PROTOCOL.md](docs/PROTOCOL.md)（協定移出 README）與 [docs/CONTRACT.md](docs/CONTRACT.md)；合約檢查隨測試執行。
 
 ### v18.0.1.2.0
 

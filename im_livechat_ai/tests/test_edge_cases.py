@@ -372,8 +372,8 @@ class TestCallLlmApiEdgeCases(TransactionCase):
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_model_only_when_set(self, mock_post):
-        """Hermes ignores the model: an empty model is not sent (AI off here,
-        an enabled OpenAI channel needs one)."""
+        """A connection without a model sends none (AI off here: a LiteLLM
+        connection without a model is not ready)."""
         self.channel.write({'ai_enabled': False})
         set_ai(self.channel, {'ai_model': False})
         mock_post.return_value = ok_response()

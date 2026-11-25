@@ -1,0 +1,2199 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* im_livechat_ai
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 18.0-20250807\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-25 03:15+0000\n"
+"PO-Revision-Date: 2026-11-25 03:15+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: \n"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_migration.py:0
+msgid "%(channel)s (AI Connection)"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"%(count)s reply job(s) of the Live Chat AI have been unfinished for more "
+"than %(minutes)s minutes: see Live Chat > Configuration > Reply Jobs."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "%(runs)s runs did not finish"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "%s (copy)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "<strong>Not ready:</strong>"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.im_livechat_ai_job_action
+msgid ""
+"A job is queued for every visitor message in an AI-enabled\n"
+"                channel; it shows whether the message was answered."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.llm_api_log_action
+msgid ""
+"A log is created for every answer of the AI backend of a\n"
+"                Live Chat channel; logs are kept 30 days."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__assistant_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_assistant_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__assistant_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_search
+msgid "AI Assistant"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_assistant_description
+msgid "AI Assistant Description"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.action_im_livechat_ai_assistant
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__assistant_ids
+#: model:ir.ui.menu,name:im_livechat_ai.menu_im_livechat_ai_assistant
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_list
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "AI Assistants"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__connection_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__connection_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__connection_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_search
+msgid "AI Connection"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.action_im_livechat_ai_connection
+#: model:ir.ui.menu,name:im_livechat_ai.menu_im_livechat_ai_connection
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_list
+msgid "AI Connections"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_migration.py:0
+msgid "AI Customer Service Assistant"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_pause_reason
+msgid "AI Pause Reason"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_paused_until
+msgid "AI Paused Until"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__reply
+msgid "AI Reply"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__kind
+msgid ""
+"AI Reply: answer through the AI backend. Human Handoff: the visitor asked "
+"for a human; send the handoff message and notify the operators. Waiting "
+"Notice: first visitor message while waiting for a human; send the waiting "
+"notice once (no backend call)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_state
+msgid "AI Status"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_state_reason
+msgid "AI Status Details"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_blocked_notice_sent
+msgid "AI Unavailable Notice Sent"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.action_im_livechat_ai_usage_month
+#: model:ir.ui.menu,name:im_livechat_ai.menu_im_livechat_ai_usage_month
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_list
+msgid "AI Usage"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_discuss_channel__ai_pause_notice_sent
+msgid "AI Waiting Notice Sent"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_welcome_message
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "AI Welcome Message"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__backend
+msgid "AI backend"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:res.partner.category,name:im_livechat_ai.partner_category_ai_bot
+msgid "AI 機器人"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__api_key
+msgid "API Key"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__api_key_set
+msgid "API Key Configured"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__active
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__active
+msgid "Active"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__livechat_selectable
+msgid ""
+"Active and available in Live Chat: a Live Chat manager may choose it for a "
+"channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_assistant
+msgid ""
+"An AI assistant is the persona that answers Live Chat visitors; it uses an AI connection (a LiteLLM\n"
+"                server or an n8n webhook). Tick \"Available in Live Chat\" so Live Chat managers can choose it for\n"
+"                their channels."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_connection
+msgid ""
+"An AI connection says where the brain of the Live Chat AI assistants is: a LiteLLM server or an n8n\n"
+"                webhook, with its key and call settings."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_enabled
+msgid "Answer With AI"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_enabled
+msgid "Answer the visitors of this channel with its AI assistant."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+msgid "Archived"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__assistant_count
+msgid "Assistant Count"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_list
+msgid "Assistants"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_available
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_search
+msgid "Available in Live Chat"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__backend_type
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__backend_type
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+msgid "Backend"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__llm_calls
+msgid "Backend Calls"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__llm_calls
+msgid "Backend calls made in the last run (one call, plus at most 2 retries)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__backend_type
+msgid "Backend type of the AI connection at the time of the call"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Basic Information"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__readiness__blocked
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_channel__ai_state__blocked
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+msgid "Blocked"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__partner_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Bot Partner"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Call Log"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__call_log_count
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__call_log_count
+msgid "Call Log Count"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.llm_api_log_action
+#: model:ir.ui.menu,name:im_livechat_ai.llm_api_log_menu
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_tree
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Call Logs"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Call Logs - %s"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"Call logs now store the conversation content sent to and received from the backend.\n"
+"                                Private conversations become readable by administrators. Turn it off after debugging:\n"
+"                                stored content is then erased."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Capabilities"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Channel"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__discuss_channel_id
+msgid "Chat Session"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Choose an AI assistant with an AI connection first."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.server,name:im_livechat_ai.ir_cron_cleanup_llm_api_logs_ir_actions_server
+msgid "Cleanup LLM API Logs"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__completion_tokens
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__completion_tokens
+msgid "Completion Tokens"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_customer_safe_warning
+msgid "Connection Not Safe for Customers"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Connection OK (HTTP %s)."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"Connection OK (HTTP 200), but the model \"%(model)s\" is not in the list of "
+"models this key can use. Check the model name."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__customer_safe
+msgid "Connection Safe for Customers"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__discuss_channel_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Conversation"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"Could not connect to the backend. Check the URL and the network policy."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_assistant
+msgid "Create an AI assistant"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_connection
+msgid "Create an AI connection"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__legacy_migrated
+msgid "Created From 1.x Channel Settings"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__create_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__create_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__create_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__create_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_uid
+msgid "Created by"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__legacy_migrated
+msgid ""
+"Created by the 18.0.2.0.0 upgrade from the backend settings of Live Chat "
+"channels."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_migration.py:0
+msgid ""
+"Created by the 18.0.2.0.0 upgrade from the backend settings of the Live Chat"
+" channel(s) %(ids)s."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_migration.py:0
+msgid ""
+"Created by the 18.0.2.0.0 upgrade from the settings of the Live Chat channel"
+" \"%(channel)s\" (id %(id)s)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__create_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__create_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__create_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__create_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__create_date
+msgid "Created on"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Date"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Debug"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__log_payload
+msgid ""
+"Debugging only: store the request and response content in the call logs. "
+"They contain private conversations. Turning it off erases stored content."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__deferred
+msgid "Deferred"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__description
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__description
+msgid "Description"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_discuss_channel
+msgid "Discussion Channel"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__display_name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__display_name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__display_name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__display_name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__display_name
+msgid "Display Name"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__document_mode
+msgid "Documents Users Send"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__done
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Done"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__document_mode__link
+msgid "Download links only"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__duration_ms
+msgid "Duration (ms)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.constraint,message:im_livechat_ai.constraint_im_livechat_ai_assistant_partner_uniq
+msgid "Each bot partner can belong to one AI assistant only."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__run_after
+msgid "Earliest processing time (debounce of rapid messages)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__livechat_channel_id
+msgid "Empty once the channel is deleted; the scope keeps its id."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Empty: a default message in the visitor's language"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__endpoint_url
+msgid "Endpoint URL"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Endpoint not found (HTTP %s). Check the URL."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__error
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__error_message
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__error
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Error"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__error_message
+msgid "Error Message"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__failed
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Failed"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__replies_failed
+msgid "Failed Replies"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Files"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Files Visitors Send"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__finished_at
+msgid "Finished"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__month
+msgid "First day of the month (UTC)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__description
+msgid "For administrators: what this backend is and who runs it."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_search
+msgid "Group By"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__http_error
+msgid "HTTP Error"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__http_status
+msgid "HTTP Status"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__http_status
+msgid ""
+"HTTP status code of the last backend answer (empty when no answer arrived)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__handoff_source
+msgid "Handoff Decided By"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_message
+msgid "Handoff Message"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__handoff_reason
+msgid "Handoff Reason"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"Hello, I am the AI customer service assistant. How can I help you? To talk "
+"to a person, type \"talk to a human\"."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid ""
+"Highest message id sent to the AI backend as conversation; visitor messages "
+"up to it are covered by this job's reply"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__max_history
+msgid "History Messages"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "History messages must be between 1 and 200."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__attempts
+msgid "How many times processing of this job started (at most 3)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__job_runner_info
+msgid ""
+"How the replies of the Live Chat AI are processed, and stuck reply jobs (all"
+" channels of this database)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__handoff
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid "Human Handoff"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
+msgid "Human Handoff Keywords"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__id
+msgid "ID"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_1920
+msgid "Image"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_1024
+msgid "Image 1024"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_128
+msgid "Image 128"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_256
+msgid "Image 256"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_512
+msgid "Image 512"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"Images are always sent inline. Documents of at most 4 MB are sent as they are (Odoo\n"
+"                                converts nothing) or as links. n8n backends get every attachment as a signed download\n"
+"                                link (the workflow downloads it). Replies are text only."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__invalid_response
+msgid "Invalid Response"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__customer_safe
+msgid ""
+"Its AI connection is safe for customers. Read with administrator rights; "
+"only the yes / no is shown."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__job_runner_warning
+msgid "Job Runner Warning"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_list
+msgid "Key Set"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Last 30 Days"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Last 7 Days"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
+msgid "Last Message In Context"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__write_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__write_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__write_uid
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_uid
+msgid "Last Updated by"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__write_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__write_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__write_date
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__write_date
+msgid "Last Updated on"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "Last run of the scheduled action: %(time)s (UTC)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Leave empty to keep the current key"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__backend_type__openai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__backend_type__openai
+msgid "LiteLLM (OpenAI compatible)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__api_key
+msgid ""
+"LiteLLM (required): sent as \"Authorization: Bearer\" (a LiteLLM virtual "
+"key: rate limits are set there). n8n (optional): the signing secret of the "
+"X-Woow-Signature HMAC (never sent); without one requests are not signed, "
+"e.g. for a public n8n Chat Trigger. Leave empty to keep the current key; the"
+" saved key is never shown again. Changing the endpoint host or the backend "
+"type removes the saved key, so it is never sent to another server: enter it "
+"again."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__customer_safe
+msgid ""
+"LiteLLM connections are chat-only (Odoo sends the conversation, never "
+"tools): always safe. n8n: tick it only after checking that the workflow "
+"looks up no company data, calls no tools and keeps no memory across "
+"conversations; it is cleared when the endpoint URL or the backend type "
+"changes. Live Chat visitors are mostly anonymous customers: a channel whose "
+"AI assistant uses a connection that is not safe shows a warning."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"LiteLLM connections are chat-only: Odoo sends the conversation and never any tool,\n"
+"                                so they are always safe for customers."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "LiteLLM connections are chat-only: they are always safe for customers."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__model
+msgid ""
+"LiteLLM only (required): the LiteLLM model name, which picks the deployment."
+" A LiteLLM connection without one is not ready and fails Test Connection."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__document_mode
+msgid ""
+"LiteLLM only: how the documents visitors send (PDF, docx, xlsx, xls, csv, "
+"txt, md, json) reach the model. \"Send the files\": each document of at most"
+" 4 MB is sent as it is, as a file part (LiteLLM reads PDF, Word and Excel "
+"files); Odoo converts nothing. \"Download links only\": a signed 1-hour link"
+" instead, for a server that refuses file parts. Images are always sent "
+"inline. n8n always gets download links."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__backend_type
+msgid ""
+"LiteLLM: Odoo sends the conversation to /v1/chat/completions and posts the "
+"answer; it never sends tools, so the connection is chat-only. n8n: Odoo "
+"sends the conversation to a webhook; what the workflow does (data lookups, "
+"tools, memory) is up to the workflow."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__endpoint_url
+msgid ""
+"LiteLLM: the base URL ending in /v1 (…/chat/completions is added). n8n: the "
+"full production webhook URL (a Chat Trigger: …/webhook/<id>/chat). Must be "
+"https, except localhost and *.svc.cluster.local."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_assistant
+msgid "Live Chat AI Assistant"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_llm_api_log
+msgid "Live Chat AI Call Log"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_connection
+msgid "Live Chat AI Connection"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_job
+msgid "Live Chat AI Reply Job"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_ai_usage_month
+msgid "Live Chat AI Usage per Month"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.server,name:im_livechat_ai.ir_cron_recover_ai_jobs_ir_actions_server
+msgid "Live Chat AI: Recover Reply Jobs"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "Live Chat AI: cannot answer"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "Live Chat AI: no reply"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "Live Chat AI: the visitor asked for a human"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__livechat_channel_id
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__livechat_channel_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_search
+msgid "Live Chat Channel"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Live Chat Channels"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__livechat_available
+msgid ""
+"Live Chat managers can choose this AI assistant for their channels only "
+"while it is ticked. Every Live Chat channel can be reached by anonymous "
+"visitors, so tick it only for assistants meant to answer the public."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid ""
+"Live Chat managers choose the AI assistant of each channel (the channel's\n"
+"                                \"AI Assistant\" tab), among the assistants available in Live Chat."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"Live Chat visitors are mostly anonymous customers. Tick it only after checking that\n"
+"                                this n8n workflow looks up no company data, calls no tools and keeps no memory across\n"
+"                                conversations. It is cleared when the endpoint URL or the backend type changes. A\n"
+"                                Live Chat channel whose AI assistant uses a connection that is not safe shows a\n"
+"                                warning."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model,name:im_livechat_ai.model_im_livechat_channel
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__livechat_channel_id
+msgid "Livechat Channel"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__log_payload
+msgid "Log Request Content"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Messages"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__model
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__model
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Model"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__model
+msgid "Model name sent with the call (LiteLLM; empty for n8n)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__month
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_search
+msgid "Month"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__max_history
+msgid "Most recent messages of the conversation sent as context (1-200)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__name
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__name
+msgid "Name"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "No AI assistant is chosen yet."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.im_livechat_ai_job_action
+msgid "No AI reply jobs yet"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_usage_month
+msgid "No AI reply yet"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"No API key is saved. Changing the endpoint host or the backend type removes "
+"the saved key, so it is never sent to another server: enter the key again."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.llm_api_log_action
+msgid "No call logs found"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"No signing secret: requests to n8n are not signed (fine for a public n8n "
+"Chat Trigger, which checks no signature). Set one when the workflow verifies"
+" X-Woow-Signature."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__ok
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "OK"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_channel__ai_state__off
+msgid "Off"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_state
+msgid ""
+"Off: the AI does not answer this channel. Ready: the AI answers the "
+"visitors. Blocked: the AI is on but cannot answer; see why below."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Only Live Chat managers can set up the AI of a channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "Only Live Chat managers can use this feature."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "Only system administrators can change AI assistants."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Only system administrators can change AI connections."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"Only system administrators can manage AI connections and AI assistants."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "Open the conversation"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__discuss_channel__ai_pause_reason__operator
+msgid "Operator replied"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_pause_reason
+msgid ""
+"Operator replied: the AI stays silent until the pause ends. Visitor asked "
+"for a human: the AI waits for an operator; if none replies, it answers the "
+"messages written meanwhile when the wait ends."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_sent
+msgid "Operators Told the AI Cannot Answer"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
+msgid ""
+"Optional, empty by default: the AI backend decides when the visitor wants a "
+"human (it ends its reply with [[handoff]], n8n answers \"handoff\": true). "
+"Comma-separated words or phrases checked before the backend is called: when "
+"a visitor message contains one of them, the AI sends the handoff message at "
+"once without calling the backend, waits for an operator and notifies the "
+"operators. Chinese entries match anywhere in the message; English entries "
+"match whole words or phrases only, case-insensitive. Example: 找真人,轉人工,talk "
+"to a human."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Optional. Leave empty to keep the current secret"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__system_prompt
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Optional. Leave empty to let the backend decide the role."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"Optional. Secret of the X-Woow-Signature HMAC. It is never sent to n8n: "
+"verify the signature in the workflow. Without a secret requests are not "
+"signed (e.g. a public n8n Chat Trigger). Leave empty to keep the current "
+"secret; use Remove API Key to stop signing. Changing the endpoint host or "
+"the backend type removes it."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__partner_id
+msgid ""
+"Partner the AI posts as. Created automatically and kept archived; name and "
+"avatar follow the AI assistant."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
+msgid "Pause After Human Reply (minutes)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__pending
+msgid "Pending"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Pending or Running"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Performance & Usage"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__error_message
+msgid ""
+"Posted to the visitor when the backend fails. Empty: a default message in "
+"the visitor's language."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Processing"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__prompt_tokens
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__prompt_tokens
+msgid "Prompt Tokens"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid ""
+"Rate limits live in the LiteLLM key (requests and tokens per minute, parallel\n"
+"                                requests): Odoo has no usage limit, only technical queue caps (one reply at a time\n"
+"                                per conversation, at most 30 unfinished replies per Live Chat channel)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__readiness
+msgid "Readiness"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__readiness_reason
+msgid "Readiness Details"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Readiness can only be searched as equal to \"ok\" or \"blocked\"."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__readiness__ok
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_channel__ai_state__ok
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+msgid "Ready"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Ready to use."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__readiness
+msgid "Ready: the connection can be used. Blocked: see the details."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__handoff_reason
+msgid ""
+"Reason given by the backend (n8n \"handoff_reason\"), also sent to the "
+"operators."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Remove API Key"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Remove the saved backend API key?"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__replies_ok
+msgid "Replies"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"Replies are processed in a background thread of the web worker that received"
+" the visitor message; the scheduled action \"Live Chat AI: Recover Reply "
+"Jobs\" (every 2 minutes) sends the replies left behind by a restart or a "
+"deploy, and the replies due after an unanswered handoff wait. A cron process"
+" must be running."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_usage_month
+msgid ""
+"Replies of the Live Chat AI assistants per month (UTC) and channel: a reference for invoicing by\n"
+"                hand, never a limit (limits live in the LiteLLM keys). Kept permanently; the call logs are kept 30\n"
+"                days."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__replies_ok
+msgid "Replies of the backend posted in the conversations."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__replies_failed
+msgid "Replies that failed: the visitor got the error message."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__job_id
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Reply Job"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.actions.act_window,name:im_livechat_ai.im_livechat_ai_job_action
+#: model:ir.ui.menu,name:im_livechat_ai.im_livechat_ai_job_menu
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_list
+msgid "Reply Jobs"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__reply_message_id
+msgid "Reply Message"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__job_runner_info
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Reply Processing"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__deferred
+msgid ""
+"Reply to a message written while the AI waited for an operator: run by the "
+"recovery cron when the wait ends (Run After), closed quietly if an operator "
+"replied meanwhile."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Request"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__request_payload
+msgid "Request Content"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_form
+msgid "Response"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_payload
+msgid "Response Content"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__response_time
+msgid "Response Time (s)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__max_retries
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__retry_count
+msgid "Retries"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__max_retries
+msgid ""
+"Retries (0-2) when the connection could not be opened or the backend "
+"answered HTTP 429 or 503, after 3 and 10 seconds and only within the "
+"timeout. Read timeouts and other errors are never retried: the backend may "
+"already be working on the answer."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__retry_count
+msgid "Retries made for this answer"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Retries must be between 0 and 2."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__retry
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Retry (1.x)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__run_after
+msgid "Run After"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__running
+msgid "Running"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__attempts
+msgid "Runs"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__customer_safe
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_search
+msgid "Safe for Customers"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__scope_model
+msgid "Scope Model"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__scope_res_id
+msgid "Scope Record"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Search Call Logs"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Search Reply Jobs"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_selectable
+msgid "Selectable in Live Chat"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__document_mode__file
+msgid "Send the files to the model"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_pause_notice
+msgid ""
+"Sent once to the first visitor message written while the AI waits for an "
+"operator after a handoff request. %(minutes)s is replaced with the wait "
+"minutes."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_message
+msgid "Sent to the visitor when they ask for a human operator"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__sequence
+msgid "Sequence"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the API key: LiteLLM connections need one."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the LiteLLM model name first."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the endpoint URL and the API key first."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the endpoint URL first."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the endpoint URL."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "Set the model: LiteLLM picks the deployment by its name."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_welcome_message
+msgid ""
+"Shown as the welcome message of the chat window while AI is enabled (instead"
+" of the channel welcome message), so visitors know they are talking to an "
+"AI."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid ""
+"Shown to Live Chat managers when they choose the AI assistant of a channel"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__description
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_assistant_description
+msgid ""
+"Shown to Live Chat managers when they choose the AI assistant of a channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Signing Secret"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__state__skipped
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Skipped"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Some replies may not be sent: see below."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"Sorry, the AI assistant cannot answer right now. Please try again later, or "
+"leave your contact details and our team will get back to you as soon as "
+"possible."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__started_at
+msgid "Started"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__state
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__status
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Status"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__success
+msgid "Success (1.x)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__system_prompt
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "System Prompt"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"System administrators set up the AI assistants and their AI connections in\n"
+"                                Live Chat &gt; Configuration; only the assistants they made available in Live Chat can\n"
+"                                be chosen here."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "Test Connection"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/discuss_channel.py:0
+msgid ""
+"The AI assistant cannot answer right now. Our team will get back to you as "
+"soon as possible."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "The AI assistant has no AI connection."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "The AI assistant is archived."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "The AI assistant is not available in Live Chat."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_assistant_id
+msgid ""
+"The AI assistant that answers the visitors: one of the assistants a system "
+"administrator made available in Live Chat (Live Chat > Configuration > AI "
+"Assistants)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"The AI connection of this AI assistant is not marked \"Safe for Customers\". Live Chat\n"
+"                                visitors are mostly anonymous customers: the backend must only use public data."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid ""
+"The AI connection of this AI assistant is not marked \"Safe for Customers\". Live Chat visitors\n"
+"                        are mostly anonymous customers: the backend must only use public data."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_paused_until
+msgid ""
+"The AI does not answer this live chat conversation before this time: an "
+"operator replied or the visitor asked for a human."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The AI found that the visitor in conversation \"%(session)s\" wants a human "
+"(%(reason)s). The AI waits %(minutes)s minutes; if nobody replies, the AI "
+"answers the visitor again. Please take over soon."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The AI found that the visitor in conversation \"%(session)s\" wants a human."
+" The AI waits %(minutes)s minutes; if nobody replies, the AI answers the "
+"visitor again. Please take over soon."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The AI of the Live Chat channel \"%(channel)s\" is on but cannot answer "
+"(conversation \"%(session)s\"): %(reason)s No reply job is queued until this"
+" is fixed; please take over the visitors meanwhile. A system administrator "
+"can see why on the AI Assistant tab of the channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__reply_message_id
+msgid "The AI reply (or error message) posted for this job"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The Live Chat AI could not answer conversation \"%(session)s\" (%(reason)s)."
+" Please take over soon."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The Live Chat AI could not answer conversation \"%(session)s\" (%(reason)s)."
+" The visitor got the error message; please take over soon."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"The Live Chat channel \"%(name)s\" answers visitors with this AI assistant. "
+"Turn the AI of that channel off first, or choose another AI assistant for "
+"it."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"The Live Chat channel \"%(name)s\" answers visitors with this AI connection."
+" Turn the AI of that channel off first, or choose another AI assistant for "
+"it."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"The Live Chat channel \"%(name)s\" has no AI assistant that can answer yet. "
+"A system administrator creates the AI assistant and its AI connection in "
+"Live Chat > Configuration > AI Assistants; then choose it here."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_payload
+msgid ""
+"The answer received from the backend (JSON). Only stored while \"Log Request"
+" Content\" is on for the AI connection."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "The backend answered HTTP %s."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"The backend answered with a redirect (HTTP %s): enter the final URL, "
+"redirects are not followed."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "The backend did not answer within %s seconds."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "The backend refused the key or the signature (HTTP %s)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid ""
+"The backend type, URL, key, model, timeout and documents are settings of the\n"
+"                                        AI connection. The welcome message, the handoff texts, the pause and wait\n"
+"                                        minutes and the keywords are settings of each Live Chat channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "The bot partner of an AI assistant cannot be a user."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "The connection is archived."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_blocked_notice_sent
+msgid ""
+"The conversation was told once that the AI cannot answer right now; cleared "
+"when the AI answers again."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"The endpoint URL is not allowed: it must use https (plain http is only "
+"allowed for localhost and *.svc.cluster.local)."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid ""
+"The endpoint URL must use https (plain http is only allowed for localhost "
+"and *.svc.cluster.local)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__error_message
+msgid ""
+"The exception type name of a failed answer (never the upstream answer or the"
+" key)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__name
+msgid "The name visitors see as the author of the AI replies."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_sent
+msgid ""
+"The operators were alerted once that the AI of this channel cannot answer; "
+"cleared when it answers again."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "The pause after a human reply must be between 1 and 1440 minutes."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__request_payload
+msgid ""
+"The request body sent to the backend (JSON, without the key). Only stored "
+"while \"Log Request Content\" is on for the AI connection."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"The scheduled action \"Live Chat AI: Recover Reply Jobs\" has not run for "
+"more than %(minutes)s minutes. Check that the Odoo cron process "
+"(max_cron_threads of at least 1) is running: the replies after a restart or "
+"a deploy and the replies after a handoff wait depend on it."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid ""
+"The scheduled action \"Live Chat AI: Recover Reply Jobs\" is disabled: "
+"replies left behind by a restart or a deploy are not sent."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_connection.py:0
+msgid "The timeout must be between 10 and 300 seconds."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The visitor in conversation \"%(session)s\" asked for a human. The AI waits "
+"%(minutes)s minutes; if nobody replies, the AI answers the visitor again. "
+"Please take over soon."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__message_id
+msgid "The visitor message that created this job"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "The wait for a human must be between 1 and 1440 minutes."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_discuss_channel__ai_pause_notice_sent
+msgid "The waiting notice was already sent during the current handoff wait."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"This AI assistant is archived. Ask a system administrator to restore it, or "
+"choose another AI assistant."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"This AI assistant is not available in Live Chat. Ask a system administrator "
+"to tick \"Available in Live Chat\" on it, or choose another AI assistant."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "This field can only be searched as equal to True or False."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_time
+msgid "Time of the whole answer in seconds (18.0.1.x: of one call)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__duration_ms
+msgid "Time of the whole answer, retries included"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__status__timeout
+msgid "Timeout"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
+msgid "Timeout (seconds)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__timestamp
+msgid "Timestamp"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.llm_api_log_view_search
+msgid "Today"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_usage_month_list
+msgid "Total"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__total_tokens
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__total_tokens
+msgid "Total Tokens"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
+msgid ""
+"Total time allowed for one answer, retries included (10-300 seconds). New "
+"connections: 45 seconds for LiteLLM, 120 seconds for n8n. Live Chat replies "
+"are not streamed: the visitor gets the whole answer, or the error message "
+"when the time is up. A timed-out call is never retried."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__message_id
+msgid "Trigger Message"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__kind
+msgid "Type"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_ids
+msgid "Used By Channels"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__surface_type
+#: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__surface_type
+msgid "Used In"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__discuss_channel__ai_pause_reason__handoff
+msgid "Visitor asked for a human"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__keyword
+msgid "Visitor keyword"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__handoff_source
+msgid ""
+"Visitor keyword: the visitor message contained a handoff keyword (no backend"
+" call). AI backend: the backend asked for a human ([[handoff]] or n8n "
+"\"handoff\": true)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes
+msgid "Wait For Human After Handoff Request (minutes)"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_pause_notice
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__kind__notice
+msgid "Waiting Notice"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "We have notified our team. Please wait a moment."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"We have notified our team. Please wait a moment. If nobody can answer, the "
+"AI assistant will continue in %(minutes)s minutes."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__scope_res_id
+msgid "What the replies are counted for: the Live Chat channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "What this backend is and who runs it"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"When an operator posts in a conversation, the AI stays silent for the pause\n"
+"                            minutes (every operator message extends it). When the visitor asks for a human\n"
+"                            (the AI backend decides, or one of the keywords), the visitor gets the handoff\n"
+"                            message, the operators are notified and the AI waits for an operator; the first\n"
+"                            visitor message during the wait gets the waiting notice once. If no operator\n"
+"                            replies before the wait ends, the AI answers the messages the visitor wrote\n"
+"                            meanwhile."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_pause_minutes
+msgid ""
+"When an operator posts in a conversation, the AI stops answering that "
+"conversation for this many minutes; every further operator message extends "
+"the pause again (1-1440)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__timestamp
+msgid "When the answer was asked"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes
+msgid ""
+"When the visitor asks for a human, the AI waits this many minutes for an "
+"operator. If no operator replies in that time, the AI answers the messages "
+"the visitor sent meanwhile (1-1440)."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "Where the brain is: pick or create an AI connection"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__connection_id
+msgid ""
+"Where the brain of this assistant is and how it is called: backend type, "
+"URL, key, model, timeout. Several assistants may share one connection."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_channel_view_form_inherit_ai
+msgid ""
+"While AI is enabled, visitors see this welcome message instead of the\n"
+"                            channel welcome message, so they know they are talking to an AI."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "an unexpected error"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "could not connect to the AI backend"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "e.g. Company LiteLLM"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
+msgid "e.g. Store Assistant"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "e.g. chatgpt-pool/gpt-6-sol"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
+msgid "https://litellm.example.com/v1 or https://n8n.example.com/webhook/…"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__surface_type
+msgid "livechat: a Live Chat session."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__surface_type
+msgid "livechat: the Live Chat sessions of a channel."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_connection__backend_type__n8n
+#: model:ir.model.fields.selection,name:im_livechat_ai.selection__llm_api_log__backend_type__n8n
+msgid "n8n webhook"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the AI answer is empty"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the AI assistant or its AI connection is not set up"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the AI backend or an upstream service is temporarily failing"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid "the AI gave no answer"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the URL or the model does not exist"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the answer has an invalid format"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid ""
+"the backend answered with a redirect (enter the final URL; redirects are not"
+" followed)"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the backend answered with an error"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the backend did not answer in time"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the backend refused access"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the conversation is too long"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the key or the signature is not valid"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the request or the model name is wrong"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "the upstream service timed out"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"the visitor message was not processed by the AI within %(minutes)s minutes"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
+msgid "too many calls, or the quota is used up"
+msgstr ""

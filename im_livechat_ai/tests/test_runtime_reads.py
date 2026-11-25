@@ -4,6 +4,9 @@ connection; the n8n body; the bot set; the blocked gate; the concurrency
 re-raise; call logs and monthly usage. All HTTP is mocked; no real key."""
 
 import json
+import logging
+import threading
+import time
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -446,11 +449,30 @@ class TestReplyCaps(RuntimeCase):
             self.guest_post(second, guest2, '第二位第三次')
         self.assertEqual(len(alerts(bus_send)), 1)
 
-    def test_database_cap_follows_the_pool(self):
-        """Review r2 #8: the default leaves at least half of a process's connection pool free."""
-        for pool, cap in ((64, 32), (200, jobs.MAX_ACTIVE_JOBS_TOTAL), (1, 1), (None, 32)):
+    def test_database_cap_is_an_abuse_bound(self):
+        """Review r3 #3-#5: the database cap stays 60 whatever db_maxconn, the pool of ONE process (the
+        connections of each process are bounded by its job slots, TestJobSlots)."""
+        Job = self.env['im_livechat.ai.job']
+        Job.sudo().search([('state', 'in', ('pending', 'running'))]).write({'state': 'skipped'})
+        self.assertEqual(jobs.MAX_ACTIVE_JOBS_TOTAL, 60)
+        for pool in (6, 8, 64, 200):
             with patch.dict(config.options, {'db_maxconn': pool}):
-                self.assertEqual(jobs.default_total_cap(), cap, pool)
+                self.assertEqual(Job._active_job_slots(self.channel), jobs.MAX_ACTIVE_JOBS_PER_CHANNEL, pool)
+                self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '0')
+                self.assertEqual(Job._active_job_slots(self.channel), 60, pool)
+                self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '')
+
+    def test_one_channel_cannot_take_the_database(self):
+        """The abuse case: one channel holds at most its own 30; the other channels keep the rest of the 60."""
+        Job = self.env['im_livechat.ai.job'].sudo()
+        Job.search([('state', 'in', ('pending', 'running'))]).write({'state': 'skipped'})
+        session, _g, message = self.session()
+        Job.create([{'discuss_channel_id': session.id, 'livechat_channel_id': self.channel.id,
+                     'message_id': message.id, 'kind': 'reply', 'state': 'pending'} for _i in range(30)])
+        self.assertEqual(Job._active_job_slots(self.channel), 0, 'the channel is at its own cap')
+        self.assertEqual(Job._active_job_slots(self.n8n), 30, 'another channel keeps its own 30')
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs_total', '31')
+        self.assertEqual(Job._active_job_slots(self.n8n), 1, 'and the database cap still holds')
 
     def test_database_cap(self):
         ICP = self.env['ir.config_parameter'].sudo()
@@ -688,3 +710,66 @@ class TestGateWhenTheJobRuns(RuntimeCase):
         self.assertEqual(job.state, 'skipped')
         self.assertFalse(self._notices(session), 'the AI is off: no notice')
 
+
+class TestJobSlots(TransactionCase):
+    """Review r3 #3-#5: each Odoo process lets only so many job threads hold a database connection (half of
+    what its pool leaves after the cron threads); a thread waits for a slot holding no connection, and one that
+    waits too long leaves its job pending for the recovery cron. The recovery threads of the cron process take
+    the same slots (wait=False)."""
+
+    def setUp(self):
+        super().setUp()
+        jobs._reset_job_slots()
+        self.addCleanup(jobs._reset_job_slots)
+
+    def test_slot_count(self):
+        for pool, cron, slots in ((6, 0, 3), (8, 2, 3), (16, 3, 6), (64, 2, 31), (1, 0, 1), (None, 0, 32)):
+            with patch.dict(config.options, {'db_maxconn': pool, 'max_cron_threads': cron}):
+                self.assertEqual(jobs.job_slot_count(), slots, (pool, cron))
+
+    def test_slots_bound_concurrent_job_cursors(self):
+        state = {'open': 0, 'peak': 0, 'runs': []}
+        lock = threading.Lock()
+
+        def step(_db_name, job_id):
+            with lock:
+                state['open'] += 1
+                state['peak'] = max(state['peak'], state['open'])
+            time.sleep(0.05)
+            with lock:
+                state['open'] -= 1
+                state['runs'].append(job_id)
+            return True, None
+
+        start = time.time()
+        with patch.dict(config.options, {'db_maxconn': 4, 'max_cron_threads': 0}), \
+                patch.object(jobs, '_run_job_step', step):
+            threads = [threading.Thread(target=jobs._job_worker, args=(self.env.cr.dbname, job_id),
+                                        kwargs={'wait': False}) for job_id in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+        self.assertLessEqual(state['peak'], 2, 'two slots for a pool of 4')
+        self.assertGreaterEqual(time.time() - start, 0.18, 'eight 50 ms runs through two slots')
+        self.assertEqual(sorted(state['runs']), list(range(8)), 'every job ran after waiting')
+
+    def test_a_thread_that_waits_too_long_leaves_its_job_pending(self):
+        step = MagicMock(return_value=(True, None))
+        with patch.dict(config.options, {'db_maxconn': 2, 'max_cron_threads': 0}), \
+                patch.object(jobs, '_run_job_step', step), patch.object(jobs, 'RECOVERY_SLOT_WAIT_SECONDS', 0.1), \
+                self.assertLogs(JOB_LOGGER, level=logging.INFO) as logs:
+            with jobs._job_slot(1):  # the only slot of this process is taken
+                jobs._job_worker(self.env.cr.dbname, 7, wait=False)
+        step.assert_not_called()
+        self.assertTrue(any('stays pending for the recovery cron' in line for line in logs.output))
+
+    def test_new_process_makes_its_own_slots(self):
+        """After fork() a worker makes its own slots from its own pool (os.register_at_fork)."""
+        with patch.dict(config.options, {'db_maxconn': 6, 'max_cron_threads': 0}):
+            with jobs._job_slot(1):
+                first = jobs._job_slots
+            jobs._reset_job_slots()
+            self.assertIsNone(jobs._job_slots)
+            with jobs._job_slot(1):
+                self.assertIsNot(jobs._job_slots, first)

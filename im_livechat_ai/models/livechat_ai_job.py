@@ -39,14 +39,17 @@ Flow:
 """
 
 import logging
+import os
 import threading
 import time
 import zlib
+from contextlib import contextmanager
 from datetime import timedelta
 
 from markupsafe import Markup
 from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 
+import odoo
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
@@ -83,14 +86,17 @@ CRON_SEARCH_LIMIT = 200
 # this many unfinished reply jobs in a channel are not queued. Override with the
 # system parameter im_livechat_ai.max_active_jobs (0 disables the limit).
 MAX_ACTIVE_JOBS_PER_CHANNEL = 30
-# The same bound for all the live chat channels of the database together: each
-# running reply holds a thread and a pooled database connection of its Odoo
-# process during its backend call. The default is half of the connection pool
-# of a process (db_maxconn, 64 by default: 32), at most MAX_ACTIVE_JOBS_TOTAL,
-# so at least half of the pool stays free for web requests (see
-# default_total_cap). Override with the system parameter
-# im_livechat_ai.max_active_jobs_total (0 disables it).
+# The same bound for all the live chat channels of the database together (an
+# abuse bound, whatever the processes and their pools). Override with the
+# system parameter im_livechat_ai.max_active_jobs_total (0 disables it). The
+# connections are bounded per process by the job slots (see job_slot_count).
 MAX_ACTIVE_JOBS_TOTAL = 60
+# A job thread waits at most this long for a job slot of its process (it holds
+# no database connection while it waits); then the job stays pending and the
+# recovery cron runs it. Recovery threads wait less: the cron hands the job out
+# again on its next run.
+JOB_SLOT_WAIT_SECONDS = 300
+RECOVERY_SLOT_WAIT_SECONDS = 60
 CRON_BATCH_LIMIT = 10  # sessions handed to recovery threads per cron run
 CHAIN_LIMIT = 20  # jobs one thread runs back to back for the same session
 MAX_JOB_ERROR_LENGTH = 300
@@ -122,15 +128,58 @@ LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.job') & 0x7FFFFFFF
 ALERT_LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.alert') & 0x7FFFFFFF
 
 
-def default_total_cap():
-    """Default of im_livechat_ai.max_active_jobs_total: half of db_maxconn
-    (the connection pool of one Odoo process), at least 1, at most
-    MAX_ACTIVE_JOBS_TOTAL."""
+def job_slot_count():
+    """Job threads of this process that may hold a database connection at the
+    same time: half of what the process's connection pool (db_maxconn, or
+    db_maxconn_gevent in the gevent process) leaves after the cron threads, at
+    least 1. The other half stays free for the web requests, as Odoo's own
+    threaded server sizes its request threads."""
+    def number(key):
+        try:
+            return int(config.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+    pool = (getattr(odoo, 'evented', False) and number('db_maxconn_gevent')) or number('db_maxconn') or 64
+    return max(1, (pool - number('max_cron_threads')) // 2)
+
+
+class _NoJobSlot(Exception):
+    """No job slot of this process came free in time."""
+
+
+# The job slots of this process, made on first use. A forked worker makes its own
+# (the pool is per process, and a semaphore copied by fork() is not usable there).
+_job_slots = None
+_job_slots_lock = threading.Lock()
+
+
+def _reset_job_slots():
+    global _job_slots, _job_slots_lock  # noqa: PLW0603 - per-process state, reset after fork()
+    _job_slots = None
+    _job_slots_lock = threading.Lock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_job_slots)
+
+
+@contextmanager
+def _job_slot(timeout):
+    """Hold one job slot of this process (taken before the job's cursor is
+    opened, given back after it is closed). Raises _NoJobSlot after
+    `timeout` seconds."""
+    global _job_slots  # noqa: PLW0603
+    if _job_slots is None:
+        with _job_slots_lock:
+            if _job_slots is None:
+                _job_slots = threading.BoundedSemaphore(job_slot_count())
+    slots = _job_slots
+    if not slots.acquire(timeout=timeout):
+        raise _NoJobSlot()
     try:
-        pool = int(config.get('db_maxconn') or 64)
-    except (TypeError, ValueError):
-        pool = 64
-    return max(1, min(MAX_ACTIVE_JOBS_TOTAL, pool // 2))
+        yield
+    finally:
+        slots.release()
 
 
 def _job_cursor(db_name):
@@ -147,13 +196,33 @@ def _job_cursor(db_name):
     return cr
 
 
+def _seconds_until_due(db_name, job_id):
+    with _job_cursor(db_name) as cr:
+        env = api.Environment(cr, SUPERUSER_ID, {})
+        return env['im_livechat.ai.job']._seconds_until_due(job_id)
+
+
+def _run_job_step(db_name, job_id):
+    """One run of a job on its own cursor: (whether it ran, the session's
+    next pending job id)."""
+    with _job_cursor(db_name) as cr:
+        env = api.Environment(cr, SUPERUSER_ID, {})
+        Job = env['im_livechat.ai.job']
+        session_id, ran = Job.browse(job_id)._run_job(commit=True)
+        return ran, (Job._next_pending_job_id(session_id) if ran else None)
+
+
 def _job_worker(db_name, job_id, wait=True):
     """Run a job and then the session's newest pending job, in this thread.
 
     Used by the post-commit thread (wait=True: debounce first) and by the
-    recovery cron (wait=False). Never raises.
+    recovery cron (wait=False). Every cursor is opened inside a job slot of
+    this process (see job_slot_count): a thread waits for a slot holding no
+    connection, and one that waits too long leaves its job pending for the
+    recovery cron. Never raises.
     """
     threading.current_thread().dbname = db_name
+    timeout = JOB_SLOT_WAIT_SECONDS if wait else RECOVERY_SLOT_WAIT_SECONDS
     first = True
     try:
         for _i in range(CHAIN_LIMIT):
@@ -161,23 +230,22 @@ def _job_worker(db_name, job_id, wait=True):
                 if first:
                     delay = DEBOUNCE_SECONDS
                 else:
-                    with _job_cursor(db_name) as cr:
-                        env = api.Environment(cr, SUPERUSER_ID, {})
-                        delay = env['im_livechat.ai.job']._seconds_until_due(job_id)
+                    with _job_slot(timeout):
+                        delay = _seconds_until_due(db_name, job_id)
                 if delay > 0:
                     time.sleep(min(delay, DEBOUNCE_SECONDS))
-            with _job_cursor(db_name) as cr:
-                env = api.Environment(cr, SUPERUSER_ID, {})
-                Job = env['im_livechat.ai.job']
-                session_id, ran = Job.browse(job_id)._run_job(commit=True)
-                if not ran:
-                    # Lock busy: the holder runs the newest pending job when
-                    # it is done; the cron is the safety net.
-                    return
-                next_id = Job._next_pending_job_id(session_id)
+            with _job_slot(timeout):
+                ran, next_id = _run_job_step(db_name, job_id)
+            if not ran:
+                # Lock busy: the holder runs the newest pending job when
+                # it is done; the cron is the safety net.
+                return
             if not next_id or next_id == job_id:
                 return
             job_id, first, wait = next_id, False, True
+    except _NoJobSlot:
+        _logger.info("Live chat AI job %s: no job slot of this process came free in %s s; the job stays pending "
+                     "for the recovery cron", job_id, timeout)
     except Exception as e:  # noqa: BLE001 - a background thread must never die loudly
         _logger.error("Live chat AI job worker failed (job %s): %s", job_id, exception_frames(e))
 
@@ -382,7 +450,7 @@ class LivechatAiJob(models.Model):
                 is disabled
         """
         channel_limit = self._active_job_limit('im_livechat_ai.max_active_jobs', MAX_ACTIVE_JOBS_PER_CHANNEL)
-        total_limit = self._active_job_limit('im_livechat_ai.max_active_jobs_total', default_total_cap())
+        total_limit = self._active_job_limit('im_livechat_ai.max_active_jobs_total', MAX_ACTIVE_JOBS_TOTAL)
         slots = []
         if channel_limit > 0:
             slots.append(channel_limit - self.sudo().search_count(

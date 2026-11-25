@@ -130,12 +130,13 @@ Odoo 只負責**記錄、轉送、管理**對話；角色設定、工具（查�
 
 **升級後：**看 WARNING，打開 **AI 連線**（上線檢查、**測試連線**），並替每把 LiteLLM 金鑰設好限制。
 
-**回復到 18.0.1.3.5。** 優先往前修。真的要退回時，部署 18.0.1.3.5 的程式並執行 `-u im_livechat_ai`。18.0.1.x 的頻道欄位保留了一個版本，所以頻道會回到升級當時的設定。在 18.0.2.0.0 建立或改過的助理與連線會遺失，在 18.0.2.0.0 換過的金鑰要重新輸入，在 18.0.2.0.0 新建的頻道沒有 18.0.1.3.5 的設定：請關閉它們的 AI。Odoo 會保留已移除模型的資料表，之後再升級時會沿用裡面的資料，所以回復成功後請執行一次（不會印出任何內容）：
+**回復到 18.0.1.3.5。** 優先往前修。真的要退回時，部署 18.0.1.3.5 的程式並執行 `-u im_livechat_ai`。18.0.1.x 的頻道欄位保留了一個版本，所以頻道會回到升級當時的設定。在 18.0.2.0.0 建立或改過的助理與連線會遺失，在 18.0.2.0.0 換過的金鑰要重新輸入，在 18.0.2.0.0 新建的頻道沒有 18.0.1.3.5 的設定：請關閉它們的 AI。Odoo 會保留已移除模型的資料表，之後再升級時會沿用裡面的資料，所以回復成功後請執行一次（不會印出任何內容；內容就是 `im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql`）。它也會刪除回復期間的每月 AI 用量（這些資料列指向助理與連線）：若要依用量開立發票，請先匯出 AI 用量清單。
 
 ```sql
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM ir_model WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')) THEN
+    IF to_regclass('im_livechat_ai_usage_month') IS NOT NULL THEN DELETE FROM im_livechat_ai_usage_month; END IF;
     IF to_regclass('im_livechat_ai_assistant') IS NOT NULL THEN DELETE FROM im_livechat_ai_assistant; END IF;
     IF to_regclass('im_livechat_ai_connection') IS NOT NULL THEN DELETE FROM im_livechat_ai_connection; END IF;
     DELETE FROM ir_attachment WHERE res_model IN ('im_livechat.ai.assistant', 'im_livechat.ai.connection');

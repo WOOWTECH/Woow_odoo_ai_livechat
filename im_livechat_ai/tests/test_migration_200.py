@@ -11,6 +11,7 @@ import hmac
 import importlib.util
 import json
 import logging
+import os
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError
@@ -466,3 +467,67 @@ class TestNeutralize(TransactionCase):
         self._neutralize()
         cr.execute("ALTER TABLE im_livechat_ai_connection_hidden RENAME TO im_livechat_ai_connection")
         self.env.cr.execute("SELECT 1")
+
+
+class TestRollbackCleanup(TransactionCase):
+    """The cleanup SQL of the README for a rollback to 18.0.1.3.5
+    (migrations/18.0.2.0.0/rollback-cleanup.sql), after 18.0.2.0.0 counted replies."""
+
+    SQL_FILE = 'im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql'
+
+    @staticmethod
+    def _do_block(text):
+        return text[text.index('DO $$'):text.index('END $$;') + len('END $$;')]
+
+    def test_cleanup_after_counted_replies(self):
+        channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Rolled back', 'ai_enabled': True})
+        assistant = channel.sudo().ai_assistant_id
+        assistant.image_1920 = self.env['im_livechat.channel']._ai_bot_avatar()
+        connection = assistant.connection_id
+        partner_id = assistant.partner_id.id
+        self.env['im_livechat.ai.usage.month'].sudo()._add(assistant, connection, livechat_channel=channel, ok=True,
+                                                           prompt_tokens=3, completion_tokens=2)
+        self.env.flush_all()
+        cr = self.env.cr
+        # as after the rollback: 18.0.1.3.5 dropped the channel's assistant column, and the two models are gone
+        # from ir_model while Odoo kept their tables and foreign keys
+        cr.execute("UPDATE im_livechat_channel SET ai_assistant_id = NULL")
+        cr.execute("UPDATE ir_model SET model = model || '.rolled_back' "
+                   "WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')")
+        cr.execute("SELECT count(*) FROM im_livechat_ai_usage_month")
+        self.assertTrue(cr.fetchone()[0], 'a usage row exists before the cleanup')
+        with file_open(self.SQL_FILE) as fp:
+            cr.execute(self._do_block(fp.read()))
+        for table in ('im_livechat_ai_usage_month', 'im_livechat_ai_assistant', 'im_livechat_ai_connection'):
+            cr.execute('SELECT count(*) FROM %s' % table)  # noqa: S608 - fixed names
+            self.assertEqual(cr.fetchone()[0], 0, table)
+        cr.execute("SELECT count(*) FROM ir_attachment "
+                   "WHERE res_model IN ('im_livechat.ai.assistant', 'im_livechat.ai.connection')")
+        self.assertEqual(cr.fetchone()[0], 0, 'the assistant images are gone')
+        cr.execute("SELECT count(*) FROM res_partner WHERE id = %s", (partner_id,))
+        self.assertEqual(cr.fetchone()[0], 1, 'the bot partner stays for a later re-upgrade')
+        self.env.invalidate_all()
+
+    def test_cleanup_does_nothing_while_the_models_exist(self):
+        channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Still 2.0.0'})
+        self.env.flush_all()
+        with file_open(self.SQL_FILE) as fp:
+            self.env.cr.execute(self._do_block(fp.read()))
+        self.env.invalidate_all()
+        self.assertTrue(channel.sudo().ai_assistant_id.connection_id.exists())
+
+    def test_readmes_show_the_same_block(self):
+        """In a repository checkout (CI checks it too): both READMEs carry the block of the file."""
+        root = os.path.dirname(get_module_path('im_livechat_ai'))
+        with file_open(self.SQL_FILE) as fp:
+            block = self._do_block(fp.read())
+        found = 0
+        for name in ('README.md', 'README_zh-TW.md'):
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                continue
+            found += 1
+            with open(path, encoding='utf-8') as fp:
+                self.assertIn(block, fp.read(), name)
+        if not found:
+            self.skipTest('not a repository checkout: CI compares the READMEs with the file')

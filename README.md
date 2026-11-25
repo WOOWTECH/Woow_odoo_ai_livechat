@@ -124,12 +124,13 @@ Odoo only **records, forwards and manages** the conversation: the persona, tools
 
 **After the upgrade:** read the WARNING line, open **AI Connections** (readiness, **Test Connection**) and give every LiteLLM key its limits.
 
-**Rollback to 18.0.1.3.5.** Prefer fixing forward. To go back, deploy the 18.0.1.3.5 code and run `-u im_livechat_ai`. The 18.0.1.x channel columns were kept for one version, so the channels get back the settings they had at the upgrade. Assistants and connections created or changed on 18.0.2.0.0 are lost, a key replaced on 18.0.2.0.0 must be entered again, and channels created on 18.0.2.0.0 have no 18.0.1.3.5 settings: turn their AI off. Odoo keeps the tables of removed models and a later re-upgrade would reuse their rows, so after a successful rollback run this once (it prints nothing):
+**Rollback to 18.0.1.3.5.** Prefer fixing forward. To go back, deploy the 18.0.1.3.5 code and run `-u im_livechat_ai`. The 18.0.1.x channel columns were kept for one version, so the channels get back the settings they had at the upgrade. Assistants and connections created or changed on 18.0.2.0.0 are lost, a key replaced on 18.0.2.0.0 must be entered again, and channels created on 18.0.2.0.0 have no 18.0.1.3.5 settings: turn their AI off. Odoo keeps the tables of removed models and a later re-upgrade would reuse their rows, so after a successful rollback run this once (it prints nothing; it is `im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql`). It deletes the monthly AI Usage of the rolled-back period too (its rows point to the assistants and the connections): export the AI Usage list first if you invoice from it.
 
 ```sql
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM ir_model WHERE model IN ('im_livechat.ai.connection', 'im_livechat.ai.assistant')) THEN
+    IF to_regclass('im_livechat_ai_usage_month') IS NOT NULL THEN DELETE FROM im_livechat_ai_usage_month; END IF;
     IF to_regclass('im_livechat_ai_assistant') IS NOT NULL THEN DELETE FROM im_livechat_ai_assistant; END IF;
     IF to_regclass('im_livechat_ai_connection') IS NOT NULL THEN DELETE FROM im_livechat_ai_connection; END IF;
     DELETE FROM ir_attachment WHERE res_model IN ('im_livechat.ai.assistant', 'im_livechat.ai.connection');

@@ -1103,7 +1103,8 @@ class LivechatAiJob(models.Model):
     @api.model
     def _notify_blocked(self, livechat_channel, session):
         """Tell the operators once per blocked period that the AI of
-        `livechat_channel` is on but cannot answer (see _ai_notify)."""
+        `livechat_channel` is on but cannot answer (see _ai_notify). Returns
+        whether anybody was told."""
         name = session.sudo().display_name
         channel_name = livechat_channel.sudo().name or ''
 
@@ -1114,12 +1115,13 @@ class LivechatAiJob(models.Model):
                           'over the visitors meanwhile. A system administrator can see why on the AI Assistant tab '
                           'of the channel.', channel=channel_name, session=name, reason=reasons),
                     env._('Live Chat AI: cannot answer'))
-        self._ai_notify(session, livechat_channel, build, ref='live chat channel %s' % livechat_channel.id)
+        return self._ai_notify(session, livechat_channel, build, ref='live chat channel %s' % livechat_channel.id)
 
     @api.model
     def _notify_full(self, livechat_channel, session):
         """Tell the operators once per period that the cap of unfinished reply
-        jobs refused new visitor messages of `livechat_channel` (see _ai_notify)."""
+        jobs refused new visitor messages of `livechat_channel` (see _ai_notify).
+        Returns whether anybody was told."""
         name = session.sudo().display_name
         channel_name = livechat_channel.sudo().name or ''
 
@@ -1128,7 +1130,7 @@ class LivechatAiJob(models.Model):
                           'conversation "%(session)s"): new visitor messages get no AI answer until replies '
                           'finish. Please take over the visitors meanwhile.', channel=channel_name, session=name),
                     env._('Live Chat AI: cannot answer'))
-        self._ai_notify(session, livechat_channel, build, ref='live chat channel %s' % livechat_channel.id)
+        return self._ai_notify(session, livechat_channel, build, ref='live chat channel %s' % livechat_channel.id)
 
     @api.model
     def _ai_notify(self, session, livechat_channel, build, notification_type='danger', ref=''):
@@ -1140,11 +1142,14 @@ class LivechatAiJob(models.Model):
           are online right now.
 
         ``build(env)`` returns (text, title) in the language of ``env``.
+        Returns whether at least one operator got the chat message or the
+        notification.
         """
         partners = self._ai_recipients(session, livechat_channel)
         if not partners:
             _logger.warning("%s: no operator could be notified", ref)
-            return
+            return False
+        told = False
         Assistant = self.env['im_livechat.ai.assistant']
         url = '/odoo/discuss?active_id=discuss.channel_%s' % session.id
         odoobot = self.env.ref('base.partner_root')
@@ -1168,6 +1173,7 @@ class LivechatAiJob(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment',
                         )
+                    told = True
                 except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
                     raise  # the caller's transaction must be retried (contract 3.5 step 1)
                 except Exception as e:  # noqa: BLE001 - notification must not undo the job result
@@ -1179,10 +1185,12 @@ class LivechatAiJob(models.Model):
                     'sticky': True,
                     'type': notification_type,
                 })
+                told = True
             except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
                 raise
             except Exception as e:  # noqa: BLE001
                 _logger.error("%s: could not send the bus notification: %s", ref, exception_frames(e))
+        return told
 
     # --- Recovery cron ---
 

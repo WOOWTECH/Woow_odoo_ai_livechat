@@ -45,7 +45,7 @@ import requests
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
-from odoo.tools import clean_context
+from odoo.tools import SQL, clean_context
 
 from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signature_headers are re-exported
     BACKEND_N8N,
@@ -98,8 +98,14 @@ BLOCKED_WARNING_SECONDS = 600
 # Operator alerts of a channel (cannot answer, too many unfinished replies, a
 # kind of failure): at most one per channel (and kind) in this window.
 ALERT_WINDOW_MINUTES = 10
+# The two cannot-answer alerts of a channel, each with its own period flag and
+# time (one does not hide the other): {kind: (flag field, time field)}
+ALERT_KINDS = {
+    'blocked': ('ai_blocked_alert_sent', 'ai_blocked_alert_at'),  # the AI is on but cannot answer
+    'full': ('ai_full_alert_sent', 'ai_full_alert_at'),  # the caps of unfinished replies refuse messages
+}
 # Technical fields of a channel that only system administrators may set
-ALERT_FIELDS = ('ai_blocked_alert_sent', 'ai_blocked_alert_at')
+ALERT_FIELDS = tuple(name for names in ALERT_KINDS.values() for name in names)
 
 # --- Visitor-facing defaults (English source, translated; stored values are kept) ---
 DEFAULT_ERROR_MESSAGE = (
@@ -166,6 +172,10 @@ _SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
 # {livechat channel id: time.monotonic() of the last "cannot answer" warning} (this process)
 _BLOCKED_WARNED = {}
 _FULL_WARNED = {}  # the same for the cap of unfinished reply jobs
+
+
+class _NobodyAlerted(Exception):
+    """The alert reached nobody: its claim is undone."""
 
 
 class LLMNotConfigured(Exception):
@@ -433,6 +443,14 @@ class ImLivechatChannel(models.Model):
         string='Last Cannot-Answer Alert', copy=False, readonly=True, groups=SYSTEM_GROUP,
         help='When the operators were last alerted that the AI of this channel cannot answer: at most one such '
              'alert in 10 minutes.')
+    ai_full_alert_sent = fields.Boolean(
+        string='Operators Told the Reply Queue Is Full', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='The operators were alerted once that the caps of unfinished replies refuse visitor messages of this '
+             'channel; cleared when a reply is queued again.')
+    ai_full_alert_at = fields.Datetime(
+        string='Last Reply-Queue-Full Alert', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='When the operators were last alerted that the caps of unfinished replies refuse visitor messages of '
+             'this channel: at most one such alert in 10 minutes.')
 
     # --- Status (read with administrator rights; fixed sentences only) ---
 
@@ -813,8 +831,9 @@ class ImLivechatChannel(models.Model):
             session = discuss_channel.sudo()
             if session.ai_blocked_notice_sent:
                 session.ai_blocked_notice_sent = False
-            if channel.ai_blocked_alert_sent:
-                channel.ai_blocked_alert_sent = False
+            for flag, _at in ALERT_KINDS.values():
+                if channel[flag]:
+                    channel[flag] = False
         elif not run_after:
             # the cap of unfinished reply jobs refused it (channel or database)
             self._ai_handle_full(discuss_channel, message)
@@ -837,7 +856,7 @@ class ImLivechatChannel(models.Model):
         session = discuss_channel.sudo()
         if not session.ai_blocked_notice_sent:
             session._ai_post_blocked_notice(self)
-        self._ai_alert_once(lambda: self.env['im_livechat.ai.job']._notify_blocked(self, session))
+        self._ai_alert_once('blocked', lambda: self.env['im_livechat.ai.job']._notify_blocked(self, session))
 
     def _ai_handle_full(self, discuss_channel, message):
         """The cap of unfinished reply jobs (of the channel, or of the
@@ -856,41 +875,49 @@ class ImLivechatChannel(models.Model):
         session = discuss_channel.sudo()
         if not session.ai_blocked_notice_sent:
             session._ai_post_blocked_notice(self)
-        self._ai_alert_once(lambda: self.env['im_livechat.ai.job']._notify_full(self, session))
+        self._ai_alert_once('full', lambda: self.env['im_livechat.ai.job']._notify_full(self, session))
 
-    def _ai_alert_once(self, notify):
-        """Run ``notify`` (the operator alert of a blocked or full channel)
-        once per period of the channel (ai_blocked_alert_sent, cleared when a
-        reply is queued again) and at most once in ALERT_WINDOW_MINUTES
-        (ai_blocked_alert_at): see _ai_claim_alert."""
+    def _ai_alert_once(self, kind, notify):
+        """Run ``notify`` (the operator alert of a blocked or a full channel,
+        ``kind`` 'blocked' or 'full') once per period of the channel (its flag,
+        cleared when a reply is queued again) and at most once in
+        ALERT_WINDOW_MINUTES (its time): see _ai_claim_alert. ``notify``
+        returns whether anybody was told; when nobody was, the claim is undone
+        and the next refused message tries again."""
         self.ensure_one()
         try:
             with self.env.cr.savepoint():
-                if self._ai_claim_alert():
-                    notify()
+                if self._ai_claim_alert(kind) and not notify():
+                    raise _NobodyAlerted()
+        except _NobodyAlerted:
+            pass
         except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
             raise
         except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
             _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
                           self.id, exception_frames(e))
 
-    def _ai_claim_alert(self):
-        """Claim the cannot-answer alert of the channel: one UPDATE of its row,
-        so a visitor request (REPEATABLE READ) and the job threads (READ
-        COMMITTED) never both alert. A row locked by another claim (or any
-        other writer) is skipped, not waited for: the alert is then that one's,
-        or the next refused message's. Returns whether this caller alerts."""
+    def _ai_claim_alert(self, kind):
+        """Claim the cannot-answer alert ``kind`` of the channel with one UPDATE
+        of its row: a visitor request (REPEATABLE READ) and the job threads
+        (READ COMMITTED) never both alert. The row is taken FOR NO KEY UPDATE
+        SKIP LOCKED: another claim or a write of the channel skips this one
+        (the alert is that one's, or the next refused message's), while the
+        KEY SHARE locks of inserts that reference the channel (sessions, jobs,
+        call logs, usage) neither wait for it nor make it skip. Returns whether
+        this caller alerts."""
         self.ensure_one()
+        flag, at = ALERT_KINDS[kind]
         channel = self.sudo()
         channel.flush_recordset(list(ALERT_FIELDS))
         now = fields.Datetime.now()
-        self.env.cr.execute("""
-            UPDATE im_livechat_channel SET ai_blocked_alert_sent = TRUE, ai_blocked_alert_at = %(now)s
-             WHERE id = (SELECT id FROM im_livechat_channel
-                          WHERE id = %(id)s AND ai_blocked_alert_sent IS NOT TRUE
-                            AND (ai_blocked_alert_at IS NULL OR ai_blocked_alert_at <= %(since)s)
-                          FOR UPDATE SKIP LOCKED)
-        """, {'id': self.id, 'now': now, 'since': now - timedelta(minutes=ALERT_WINDOW_MINUTES)})
+        self.env.cr.execute(SQL(
+            """UPDATE im_livechat_channel SET %(flag)s = TRUE, %(at)s = %(now)s
+                WHERE id = (SELECT id FROM im_livechat_channel
+                             WHERE id = %(id)s AND %(flag)s IS NOT TRUE AND (%(at)s IS NULL OR %(at)s <= %(since)s)
+                             FOR NO KEY UPDATE SKIP LOCKED)""",
+            flag=SQL.identifier(flag), at=SQL.identifier(at), now=now, id=self.id,
+            since=now - timedelta(minutes=ALERT_WINDOW_MINUTES)))
         claimed = bool(self.env.cr.rowcount)
         channel.invalidate_recordset(list(ALERT_FIELDS))
         return claimed

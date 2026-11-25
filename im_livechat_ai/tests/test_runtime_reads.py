@@ -433,13 +433,13 @@ class TestReplyCaps(RuntimeCase):
             self.guest_post(second, guest2, '第二位')  # refused: the alert
             Job.search([('discuss_channel_id', '=', first.id)])._run_job(commit=False)  # the slot frees
             self.guest_post(first, guest1, '第一位再問')  # queued: the period ends
-            self.assertFalse(self.channel.sudo().ai_blocked_alert_sent)
+            self.assertFalse(self.channel.sudo().ai_full_alert_sent)
             self.guest_post(second, guest2, '第二位再問')  # refused again
         self.assertEqual(len(alerts(bus_send)), 1, 'one alert in the window')
         # past the window the next refusal alerts again
         self.env.flush_all()
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_blocked_alert_sent = FALSE, "
-                            "ai_blocked_alert_at = ai_blocked_alert_at - interval '11 minutes' WHERE id = %s",
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_full_alert_sent = FALSE, "
+                            "ai_full_alert_at = ai_full_alert_at - interval '11 minutes' WHERE id = %s",
                             (self.channel.id,))
         self.env.invalidate_all()
         with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, mute_logger(CHANNEL_LOGGER):
@@ -494,8 +494,27 @@ class TestAlertConcurrency(RuntimeCase):
         self.env.cr.execute("UPDATE im_livechat_channel SET ai_blocked_alert_sent = TRUE WHERE id = %s",
                             (channel.id,))
         notify = MagicMock()
-        self.channel._ai_alert_once(notify)
+        self.channel._ai_alert_once('blocked', notify)
         notify.assert_not_called()
+
+    def test_claim_does_not_conflict_with_foreign_key_locks(self):
+        """Review r3 #1/#2: inserts that reference the channel (sessions, jobs, call logs, usage) take FOR KEY
+        SHARE on its row. The claim takes FOR NO KEY UPDATE: it neither skips because of such a lock nor
+        makes it wait. Two connections; the channel must be committed, so the first existing one is used."""
+        with self.registry.cursor() as other:
+            other.execute("SELECT id FROM im_livechat_channel ORDER BY id LIMIT 1")
+            row = other.fetchone()
+            if not row:
+                self.skipTest('no committed live chat channel in this database')
+            channel = self.env['im_livechat.channel'].browse(row[0])
+            other.execute("SELECT 1 FROM im_livechat_channel WHERE id = %s FOR KEY SHARE", row)
+            self.assertTrue(channel._ai_claim_alert('blocked'), 'an insert in flight does not make it skip')
+            other.rollback()
+        with self.registry.cursor() as other:
+            # this transaction holds the claim: an insert of another one is not blocked by it
+            other.execute("SELECT 1 FROM im_livechat_channel WHERE id = %s FOR KEY SHARE NOWAIT", row)
+            self.assertEqual(other.fetchone(), (1,))
+            other.rollback()
 
     def _age_alert(self, minutes):
         self.env.flush_all()
@@ -506,18 +525,35 @@ class TestAlertConcurrency(RuntimeCase):
     def test_window(self):
         notify = MagicMock()
         channel = self.channel.sudo()
-        self.channel._ai_alert_once(notify)
+        self.channel._ai_alert_once('blocked', notify)
         self.assertEqual(notify.call_count, 1)
         self.assertTrue(channel.ai_blocked_alert_sent and channel.ai_blocked_alert_at)
         self._age_alert(11)
-        self.channel._ai_alert_once(notify)
+        self.channel._ai_alert_once('blocked', notify)
         self.assertEqual(notify.call_count, 1, 'the period has not ended (no reply queued)')
         channel.ai_blocked_alert_sent = False  # a reply was queued: the period ends
-        self.channel._ai_alert_once(notify)
+        self.channel._ai_alert_once('blocked', notify)
         self.assertEqual(notify.call_count, 2, 'a new period after the window')
         channel.ai_blocked_alert_sent = False
-        self.channel._ai_alert_once(notify)
+        self.channel._ai_alert_once('blocked', notify)
         self.assertEqual(notify.call_count, 2, 'a new period within the window: no alert')
+
+    def test_blocked_and_full_alerts_are_separate(self):
+        """Review r3 #7: the cap alert does not hide a later blocked alert (and the other way round)."""
+        full, blocked = MagicMock(return_value=True), MagicMock(return_value=True)
+        self.channel._ai_alert_once('full', full)
+        self.channel._ai_alert_once('blocked', blocked)
+        self.channel._ai_alert_once('full', full)
+        self.assertEqual((full.call_count, blocked.call_count), (1, 1))
+
+    def test_an_alert_that_reached_nobody_is_not_counted(self):
+        nobody = MagicMock(return_value=False)
+        self.channel._ai_alert_once('blocked', nobody)
+        channel = self.channel.sudo()
+        self.assertFalse(channel.ai_blocked_alert_sent or channel.ai_blocked_alert_at, 'the claim is undone')
+        told = MagicMock(return_value=True)
+        self.channel._ai_alert_once('blocked', told)
+        self.assertEqual(told.call_count, 1, 'the next message alerts')
 
 
 class TestFailureAlertClaim(RuntimeCase):
@@ -651,3 +687,4 @@ class TestGateWhenTheJobRuns(RuntimeCase):
         mock_post.assert_not_called()
         self.assertEqual(job.state, 'skipped')
         self.assertFalse(self._notices(session), 'the AI is off: no notice')
+

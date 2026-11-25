@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 10:33+0000\n"
-"PO-Revision-Date: 2026-11-25 10:33+0000\n"
+"POT-Creation-Date: 2026-11-25 12:12+0000\n"
+"PO-Revision-Date: 2026-11-25 12:12+0000\n"
 "Last-Translator: WOOWTECH\n"
 "Language-Team: Chinese (Traditional)\n"
 "Language: zh_TW\n"
@@ -791,6 +791,11 @@ msgid "Last Message In Context"
 msgstr "送給 AI 的最後一則訊息"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_full_alert_at
+msgid "Last Reply-Queue-Full Alert"
+msgstr "上次「回覆佇列已滿」提醒"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__write_uid
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_connection__write_uid
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__write_uid
@@ -1158,6 +1163,11 @@ msgstr "已提醒客服人員"
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_sent
 msgid "Operators Told the AI Cannot Answer"
 msgstr "已通知客服 AI 無法回覆"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_full_alert_sent
+msgid "Operators Told the Reply Queue Is Full"
+msgstr "已告知客服人員回覆佇列已滿"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_keywords
@@ -1883,6 +1893,13 @@ msgid ""
 msgstr "已通知客服人員這個頻道的 AI 無法回覆（只通知一次）；AI 再次回覆時清除。"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_full_alert_sent
+msgid ""
+"The operators were alerted once that the caps of unfinished replies refuse "
+"visitor messages of this channel; cleared when a reply is queued again."
+msgstr "已通知客服人員這個頻道的訪客訊息因未完成回覆的上限而被擋下（只通知一次）；再有回覆排入時清除。"
+
+#. module: im_livechat_ai
 #. odoo-python
 #: code:addons/im_livechat_ai/models/im_livechat_channel.py:0
 msgid "The pause after a human reply must be between 1 and 1440 minutes."
@@ -2141,6 +2158,14 @@ msgid ""
 "When the operators were last alerted that the AI of this channel cannot "
 "answer: at most one such alert in 10 minutes."
 msgstr "上次提醒客服人員這個頻道的 AI 無法回覆的時間：10 分鐘內最多提醒一次。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_full_alert_at
+msgid ""
+"When the operators were last alerted that the caps of unfinished replies "
+"refuse visitor messages of this channel: at most one such alert in 10 "
+"minutes."
+msgstr "上次提醒客服人員這個頻道的訪客訊息因未完成回覆的上限而被擋下的時間：10 分鐘內最多提醒一次。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes

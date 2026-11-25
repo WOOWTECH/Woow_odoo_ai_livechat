@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Contract v1 (docs/CONTRACT.md, section 5): the twelve shared checks of
+"""Contract v1.1 (docs/CONTRACT.md, section 5): the thirteen shared checks of
 tests/contract/harness.py, run on Live Chat AI.
 
 Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no
-identity block in the system message, clickable links only to the site's own
-hosts (CONTRACT.md 3.1). The hooks below map the harness on the module's own
-code paths:
+identity block in the system message, no speaker labels (the text as typed),
+clickable links only to the site's own hosts, conversation events in the n8n
+``events`` (CONTRACT.md 3.1). The hooks below map the harness on the module's
+own code paths:
 
 - one backend call: ``im_livechat.channel._generate_ai_reply`` for a session
   whose visitor message was created without the trigger;
 - one turn: the visitor posts (the trigger queues the reply job in that
-  transaction) and the job runs once in the test transaction;
+  transaction) and the job runs once in the test transaction; an earlier turn
+  (``spec['history']``) is the visitor's message with the file, the
+  assistant's answer and an operator's message (Live Chat's conversation
+  event), created without the trigger;
 - Test Connection: the button of the AI connection, or of the AI assistant.
 
 Never edit tests/contract/ here: a change is a new contract version.
@@ -43,6 +47,8 @@ class TestContract(ContractChecks, TransactionCase):
     contract_streams = False
     contract_identity_block = False
     contract_link_policy = 'site_hosts'
+    contract_speaker_label = False
+    contract_events = True
     contract_person_has_email = True
 
     @classmethod
@@ -144,15 +150,41 @@ class TestContract(ContractChecks, TransactionCase):
             'tokens': (log.prompt_tokens, log.completion_tokens, log.total_tokens),
         }
 
+    def _contract_earlier_turn(self, channel, assistant, session, person, history):
+        """The earlier turn of spec['history'], created without the trigger: the person's message with the
+        file, the assistant's answer, then an operator's message, which Live Chat sends as a conversation event
+        (an operator wrote in the conversation)."""
+        Message = self.env['mail.message']
+        earlier = Message.create({
+            'body': history['user_text'], 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': person.id,
+        })
+        attachment = self.env['ir.attachment'].create({
+            'name': history['attachment']['name'], 'mimetype': history['attachment']['mimetype'],
+            'datas': history['attachment']['base64'], 'res_model': 'discuss.channel', 'res_id': session.id,
+        })
+        earlier.attachment_ids = [(4, attachment.id)]
+        Message.create({
+            'body': history['assistant_text'], 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': assistant.partner_id.id,
+        })
+        Message.create({
+            'body': '請稍候，我們確認一下。', 'model': 'discuss.channel', 'res_id': session.id,
+            'message_type': 'comment', 'author_id': self.operator.partner_id.id,
+        })
+
     def contract_turn(self, spec):
-        _connection, _assistant, channel = self._contract_records(spec)
+        _connection, assistant, channel = self._contract_records(spec)
         session, person = self._contract_session(channel, spec)
+        if spec.get('history'):
+            self._contract_earlier_turn(channel, assistant, session, person, spec['history'])
         first_message = self._contract_last_id('mail.message')
         first_log = self._contract_last_id('llm.api.log')
         bus_before = len(self.env.cr.precommit.data.get('bus.bus.values', []))
         self._contract_post(session, person, spec['text'])
         jobs = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
         self.assertEqual(len(jobs), 1, 'the post queued one reply job')
+        self.assertEqual(jobs.kind, 'reply')
         jobs._run_job(commit=False)
         self.env.invalidate_all()
         logs = self.env['llm.api.log'].search([('id', '>', first_log)])
@@ -227,6 +259,12 @@ class TestContract(ContractChecks, TransactionCase):
         connection.model = False if blocked else handle['spec']['model']
         self.assertEqual(connection.readiness, 'blocked' if blocked else 'ok')
 
+    def contract_gate_run(self, handle):
+        job = self.env['im_livechat.ai.job'].search([
+            ('discuss_channel_id', '=', handle['session'].id), ('state', '=', 'pending')], order='id desc', limit=1)
+        self.assertEqual(len(job), 1, 'a pending reply job')
+        job._run_job(commit=False)
+
     def contract_gate_post(self, handle, text):
         handle['posted'] |= self._contract_post(handle['session'], handle['person'], text)
 
@@ -239,7 +277,7 @@ class TestContract(ContractChecks, TransactionCase):
         ], order='id')
         return {'jobs': jobs, 'notices': notices.mapped('message_type')}
 
-    # --- the twelve checks (Odoo 18 collects only the test methods a class defines itself) ---
+    # --- the thirteen checks (Odoo 18 collects only the test methods a class defines itself) ---
 
     def test_contract_01_answers(self):
         self.contract_check_01_answers()
@@ -276,3 +314,6 @@ class TestContract(ContractChecks, TransactionCase):
 
     def test_contract_12_identity_block(self):
         self.contract_check_12_identity_block()
+
+    def test_contract_13_connections(self):
+        self.contract_check_13_connections()

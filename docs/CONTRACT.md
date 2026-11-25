@@ -1,6 +1,7 @@
-# AI products contract, version 1
+# AI products contract, version 1.1
 
-- **Version:** v1, 2026-11-25.
+- **Version:** v1.1, 2026-11-25. It replaces v1. The rules of v1 stay; v1.1 states rules that v1's fixtures
+  only implied, adds the speaker label (3.14) and the run-time gate (3.5), and its checks prove more.
 - **Products:**
   - Discuss AI (`woow_ai_contact`);
   - Project AI (`woow_ai_task`);
@@ -9,13 +10,13 @@
 
 The three products are separate. Each keeps its own runtime core and ships on its own, and none of them uses another one's code. This contract is what makes them configured and run the same way. Every repository carries a byte-identical copy of this file as `docs/CONTRACT.md`, and the contract package as `<module>/tests/contract/` (section 6). A product may lag a version: its README names the version it implements.
 
-## 1. Owner decisions this contract implements
+## 1. Decisions this contract implements
 
 - **Three cores, three downloads.** Live Chat AI is upgraded in place. It is not merged into another core and not retired.
 - **n8n or LiteLLM only.** The stored backend key `openai` stays, labelled 「LiteLLM（OpenAI 相容）」.
 - **A LiteLLM connection is always 「可給客戶使用」**, the same in the three products.
 - **Two layers.** 「AI 連線」 (connection) is for system administrators only. 「AI 助理」 (assistant) uses a connection.
-- **Live Chat (Q12 A).**
+- **Live Chat assistants.**
   - A system administrator ticks 「可用在 Live Chat」 on an assistant. Live Chat managers can pick only those assistants.
   - The connection is not forced to be safe for customers; the AI tab warns instead.
 - **Every message gets an answer.**
@@ -24,7 +25,7 @@ The three products are separate. Each keeps its own runtime core and ships on it
 - **Usage, not billing.**
   - Usage counts replies, plus tokens when the backend reports them.
   - There is no billing logic and no per-use charging. Limits live in the LiteLLM keys.
-- **Discuss AI and portal customers (owner answer N3 A).** A portal customer gets no answer through a connection that is not 「可給客戶使用」. The upgrade ticks the n8n connections already shared with customers first.
+- **Discuss AI and portal customers.** A portal customer gets no answer through a connection that is not 「可給客戶使用」. The upgrade ticks the n8n connections already shared with customers first.
 
 ## 2. Terms
 
@@ -57,6 +58,12 @@ The three products are separate. Each keeps its own runtime core and ships on it
 | Identity block in the system message | yes (3.7) | yes (3.7) | none: visitors are mostly anonymous |
 | Clickable links in replies | any http(s) host | any http(s) host | the site's own hosts only |
 | Files in replies | attached from the download domains | attached from the download domains | text only |
+| Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] ` and `[負責同事 <name>] ` in the customer chat | no |
+| Conversation events in the n8n `events` | none | none | yes |
+
+**Test values.** `requests.json` ("products") holds the values of this table that the tests use, per module:
+`surface_type`, `session_prefix`, `text_only`, `streams`, `identity_block`, `link_policy`, `speaker_label` and
+`events`. Check 7 compares the product's test class with them.
 
 **About the `contact` key.** It means different things in Discuss AI and Live Chat. New n8n workflows read `assistant`.
 
@@ -98,7 +105,7 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 | `backend_type` | `openai` (LiteLLM) or `n8n`. Default `openai`; required. |
 | `endpoint_url` | https only. Plain http is allowed only for localhost, 127.0.0.1, ::1 and `*.svc.cluster.local`. LiteLLM: the base URL ending in /v1. n8n: the full production URL. |
 | `api_key`, `api_key_set` | Write-only (see below). |
-| `model` | LiteLLM: required. A connection without one is blocked, and Test Connection refuses it. n8n: not used. |
+| `model` | LiteLLM: needed to be ready. A connection without one is blocked and Test Connection refuses it, but it is not a required field: the form saves it. n8n: not used. |
 | `timeout_seconds` | The total time for one answer, retries included. |
 | `openai_stream` | LiteLLM only. Discuss AI and Project AI stream by default: SSE with `stream_options.include_usage`, and the call fails after 30 s without a byte. Live Chat does not stream. |
 | `max_retries` | 0 to 2, default 1 (see below). |
@@ -116,7 +123,12 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 - Long n8n workflows should use an in-cluster URL, or answer `{"skip": true}` at once and push the reply.
 
 **`customer_safe`.**
-- LiteLLM is always True. Every path enforces it: a constraint, `create`, `write`, `copy` and the form's onchange.
+- LiteLLM is always True. Every path enforces it:
+  - `create`, `copy` and a `write` that sets `backend_type` to LiteLLM set it to True, even when the same values
+    say False;
+  - an explicit `write` of `customer_safe = False` on a LiteLLM connection raises a ValidationError (the
+    constraint);
+  - the form's onchange shows True as soon as the type is LiteLLM.
 - n8n is False until a system administrator ticks it. It is cleared when the backend type or the endpoint URL changes.
 
 **`readiness`.**
@@ -126,7 +138,7 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 
 **`api_key`.**
 - It is a compute/inverse field over the SQL-only column `api_key_secret`. Only administrators may set it.
-- LiteLLM: required, sent as `Authorization: Bearer`.
+- LiteLLM: needed to be ready (like `model`), sent as `Authorization: Bearer`.
 - n8n: an optional signing secret, which is never sent.
 - The key is dropped when the scheme, host, port or backend type changes. A 「移除 API 金鑰」 button removes it. It is never copied.
 - Logs say only that the key was updated or removed, and by whom (ids only).
@@ -140,7 +152,8 @@ Every product uses these field names. The zh_TW labels are in 3.11.
   - a read timeout;
   - a reset after the request was sent;
   - any other answer, 401, 502 and 504 included.
-- Redirects are never followed.
+- Redirects are never followed: a 3xx answer is `http_error`.
+- The same rules apply to both backends.
 
 **Test Connection** (administrators only).
 - LiteLLM: `GET {endpoint_url}/models` with the Bearer key.
@@ -172,6 +185,10 @@ Every product uses these field names. The zh_TW labels are in 3.11.
    - The AI cannot answer when the assistant is archived, the connection is not ready, or a safety rule fails.
    - The conversation gets one fixed notice per blocked period. It is posted as a notification message, which the history never reads.
    - Staff are alerted in each product's own way.
+   - **Again when the job runs, and before it posts the answer.** An administrator may change the connection,
+     the assistant or the sharing while a job waits. A job that is blocked then makes no call (or posts no
+     answer) and is `skipped`; the person gets the notice, once per blocked period. A job whose person may no
+     longer use the assistant is `skipped` without a notice.
 3. **The job.**
    - States: `pending`, `running`, `done`, `failed`, `skipped`.
    - It is created in the poster's transaction, with a 1.5 s debounce, and runs at most 3 times.
@@ -200,7 +217,8 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 
 **Request.**
 - `POST endpoint_url` with `Content-Type: application/json`.
-- The body is compact UTF-8 JSON (`ensure_ascii=False`, `separators=(',', ':')`). Those exact bytes are signed and sent.
+- The body is compact UTF-8 JSON (`ensure_ascii=False`, `separators=(',', ':')`). Those exact bytes are signed and sent
+  as they are: `data=<bytes>`, never `json=` and never a `str`.
 - With a signing secret, two headers are added:
   - `X-Woow-Timestamp: <unix seconds>`
   - `X-Woow-Signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<body>")>`
@@ -219,8 +237,8 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 | `channel` | `{id, type}`, plus an optional product block |
 | `surface` | `{type, …}` |
 | `system_prompt` | a string |
-| `message` | `{id, text, attachments}` |
-| `history` | `[{role, text, attachments}]` |
+| `message` | `{id, text, attachments}`: the message being answered; `text` as the person typed it, after the speaker label in a product that labels (3.14) |
+| `history` | `[{role, text, attachments}]`: the earlier messages, oldest first; `role` is `user` or `assistant`; an assistant's text as it was posted |
 | `events` | `[{time, kind, text}]`: always present, `[]` when there are none |
 
 **Allowed extra keys.** Discuss AI and Live Chat may also send the legacy `contact`. Live Chat may also send `channel.livechat`.
@@ -228,12 +246,13 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 **Session id.** `<prefix>-<first 8 hex of database.uuid>-<discuss.channel id>`.
 
 **Attachments (ATT).**
-- The keys are `{id, name, mimetype, size, url, expires_at}`.
-- The url is a signed link on the product's own route, valid 1 hour.
-- `expires_at` is ISO 8601 UTC.
+- The keys are `{id, name, mimetype, size, url, expires_at}`; `size` is the file's size in bytes.
+- The url is an absolute signed link on the product's own route, valid 1 hour.
+- `expires_at` and `events[].time` are ISO 8601 UTC in the form `YYYY-MM-DDTHH:MM:SSZ`.
 
 **Identity.**
 - The keys are `user_id`, `partner_id`, `name`, `email`, `lang`, `tz`, `is_portal`, `company_id`.
+- `name` is the person's name as stored; a name with an `@` counts as no name and is `""` (3.14).
 - Live Chat adds `guest_id`, `is_guest` and `visitor_key`.
 - Only n8n receives the email.
 
@@ -249,15 +268,23 @@ Every product uses these field names. The zh_TW labels are in 3.11.
   - `{"skip": true}`;
   - `{"output": "text"}`;
   - an n8n item list, of which the first item is used.
+- `{"skip": true}` without a handoff wins over a reply: nothing is posted.
 - `"handoff": true` (the JSON boolean) cancels `skip`.
-- `handoff_reason` keeps at most 300 characters, with white space collapsed.
+- `handoff_reason` counts only with `"handoff": true`. White space is collapsed first, then at most 300 characters are kept.
 - `<think>` blocks and special tokens are removed.
-- Reply objects may carry attachments. Products that post reply files attach them only from the download domains. Live Chat posts text only.
+- **Reply files.** A reply object may carry `attachments`: `{url, name}` or `{data_base64, name}`.
+  - A file fetched by URL comes only from the download domains (3.3).
+  - `data_base64` items, and `data:image` URIs in the text, are decoded without a download, with the same size
+    limit.
+  - A reply with an empty text and a file is valid where replies post files: its text is `""`.
+  - Text-only products (Live Chat) post the text and drop the files; for them a reply with only a file has no
+    text.
 - Any other shape is `invalid_response`. So is an answer with no text and no file, and without handoff or skip.
 
 ### 3.7 LiteLLM wire format
 
-**Request.** `POST {endpoint_url}/chat/completions` with `Authorization: Bearer <key>`. The body has:
+**Request.** `POST {endpoint_url}/chat/completions` with `Authorization: Bearer <key>`. The body is UTF-8 JSON
+bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never a `str`. It has:
 - `model`.
 - `messages`:
   - one system message first, when it is not empty;
@@ -278,12 +305,14 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 - **Anything else** becomes the line `[附件] name（mimetype，size）：url`. A `[附件說明]` note is added when a document was left out.
 
 **Answer.**
-- The text is `choices[0].message.content`: a string, or its `text` and `output_text` parts. When streaming, it is the SSE deltas until `[DONE]` or a `finish_reason`.
+- The text is `choices[0].message.content`: a string, or its `text` and `output_text` parts joined with a line break. When streaming, it is the SSE deltas until `[DONE]` or a `finish_reason`.
+- An error object in a stream is `invalid_response`.
 - `<think>` blocks and special tokens are stripped.
 - An empty answer is `invalid_response`. So is a stream that ends with neither `[DONE]` nor a `finish_reason`.
 - Usage: prompt, completion and total tokens.
   - The `input_tokens` and `output_tokens` aliases are accepted.
   - The total is their sum when it is missing.
+  - A later usage chunk with zeros keeps the earlier real counts.
 
 **System message order:**
 1. the assistant's prompt;
@@ -292,11 +321,14 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 4. an events block, only when there are events.
 
 **The identity block.**
-- It never contains the email.
+- It never contains the email, not even as a name.
+- Its lines are `- <label>: <value>`. The kind of account comes first (`- account: …`), then the ids, the language
+  and the time zone; the name comes last.
 - The person's name is one line. This rule is the minimum:
   - line breaks and runs of white space are collapsed;
   - `[` and `]` become `(` and `)`;
-  - at most 80 characters are kept.
+  - at most 80 characters are kept;
+  - a name with an `@` counts as no name: the line is left out.
 - Everybody may choose their own name, so the name can neither leave its line nor look like a history prefix.
 - A product may clean more before this rule. Project AI first applies its consultant's data-text cleaning.
 - Live Chat has no identity block.
@@ -335,10 +367,14 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 - They never appear in a field, a server log, a call log, a stored error, a notification or a payload log.
 - Headers are never logged.
 - Server log lines carry ids, the uid and the HTTP status. For an unexpected exception they also carry its type name and its code frames, never its text.
+  This holds for every handler that logs an exception, not only the backend call.
 
 ### 3.10 neutralize.sql
 
-Each product ships `data/neutralize.sql`. It is not listed in the manifest: Odoo runs it for every installed module. Every top-level statement is a `DO $$ … $$` block guarded with `to_regclass` or an `information_schema` check. A database on an older version, or one whose install was interrupted, must still neutralize.
+Each product ships `data/neutralize.sql`. It is not listed in the manifest: Odoo runs it for every installed module. A database on an older version, or one whose install was interrupted, must still neutralize, so:
+- every top-level statement is a `DO $$ … $$` block;
+- each table a block changes (`UPDATE`, `DELETE`, `INSERT`, `TRUNCATE`) is guarded in that block by `to_regclass('<table>')` or an `information_schema` check on that same table;
+- there is no dynamic SQL (`EXECUTE`).
 
 - **Connections:**
   - `endpoint_url = NULL`;
@@ -398,7 +434,7 @@ The other sections stay as each repository has them. Protocol details live in `d
 - **A change that can stop an assistant answering** ships with all four of these:
   1. a post-migrate log of the affected ids;
   2. a README "before you upgrade" list;
-  3. a read-only inventory query that the owner runs;
+  3. a read-only query, in the README (and in the release tooling where there is one), that an administrator runs before the upgrade;
   4. a test.
 
   This covers the readiness gate, the model rule and the customer-safe gate.
@@ -411,6 +447,20 @@ The other sections stay as each repository has them. Protocol details live in `d
 
 - Customers and visitors can write some record text: their own name, a task's title or description in project sharing, a guest name, or the service data of a PaaS bridge.
 - Such text reaches the model only inside a labelled block, after the facts the system sets, and never as an instruction. The kind of account comes before the name.
+- **Names.** A person's name follows the one-line rule of 3.7. A name with an `@` (a partner named after an email
+  address) counts as no name wherever a name is sent: the identity, the metadata, the history, a speaker label.
+- **Speaker labels.** On a surface where more than one human speaks, a product may put a label before each
+  person's text, so that the model knows who wrote it and nobody can pass for someone else:
+  - the label is set by the system: `[<kind> <name>] `, with the kind of speaker first (one word, for example
+    客戶 or 負責同事) and then the name by the one-line rule, or `[<kind>] ` when there is no name;
+  - on a surface where every speaker is an employee, the kind may be left out: `[<name>] `, or no label when
+    there is no name;
+  - the label never replaces the text: a prefix the person typed (`[負責同事 老闆] …`) stays in the text, after
+    the label;
+  - the system prompt explains the labels to the model;
+  - the same label is used in the n8n `message.text`, `chatInput` and `history[].text`, and in the LiteLLM user
+    turn.
+  Products that label say so in 3.1. The others send the text as the person typed it.
 - A new source of such text needs a reviewer's check (section 4, item 9).
 
 ## 4. Keeping the products aligned
@@ -419,7 +469,8 @@ The other sections stay as each repository has them. Protocol details live in `d
   - Every repository carries this file and the package of the version it implements.
   - Its `SHA256SUMS` shows at a glance whether the copies match.
 - **A contract change is a new version.**
-  - It gets a new package folder (v1.1, v2, …).
+  - It gets a new package folder (v1.1, v2, …) in the contract folder of the release workspace. That folder is the
+    source until a repository has merged the version.
   - The other repositories get a tracking item and adopt it in their next PR. There is no lockstep: each repository has one open PR at a time.
 - **Review checklist.** It goes into every PR body that touches an AI product, and into Live Chat's PR template.
   1. Does the change touch a contract area? These are: connection or assistant fields, roles, the queue or runner, the wire format, errors, logs and usage, neutralize, or the glossary. If yes, this contract gets a new version and the other two repositories get a tracking item.
@@ -437,38 +488,54 @@ The other sections stay as each repository has them. Protocol details live in `d
 ## 5. Contract tests
 
 **Where the tests live.**
-- The package's `harness.py` holds the twelve checks.
+- The package's `harness.py` holds the thirteen checks.
 - Each product's own `tests/test_contract.py` provides the glue:
   - the class attributes and adapter hooks that the harness docstring describes;
-  - one wrapper per check, named `test_contract_01_answers` … `test_contract_12_identity_block`.
-- Odoo 18 collects only the test methods a class defines itself, which is why the wrappers are needed. Check 7 fails when one is missing.
+  - one wrapper per check, named `test_contract_01_answers` … `test_contract_13_connections`.
+- Odoo 18 collects only the test methods a class defines itself, which is why the wrappers are needed. Check 7 fails when one is missing, skipped, or does not call its check.
 - The class is tagged `post_install`, `-at_install`, `woow_ai_contract`, and imported in `tests/__init__.py`.
+- Run them at Odoo's default or info log level. Check 8 turns the `odoo` loggers to DEBUG while it runs.
 
-**The twelve checks:**
+**The thirteen checks:**
 1. **Answers.** Every case of `answers.json` (n8n, LiteLLM, and SSE where the product streams) goes through the product's own backend call with `requests.post` mocked. The normalized result equals `expect`, or `expect_text_only` in text-only products.
 2. **Requests.** One canned conversation ("你是客服", "請問營業時間？") runs as a whole turn:
-   - with n8n and a signing secret;
-   - with LiteLLM, streamed where the product streams, then not streamed.
+   - with n8n, signed and unsigned;
+   - with LiteLLM, streamed where the product streams, then not streamed;
+   - after an earlier turn (the person's message with an image, the assistant's answer, and an event where the
+     product records events): the n8n history, ATT and events, and the LiteLLM turns and the inline image;
+   - with the speaker-label cases: a name that looks like a kind of speaker, a name with brackets, a name with an
+     `@`, and a typed fake label.
 
-   The captured POST follows 3.6 and 3.7. Test Connection sends the ping, or `GET /models`.
+   The captured POST follows 3.6, 3.7 and 3.14, and its body bytes are checked as sent. Test Connection sends the
+   ping, or `GET /models`.
 3. **Vectors.** The signature vector and the session-id vector.
 4. **Render.**
    - Links that are allowed or refused, with `\` and userinfo refused.
    - 1000 nested `>` and 200 nested list levels render without an exception and without losing the text.
-   - The identity names are printed cleaned (products with an identity block).
+   - The identity names are printed cleaned, after the kind of account, and names with an `@` are left out
+     (products with an identity block).
 5. **Glossary.**
    - Every glossary msgid in the module's zh_TW.po has exactly the glossary msgstr.
    - No msgstr has a banned variant.
    - `fields_get` in zh_TW gives the glossary labels by field and selection key.
 6. **Neutralize.**
-   - Every statement of `data/neutralize.sql` is a guarded `DO` block.
+   - Every statement of `data/neutralize.sql` is a `DO` block, every table it changes has its own guard, and there
+     is no dynamic SQL.
    - Run over seeded records, it leaves the state of 3.10.
-7. **Sums.** `SHA256SUMS` matches the files. The product glue defines the twelve wrappers.
-8. **Secrets.** A LiteLLM connection with a key goes through four failures: HTTP 401, a read timeout, an unexpected exception and a header error. The key and the upstream body appear nowhere: not in the log lines (Odoo's own `--log-sql` query log excepted), the call logs, the job errors or the messages.
-9. **customer_safe.**
-   - LiteLLM is True on create, write, copy and in the form, and the constraint refuses False.
+7. **Sums.** `SHA256SUMS` matches the files, and `READY` holds its SHA-256. In a repository checkout
+   `docs/CONTRACT.md` is there. The product glue defines the thirteen wrappers, none skipped, each calling its
+   check, and its values equal the table of 3.1.
+8. **Secrets.** Four failures (HTTP 401, a read timeout, an unexpected exception and a header error) on a LiteLLM
+   connection with a key, on a streamed one where the product streams (plus an error inside the stream), and on an
+   n8n connection whose signing secret and URL are secrets. The secrets and the upstream body appear nowhere: not
+   in any log record at any level (Odoo's own SQL query log excepted), the call logs, the job errors or the
+   messages.
+9. **customer_safe.** The rules of 3.3:
+   - LiteLLM is True on create, copy, a change of type and in the form, and an explicit write of False raises;
    - n8n is False on create, and is cleared when the URL or the type changes.
-10. **Retries and deadline.** The rules of 3.3, with `time.sleep` mocked:
+   The form used is the product's default form view, with `name`, `endpoint_url`, `backend_type` and
+   `customer_safe` on it; it saves a LiteLLM connection without a model.
+10. **Retries and deadline.** The rules of 3.3, for LiteLLM and for n8n, with `time.sleep` mocked:
     - 429 and 503 are retried after 3 s and 10 s;
     - a request that was not sent is retried;
     - a read timeout, a 401, a reset after sending, 502, 504 and a redirect are not retried;
@@ -477,25 +544,45 @@ The other sections stay as each repository has them. Protocol details live in `d
     - A blocked connection gives no job and no HTTP call.
     - It gives one notification per blocked period.
     - The AI answers again once the connection is ready.
+    - A job queued while the AI could answer, then blocked before it runs, makes no call and gives the notice.
 12. **Identity block.**
     - The email never reaches LiteLLM.
-    - The name is cleaned (Discuss AI, Project AI). Live Chat has no identity block.
+    - The name is cleaned, after the kind of account, and left out when it has an `@` (Discuss AI, Project AI).
+      Live Chat has no identity block.
+13. **Connections.**
+    - A new n8n connection waits 120 s.
+    - The API key never comes back from `read` or an export.
+    - A user who is not a system administrator cannot read connections.
+
+**What the checks do not cover.** Each product's own suite covers these:
+- the roles of assistants, jobs, call logs and usage (3.2), beyond the connection rule of check 13;
+- the endpoint URL rule and the timeout ranges (3.3);
+- the job lifecycle: debounce, three runs, re-queueing, the 30-minute limit, one job per conversation, the
+  runner and its recovery (3.5);
+- the error message a person gets after a failure, and staff alerts (3.8);
+- call-log rows, the daily cleanup and the usage rows (3.9);
+- Test Connection's wording (3.3);
+- the numeric limits of 3.7 (metadata values, the file budget, document sizes, the stream's idle time);
+- server log lines of handlers other than the backend call (3.9);
+- the README sections (3.12) and the upgrade rules (3.13).
 
 ## 6. Package files and digests
 
-**Copies.** The source of truth is `work/ai-backend-align-20261123/contract/v1/`. A repository copies it byte for byte:
+**Copies.** The source is the `contract/v1.1/` folder of the release workspace, until a repository has merged this
+version. A repository copies it byte for byte:
 - `docs/CONTRACT.md` (this file) to `docs/CONTRACT.md`;
 - `MODULE/tests/contract/` to `<module>/tests/contract/`.
 
-**SHA256SUMS** lists the files of `tests/contract/` and `../../../docs/CONTRACT.md`. The `READY` file of the source folder holds the SHA-256 of `SHA256SUMS`.
+**SHA256SUMS** lists the files of `tests/contract/` and `../../../docs/CONTRACT.md`. `READY`, in the source folder and
+in `tests/contract/`, holds the SHA-256 of `SHA256SUMS`; check 7 compares them.
 
 **Fixture digest** (SHA-256 of the files of `tests/contract/`):
 
 | File | SHA-256 |
 |---|---|
 | `__init__.py` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| `answers.json` | `f759b9dd9b43d7a5f4ec4c879a7d6cc9f6a390deb0f0a79e5d098b77aa462fef` |
-| `glossary.json` | `8937f142e3520cea42ad481eda30552aa3bdb9da99295a1b556c170ce4ccdda2` |
-| `harness.py` | `813e39295a4557733c2a40d9155d22f32ea518a46695c7e809441161d461f0af` |
-| `render.json` | `138807403863bea87b76159e4af48870611d3d20de2f2fb2a559b8e0759a21b5` |
-| `requests.json` | `2dbf349572a3ee36cf7917be60d6a922342468134913c39b219b5dbebcb3f4ea` |
+| `answers.json` | `6f0aa499a646d6a573ac33dc0889b9141a7ba2d81d30e4a901eab6b52a8af642` |
+| `glossary.json` | `061c00113f3aa4baf22bae16c3b888a1440afaf8ebd98358f3721c309144f0ce` |
+| `harness.py` | `90ba22d5d173f5cae040e06b0aa930babaecb8b63311c2c88e9eac7f8d677118` |
+| `render.json` | `9bd44c0f1eaa25f54562d392705ac7f1f91d7ca3cc23f0bb1da36a130402a389` |
+| `requests.json` | `153bfabe57450492654ea1d397771ddd5a33ac3a082eed31993e070ef865ce3b` |

@@ -1,5 +1,5 @@
 {
- "contract": "v1",
+ "contract": "v1.1",
  "about": "Reply rendering and the identity name (CONTRACT.md 3.6, 3.7, 3.14). links: rendered with the given host list; any_host_links: rendered without a host list, by products whose policy is 'any_host'; nesting: generated, must render without an exception; identity_names: the one-line name of the identity block (products with an identity block).",
  "links": [
   {
@@ -118,6 +118,20 @@
    "id": "spaces",
    "raw": "  王 \t 小明  ",
    "clean": "王 小明"
+  },
+  {
+   "id": "address",
+   "raw": "pat@example.com",
+   "clean": ""
+  },
+  {
+   "id": "address_with_name",
+   "raw": "Pat Lee <pat@example.com>",
+   "clean": ""
   }
- ]
+ ],
+ "identity_order": {
+  "about": "the kind of account comes before the name (3.14): the account line comes first",
+  "account_line_start": "- account:"
+ }
 }

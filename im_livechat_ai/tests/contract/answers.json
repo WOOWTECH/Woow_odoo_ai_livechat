@@ -1,5 +1,5 @@
 {
- "contract": "v1",
+ "contract": "v1.1",
  "about": "Backend answers (CONTRACT.md 3.6 and 3.7). Each case is one HTTP answer to one backend call; the harness serves it from a mocked requests.post and compares the normalized result of the product's own backend call with 'expect' (or 'expect_text_only' for products that post text only, where given).",
  "normalized": {
   "success": {
@@ -416,6 +416,87 @@
    },
    "expect_text_only": {
     "error": "invalid_response"
+   }
+  },
+  {
+   "id": "handoff_reason_collapse_then_cut",
+   "about": "white space is collapsed first, then 300 characters are kept",
+   "body": {
+    "handoff": true,
+    "handoff_reason": "請                                                                                                                                                                                                                                                                                                                                                                                                                轉真人。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": true,
+    "reason": "請 轉真人。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。。",
+    "texts": []
+   }
+  },
+  {
+   "id": "text_and_attachment",
+   "about": "a reply with text and a file: text-only products keep the text and drop the file",
+   "body": {
+    "reply": {
+     "text": "報表在這裡。",
+     "attachments": [
+      {
+       "url": "https://files.example.com/report.pdf",
+       "name": "report.pdf"
+      }
+     ]
+    }
+   },
+   "expect": {
+    "attachments": 1,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "報表在這裡。"
+    ]
+   },
+   "expect_text_only": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "報表在這裡。"
+    ]
+   }
+  },
+  {
+   "id": "base64_attachment",
+   "about": "a data_base64 file is decoded without a download (no download domain needed)",
+   "body": {
+    "reply": {
+     "text": "圖在這裡。",
+     "attachments": [
+      {
+       "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+       "name": "chart.png"
+      }
+     ]
+    }
+   },
+   "expect": {
+    "attachments": 1,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "圖在這裡。"
+    ]
+   },
+   "expect_text_only": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "圖在這裡。"
+    ]
    }
   }
  ],

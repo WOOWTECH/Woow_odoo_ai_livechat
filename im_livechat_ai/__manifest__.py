@@ -89,6 +89,7 @@ Configuration:
     'data': [
         # Security
         'security/ir.model.access.csv',
+        'security/ir_rule.xml',
 
         # Views
         'views/ai_connection_views.xml',

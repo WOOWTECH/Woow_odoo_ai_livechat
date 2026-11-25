@@ -93,8 +93,12 @@ class LivechatAiAssistant(models.Model):
         string='Error Message', groups=SYSTEM_GROUP,
         help='Posted to the visitor when the backend fails. Empty: a default message in the visitor\'s '
              'language.')
-    livechat_channel_ids = fields.One2many('im_livechat.channel', 'ai_assistant_id', string='Used By Channels',
-                                           groups=SYSTEM_GROUP, readonly=True)
+    # Read with sudo by the module. Its inverse (the channel's AI assistant) is for Live Chat managers: a system
+    # administrator who is not one reads the channels through livechat_channel_summary instead.
+    livechat_channel_ids = fields.One2many('im_livechat.channel', 'ai_assistant_id', string='Live Chat Channels',
+                                           groups='im_livechat.im_livechat_group_manager', readonly=True)
+    livechat_channel_summary = fields.Text(string='Used By Channels', compute='_compute_livechat_channel_summary',
+                                           groups=SYSTEM_GROUP)
     call_log_count = fields.Integer(compute='_compute_call_log_count', groups=SYSTEM_GROUP)
     job_runner_info = fields.Text(string='Reply Processing', compute='_compute_job_runner_info',
                                   groups=SYSTEM_GROUP,
@@ -338,6 +342,17 @@ class LivechatAiAssistant(models.Model):
             assistant.job_runner_warning = warning
 
     # --- Call logs ---
+
+    def _compute_livechat_channel_summary(self):
+        # sudo: the channels' AI fields are for Live Chat managers; names and the on/off state only
+        Channel = self.env['im_livechat.channel'].sudo().with_context(active_test=False)
+        channels = Channel.search([('ai_assistant_id', 'in', [i for i in self.ids if isinstance(i, int)])],
+                                  order='name, id')
+        on, off = self.env._('AI on'), self.env._('AI off')
+        for assistant in self:
+            assistant.livechat_channel_summary = '\n'.join(
+                '%s (%s)' % (channel.name, on if channel.ai_enabled else off)
+                for channel in channels if channel.ai_assistant_id.id == assistant.id) or False
 
     def _compute_call_log_count(self):
         data = self.env['llm.api.log'].sudo()._read_group(

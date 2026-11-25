@@ -89,12 +89,7 @@
                             </group>
                         </page>
                         <page string="Live Chat Channels" name="channels">
-                            <field name="livechat_channel_ids" nolabel="1" readonly="1">
-                                <list>
-                                    <field name="name"/>
-                                    <field name="ai_enabled"/>
-                                </list>
-                            </field>
+                            <field name="livechat_channel_summary" nolabel="1" readonly="1"/>
                             <div class="text-muted">
                                 Live Chat managers choose the AI assistant of each channel (the channel's
                                 "AI Assistant" tab), among the assistants available in Live Chat.

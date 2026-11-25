@@ -3,7 +3,8 @@
 
 import base64
 
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tests import Form
 from odoo.tests.common import TransactionCase, new_test_user
 from odoo.tools import mute_logger
 
@@ -200,3 +201,47 @@ class TestInUseGuard(TransactionCase):
         self.assistant.write({'livechat_available': False})
         self.assistant.write({'active': False})
         self.connection.write({'active': False})
+
+
+class TestAssistantAccess(TransactionCase):
+    """Who reads AI assistants (contract 3.2; review #9 and #11)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.connection = make_connection(cls.env, name='LiteLLM')
+        cls.ticked = make_assistant(cls.env, cls.connection, name='公開助理')
+        cls.unticked = make_assistant(cls.env, cls.connection, name='內部草稿', livechat_available=False)
+        cls.channel = cls.env['im_livechat.channel'].create({'name': 'Access', 'ai_assistant_id': cls.ticked.id})
+        cls.manager = new_test_user(cls.env, login='acc_manager', name='Manager',
+                                    groups='base.group_user,im_livechat.im_livechat_group_manager')
+        # a Settings administrator who is a Live Chat user but not a Live Chat manager
+        cls.admin_only = new_test_user(cls.env, login='acc_admin_only', name='Admin only',
+                                       groups='base.group_user,base.group_system,im_livechat.im_livechat_group_user')
+
+    def test_managers_read_only_the_assistants_available_in_live_chat(self):
+        Assistant = self.env['im_livechat.ai.assistant'].with_user(self.manager)
+        found = Assistant.search([('id', 'in', (self.ticked | self.unticked).ids)])
+        self.assertEqual(found, self.ticked)
+        self.assertEqual(self.ticked.with_user(self.manager).read(['name'])[0]['name'], '公開助理')
+        with self.assertRaises(AccessError):
+            self.unticked.with_user(self.manager).read(['name'])
+        # the channel form still shows the chosen assistant's name
+        self.assertEqual(self.channel.with_user(self.manager).ai_assistant_id.display_name, '公開助理')
+
+    def test_system_administrators_read_them_all(self):
+        Assistant = self.env['im_livechat.ai.assistant'].with_user(self.admin_only)
+        self.assertEqual(Assistant.search([('id', 'in', (self.ticked | self.unticked).ids)]),
+                         self.ticked | self.unticked)
+
+    def test_assistant_form_for_an_administrator_who_is_not_a_live_chat_manager(self):
+        form = Form(self.ticked.with_user(self.admin_only))
+        self.assertIn('Access', form.livechat_channel_summary)
+        form.description = '給官網訪客'
+        form.save()
+        self.assertEqual(self.ticked.description, '給官網訪客')
+        with Form(self.env['im_livechat.ai.assistant'].with_user(self.admin_only)) as new:
+            new.name = '新助理'
+            new.connection_id = self.connection
+        self.assertTrue(new.record.partner_id)
+        self.assertFalse(new.record.livechat_channel_summary)

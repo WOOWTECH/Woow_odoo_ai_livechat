@@ -675,13 +675,17 @@ class DiscussChannel(models.Model):
     def _ai_context_messages(self, livechat_channel):
         """The most recent comment/email messages of this session (the AI
         assistant's history length), oldest first (what the backend gets as
-        conversation)."""
+        conversation). Internal notes (``is_internal``, or an internal
+        subtype such as Log note) are for colleagues only: they still pause
+        the AI like any operator comment, but never reach the backend."""
         max_history = livechat_channel._ai_max_history_value()
         recent_messages = self.env['mail.message'].search(
             [
                 ('res_id', '=', self.id),
                 ('model', '=', 'discuss.channel'),
                 ('message_type', 'in', ['comment', 'email']),
+                ('is_internal', '=', False),
+                '|', ('subtype_id', '=', False), ('subtype_id.internal', '=', False),
             ],
             order='id desc',
             limit=max_history,

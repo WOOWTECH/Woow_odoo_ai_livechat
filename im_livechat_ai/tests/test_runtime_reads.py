@@ -174,6 +174,24 @@ class TestRuntimeReads(RuntimeCase):
         self.assertEqual(usage.month.day, 1)
 
 
+class TestInternalNotes(RuntimeCase):
+    """Internal notes of colleagues never reach the backend; they still pause the AI."""
+
+    def test_internal_note_not_in_history_and_pauses(self):
+        session, guest, _m = self.session(text=None)
+        self.guest_post(session, guest, '請問營業時間？')
+        session.with_user(self.operator).message_post(body='內部：這位是 VIP', message_type='comment',
+                                                      subtype_xmlid='mail.mt_note')
+        self.assertTrue(session._ai_is_paused(), 'an operator note pauses the AI like a comment')
+        self.env['mail.message'].create({'body': '標記為內部', 'model': 'discuss.channel', 'res_id': session.id,
+                                         'message_type': 'comment', 'is_internal': True,
+                                         'author_id': self.operator.partner_id.id})
+        texts = ' '.join(entry['text'] for entry in session._ai_conversation(self.channel)['history'])
+        self.assertIn('請問營業時間', texts)
+        self.assertNotIn('VIP', texts)
+        self.assertNotIn('標記為內部', texts)
+
+
 class TestBlockedGate(RuntimeCase):
     """Contract §3.5 step 2: an AI-enabled channel that cannot answer queues no
     job; the conversation gets one notice per blocked period (a notification,

@@ -42,7 +42,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from odoo import api, fields, models
+from odoo import api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context
@@ -560,6 +560,18 @@ class ImLivechatChannel(models.Model):
             raise AccessError(self.env._('Only Live Chat managers can set up the AI of a channel.'))
 
     @api.model
+    def _ai_explicit_values(self):
+        """Every stored ai_* field of a channel with its own default (or
+        empty): create() is given them explicitly for a caller who may not set
+        up the AI, so neither default_* context keys nor the caller's own
+        ir.default rows can set one."""
+        values = {}
+        for name, field in self._fields.items():
+            if name.startswith('ai_') and field.store and not field.compute and not field.related:
+                values[name] = field.default(self) if field.default else False
+        return values
+
+    @api.model
     def _check_ai_manager(self):
         if not self.env.is_superuser() and not self.env.user.has_group(AI_CONFIG_GROUP):
             raise AccessError(self.env._('Only Live Chat managers can use this feature.'))
@@ -578,6 +590,11 @@ class ImLivechatChannel(models.Model):
                     if key.startswith('default_ai_')}
         for vals in vals_list:
             self._check_ai_config_access({**defaults, **vals})
+        if self.env.uid != SUPERUSER_ID and not self.env.user.has_group(AI_CONFIG_GROUP):
+            # default_get also reads the caller's own ir.default rows (any employee may write them): a caller
+            # who may not set up the AI gets every ai_* field explicitly (sudo() keeps the uid, so also there)
+            explicit = self._ai_explicit_values()
+            vals_list = [{**explicit, **vals} for vals in vals_list]
         channels = super().create(vals_list)
         # sudo: an operator may create a channel (AI off); the ai_* fields are manager-only.
         channels.sudo().filtered('ai_enabled')._ai_check_enable_requirements()

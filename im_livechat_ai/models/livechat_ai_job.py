@@ -341,15 +341,28 @@ class LivechatAiJob(models.Model):
                 'finished_at': fields.Datetime.now(),
                 'error': 'answered together with a newer visitor message',
             })
-        # clean_context: in the visitor's request the context comes from the client; its default_* keys
-        # (state, attempts, started_at ...) must never set fields of a job created in sudo
-        job = self.sudo().with_context(clean_context(self.env.context)).create({
+        # Explicit values only (contract 3.5): create() fills every field it is not given from the
+        # context's default_* keys (in the visitor's request the context may come from the client) and from
+        # the creating user's own ir.default rows (any employee may write them for themselves). So the job is
+        # created as the superuser, with the context cleaned and every stored field given.
+        job = self.with_user(SUPERUSER_ID).with_context(clean_context(self.env.context)).create({
             'discuss_channel_id': discuss_channel.id,
             'livechat_channel_id': discuss_channel.livechat_channel_id.id,
             'message_id': message.id,
             'kind': kind,
             'deferred': deferred,
             'run_after': run_after or fields.Datetime.now() + timedelta(seconds=DEBOUNCE_SECONDS),
+            'state': 'pending',
+            'attempts': 0,
+            'llm_calls': 0,
+            'started_at': False,
+            'finished_at': False,
+            'error': False,
+            'handoff_source': False,
+            'handoff_reason': False,
+            'context_message_id': 0,
+            'reply_message_id': False,
+            'alert_sent': False,
         })
         if deferred:
             self._trigger_recovery_cron(job.run_after + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
@@ -402,9 +415,11 @@ class LivechatAiJob(models.Model):
             '|',
             # A running job counts for as long as one run can last, however
             # old it is by now (it may have been claimed just before the age
-            # limit); a crashed run is bounded by the same window.
-            '&', ('state', '=', 'running'),
+            # limit); a crashed run is bounded by the same window. A start in
+            # the future never counts.
+            '&', '&', ('state', '=', 'running'),
             ('started_at', '>=', now - timedelta(seconds=MAX_RUN_SECONDS + STALE_RUNNING_SECONDS)),
+            ('started_at', '<=', now),
             # A live (not deferred) job waiting for its turn counts while it
             # is younger than the age limit (older ones are given up).
             '&', '&', ('state', '=', 'pending'), ('deferred', '=', False),

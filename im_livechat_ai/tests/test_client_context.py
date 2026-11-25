@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
-"""A client's context never sets a field of a record this module creates.
+"""A client's context, or a user's own ir.default rows, never set a field of a
+record this module creates.
 
 Odoo's /mail/message/post applies the context the client sends, also for a
-public guest, and create() takes default_<field> keys from the context. The
-trigger, the reply job, the call log, the operator alert and the session drop
-those keys; a channel's AI fields stay for Live Chat managers even through
-default_ai_* keys. All HTTP is mocked; no real key."""
+public guest, and create() takes default_<field> keys from the context and,
+for the fields it is still not given, from the creating user's own
+ir.default rows (any employee may write them for themselves). Odoo's own
+sudo() drops default_* keys only when it switches into superuser mode, so the
+posts here apply the context after sudo(): only the module's own cleaning
+protects. The reply job is created as the superuser with every field given;
+the call log, the operator alert and the session drop the keys; a channel's AI
+fields stay for Live Chat managers, through default_ai_* keys or ir.default
+rows. All HTTP is mocked; no real key."""
 
+import json
 from unittest.mock import patch
 
+from odoo import SUPERUSER_ID, models
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, new_test_user
 
@@ -54,9 +62,10 @@ class ClientContextCase(TransactionCase):
         return session, guest
 
     def guest_post(self, session, guest, text, **context):
-        """A guest's post with the context a client may send to /mail/message/post."""
+        """A guest's post with the context a client may send to /mail/message/post, applied after sudo():
+        Odoo's sudo() would drop the default_* keys itself, so only the module's own cleaning is tested."""
         public = self.env.ref('base.public_user')
-        return session.with_user(public).with_context(guest=guest, **context).sudo().message_post(
+        return session.with_user(public).sudo().with_context(guest=guest, **context).message_post(
             body=text, message_type='comment', subtype_xmlid='mail.mt_comment')
 
     def assertPlainJob(self, job):
@@ -142,6 +151,94 @@ class TestForgedJobDefaults(ClientContextCase):
         self.assertFalse(session.ai_pause_reason)
         self.assertFalse(session.ai_blocked_notice_sent)
         self.assertFalse(session.ai_pause_notice_sent)
+
+
+class TestOwnDefaults(ClientContextCase):
+    """Review r2 #2 and #3: the creating user's own ir.default rows (any employee writes them for himself)
+    fill the fields create() is not given, under sudo() too (sudo keeps the uid)."""
+
+    def test_job_ignores_the_posters_own_defaults(self):
+        employee = new_test_user(self.env, login='ctx_employee', name='Context Employee', groups='base.group_user')
+        Default = self.env['ir.default'].with_user(employee)
+        Default.set('im_livechat.ai.job', 'state', 'running', user_id=True)
+        Default.set('im_livechat.ai.job', 'attempts', 3, user_id=True)
+        Default.set('im_livechat.ai.job', 'started_at', '2099-01-01 00:00:00', user_id=True)
+        Default.set('im_livechat.ai.job', 'error', 'forged', user_id=True)
+        self.assertEqual(self.env['im_livechat.ai.job'].with_user(employee).sudo().default_get(['state'])['state'],
+                         'running', 'the rows are in place')
+        session = self.env['discuss.channel'].create({
+            'name': 'Employee visitor', 'channel_type': 'livechat',
+            'livechat_operator_id': self.operator.partner_id.id, 'livechat_channel_id': self.channel.id,
+            'channel_member_ids': [(0, 0, {'partner_id': self.operator.partner_id.id})],
+        })
+        self.env['discuss.channel.member'].create({'channel_id': session.id, 'partner_id': employee.partner_id.id})
+        # the employee is the session's visitor: his post queues a reply job
+        session.with_user(employee).message_post(body='請問營業時間？', message_type='comment',
+                                                 subtype_xmlid='mail.mt_comment')
+        self.assertPlainJob(self.Job.search([('discuss_channel_id', '=', session.id)]))
+
+    def test_job_is_created_with_every_field(self):
+        """Every stored field of a job is given at creation: a field added later must be added there too."""
+        session, guest = self.session()
+        message = self.env['mail.message'].create({
+            'body': 'hi', 'model': 'discuss.channel', 'res_id': session.id, 'message_type': 'comment',
+            'author_guest_id': guest.id})
+        Job = type(self.env['im_livechat.ai.job'])
+        original = Job.create
+        given = []
+
+        def create(records, vals_list):
+            given.extend([vals_list] if isinstance(vals_list, dict) else vals_list)
+            return original(records, vals_list)
+
+        with patch.object(Job, 'create', create):
+            job = self.Job._create_for_message(session, message)
+        self.assertEqual(len(given), 1)
+        self.assertEqual(job.create_uid.id, SUPERUSER_ID, 'created as the superuser')
+        automatic = set(models.MAGIC_COLUMNS) | {'display_name'}
+        stored = {name for name, field in self.Job._fields.items() if field.store and name not in automatic}
+        self.assertEqual(stored - set(given[0]), set())
+
+    def test_future_start_never_counts(self):
+        session, guest = self.session()
+        message = self.env['mail.message'].create({
+            'body': 'hi', 'model': 'discuss.channel', 'res_id': session.id, 'message_type': 'comment',
+            'author_guest_id': guest.id})
+        job = self.Job._create_for_message(session, message)
+        job.write({'state': 'running', 'started_at': '2099-01-01 00:00:00'})
+        self.assertFalse(self.Job.search_count([('id', '=', job.id)] + self.Job._active_job_domain()))
+
+    def _own_default(self, user, model, field, value):
+        """A personal ir.default row of `user`, as ir.default.set writes it for him. Odoo 18.0-20250807 lets
+        any employee write one for any field; later cores refuse a field of a group the user lacks, so the
+        row is written here with sudo, to test the module's own guard on every core."""
+        self.env['ir.default'].sudo().create({
+            'field_id': self.env['ir.model.fields']._get(model, field).id,
+            'json_value': json.dumps(value), 'user_id': user.id})
+
+    def test_operator_defaults_never_set_the_ai(self):
+        assistant = self.channel.sudo().ai_assistant_id
+        self._own_default(self.operator, 'im_livechat.channel', 'ai_enabled', True)
+        self._own_default(self.operator, 'im_livechat.channel', 'ai_assistant_id', assistant.id)
+        self._own_default(self.operator, 'im_livechat.channel', 'ai_welcome_message', 'forged welcome')
+        self.assertTrue(self.env['im_livechat.channel'].with_user(self.operator).sudo().default_get(
+            ['ai_enabled'])['ai_enabled'], 'the rows are in place')
+        channel = self.env['im_livechat.channel'].with_user(self.operator).create({'name': 'Operator defaults'})
+        channel = channel.sudo()
+        self.assertFalse(channel.ai_enabled)
+        self.assertFalse(channel.ai_assistant_id)
+        self.assertNotEqual(channel.ai_welcome_message, 'forged welcome')
+        # under sudo() with the operator's uid too (sudo keeps the uid, and so his rows)
+        channel = self.env['im_livechat.channel'].with_user(self.operator).sudo().create({'name': 'Sudo defaults'})
+        self.assertFalse(channel.ai_enabled)
+        self.assertFalse(channel.ai_assistant_id)
+
+    def test_manager_defaults_apply(self):
+        assistant = self.channel.sudo().ai_assistant_id
+        Default = self.env['ir.default'].with_user(self.manager)
+        Default.set('im_livechat.channel', 'ai_assistant_id', assistant.id, user_id=True)
+        channel = self.env['im_livechat.channel'].with_user(self.manager).create({'name': 'Manager defaults'})
+        self.assertEqual(channel.sudo().ai_assistant_id, assistant, 'a manager may set up the AI')
 
 
 class TestChannelDefaultKeys(ClientContextCase):

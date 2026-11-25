@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import time
+from datetime import timedelta
 from urllib.parse import urlsplit
 
 import requests
@@ -94,6 +95,11 @@ MAX_LOG_PAYLOAD = 200000  # characters
 # channel and process in this many seconds (a flood of visitor messages must
 # not flood the log).
 BLOCKED_WARNING_SECONDS = 600
+# Operator alerts of a channel (cannot answer, too many unfinished replies, a
+# kind of failure): at most one per channel (and kind) in this window.
+ALERT_WINDOW_MINUTES = 10
+# Technical fields of a channel that only system administrators may set
+ALERT_FIELDS = ('ai_blocked_alert_sent', 'ai_blocked_alert_at')
 
 # --- Visitor-facing defaults (English source, translated; stored values are kept) ---
 DEFAULT_ERROR_MESSAGE = (
@@ -423,6 +429,10 @@ class ImLivechatChannel(models.Model):
         string='Operators Told the AI Cannot Answer', copy=False, readonly=True, groups=SYSTEM_GROUP,
         help='The operators were alerted once that the AI of this channel cannot answer; cleared when it answers '
              'again.')
+    ai_blocked_alert_at = fields.Datetime(
+        string='Last Cannot-Answer Alert', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='When the operators were last alerted that the AI of this channel cannot answer: at most one such '
+             'alert in 10 minutes.')
 
     # --- Status (read with administrator rights; fixed sentences only) ---
 
@@ -546,7 +556,7 @@ class ImLivechatChannel(models.Model):
         names = {name for name in vals if name.startswith('ai_') and name in self._fields}
         if names and not self.env.user.has_group(AI_CONFIG_GROUP):
             raise AccessError(self.env._('Only Live Chat managers can set up the AI of a channel.'))
-        if 'ai_blocked_alert_sent' in names and not self.env.user.has_group(SYSTEM_GROUP):
+        if names & set(ALERT_FIELDS) and not self.env.user.has_group(SYSTEM_GROUP):
             raise AccessError(self.env._('Only Live Chat managers can set up the AI of a channel.'))
 
     @api.model
@@ -798,7 +808,8 @@ class ImLivechatChannel(models.Model):
         The server log gets a warning (at most once per channel and process in
         BLOCKED_WARNING_SECONDS), the conversation one notification per
         blocked period (never read as history, never answered) and the
-        operators one alert per blocked period of the channel."""
+        operators one alert per blocked period of the channel, at most one in
+        ALERT_WINDOW_MINUTES (see _ai_alert_once)."""
         self.ensure_one()
         now = time.monotonic()
         last = _BLOCKED_WARNED.get(self.id)
@@ -815,8 +826,10 @@ class ImLivechatChannel(models.Model):
         """The cap of unfinished reply jobs (of the channel, or of the
         database) refused the job: as for a blocked channel, the conversation
         gets one notice per period, the operators one alert per period of the
-        channel, the server log a warning at most once per channel and process
-        in BLOCKED_WARNING_SECONDS. The next queued reply ends the period."""
+        channel and at most one in ALERT_WINDOW_MINUTES (a cap that refills at
+        every freed slot ends a period with each queued reply), the server log
+        a warning at most once per channel and process in
+        BLOCKED_WARNING_SECONDS. The next queued reply ends the period."""
         self.ensure_one()
         now = time.monotonic()
         last = _FULL_WARNED.get(self.id)
@@ -830,24 +843,40 @@ class ImLivechatChannel(models.Model):
 
     def _ai_alert_once(self, notify):
         """Run ``notify`` (the operator alert of a blocked or full channel)
-        once per period of the channel (ai_blocked_alert_sent)."""
+        once per period of the channel (ai_blocked_alert_sent, cleared when a
+        reply is queued again) and at most once in ALERT_WINDOW_MINUTES
+        (ai_blocked_alert_at): see _ai_claim_alert."""
         self.ensure_one()
-        channel = self.sudo()
-        if channel.ai_blocked_alert_sent:
-            return
         try:
             with self.env.cr.savepoint():
-                channel.ai_blocked_alert_sent = True
-                # Flushed here, inside the savepoint: a concurrent alert of the same channel fails now, the
-                # savepoint is rolled back and Odoo retries the request, instead of failing in the middle of
-                # the fan-out where the error would leave the transaction aborted.
-                channel.flush_recordset(['ai_blocked_alert_sent'])
-                notify()
+                if self._ai_claim_alert():
+                    notify()
         except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
             raise
         except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
             _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
                           self.id, exception_frames(e))
+
+    def _ai_claim_alert(self):
+        """Claim the cannot-answer alert of the channel: one UPDATE of its row,
+        so a visitor request (REPEATABLE READ) and the job threads (READ
+        COMMITTED) never both alert. A row locked by another claim (or any
+        other writer) is skipped, not waited for: the alert is then that one's,
+        or the next refused message's. Returns whether this caller alerts."""
+        self.ensure_one()
+        channel = self.sudo()
+        channel.flush_recordset(list(ALERT_FIELDS))
+        now = fields.Datetime.now()
+        self.env.cr.execute("""
+            UPDATE im_livechat_channel SET ai_blocked_alert_sent = TRUE, ai_blocked_alert_at = %(now)s
+             WHERE id = (SELECT id FROM im_livechat_channel
+                          WHERE id = %(id)s AND ai_blocked_alert_sent IS NOT TRUE
+                            AND (ai_blocked_alert_at IS NULL OR ai_blocked_alert_at <= %(since)s)
+                          FOR UPDATE SKIP LOCKED)
+        """, {'id': self.id, 'now': now, 'since': now - timedelta(minutes=ALERT_WINDOW_MINUTES)})
+        claimed = bool(self.env.cr.rowcount)
+        channel.invalidate_recordset(list(ALERT_FIELDS))
+        return claimed
 
     # --- Backend requests ---
 
@@ -1189,7 +1218,7 @@ class ImLivechatChannel(models.Model):
         text = f'{prefix}{message} ({type(error).__name__})'
         return text[:MAX_LOG_ERROR_LENGTH]
 
-    def _create_bot_message(self, env, discuss_channel, body):
+    def _create_bot_message(self, env, discuss_channel, body, assistant=None):
         """
         Post a message to the livechat session as the AI bot.
 
@@ -1202,13 +1231,19 @@ class ImLivechatChannel(models.Model):
             env (api.Environment): Environment with new cursor
             discuss_channel (discuss.channel): The chat session
             body (str): Message body text (markdown)
+            assistant (im_livechat.ai.assistant|None): the assistant that wrote
+                the answer (its bot partner is the author, also when a manager
+                switched the channel's assistant while the backend answered);
+                default: the channel's assistant
 
         Returns:
             mail.message: the posted message
         """
         self.ensure_one()
 
-        bot_partner = self._get_bot_partner()
+        bot_partner = assistant.sudo().partner_id if assistant and assistant.exists() else None
+        if not bot_partner:
+            bot_partner = self._get_bot_partner()
         safe_body = markdown_to_html(body, link_hosts=self._ai_link_hosts())
 
         return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(

@@ -50,11 +50,12 @@ from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
-from odoo.tools import clean_context
+from odoo.tools import clean_context, config
 
 from ..tools.backend import exception_frames
 from .discuss_channel import PAUSE_HANDOFF
 from .im_livechat_channel import (
+    ALERT_WINDOW_MINUTES,
     LLM_MAX_RETRIES,
     LLM_RETRY_BACKOFF,
     MAX_REQUEST_TIMEOUT,
@@ -83,8 +84,11 @@ CRON_SEARCH_LIMIT = 200
 # system parameter im_livechat_ai.max_active_jobs (0 disables the limit).
 MAX_ACTIVE_JOBS_PER_CHANNEL = 30
 # The same bound for all the live chat channels of the database together: each
-# running reply holds a thread and a pooled database connection during its
-# backend call. Override with the system parameter
+# running reply holds a thread and a pooled database connection of its Odoo
+# process during its backend call. The default is half of the connection pool
+# of a process (db_maxconn, 64 by default: 32), at most MAX_ACTIVE_JOBS_TOTAL,
+# so at least half of the pool stays free for web requests (see
+# default_total_cap). Override with the system parameter
 # im_livechat_ai.max_active_jobs_total (0 disables it).
 MAX_ACTIVE_JOBS_TOTAL = 60
 CRON_BATCH_LIMIT = 10  # sessions handed to recovery threads per cron run
@@ -101,12 +105,10 @@ DEFERRED_TRIGGER_DELAY_SECONDS = 2
 # that has not run for this long, are reported.
 MONITOR_STALE_MINUTES = 5
 # After a failure the operators of a live chat channel are alerted at most once
-# per kind of failure (HTTP 429, HTTP 500, a timeout, ...) in this window: one
-# alert per flood or outage, not one per visitor message; the visitor still gets
-# the error message every time.
-FAILURE_ALERT_MINUTES = 10
-RATE_LIMIT_ALERT_MINUTES = FAILURE_ALERT_MINUTES  # 18.0.2.0.0 drafts throttled HTTP 429 only
-RATE_LIMIT_ERROR_PREFIX = 'HTTP 429'
+# per kind of failure (HTTP 429, HTTP 500, a timeout, ...) in this window, which
+# starts at the alert: one alert per flood or outage, not one per visitor
+# message; the visitor still gets the error message every time.
+FAILURE_ALERT_MINUTES = ALERT_WINDOW_MINUTES
 # Note of a reply job skipped by the gate when it ran (contract 3.5)
 BLOCKED_AT_RUN_NOTE = 'the AI assistant cannot answer (checked when the job ran): no backend call or no reply'
 # Who decided a handoff (im_livechat.ai.job.handoff_source)
@@ -115,6 +117,20 @@ HANDOFF_BACKEND = 'backend'  # the backend's answer ([[handoff]] / n8n "handoff"
 
 # First key of the two-int advisory lock; the second is the discuss.channel id.
 LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.job') & 0x7FFFFFFF
+# First key of the transaction lock around a failure alert; the second is the
+# im_livechat.channel id (see _claim_failure_alert).
+ALERT_LOCK_NAMESPACE = zlib.crc32(b'im_livechat_ai.alert') & 0x7FFFFFFF
+
+
+def default_total_cap():
+    """Default of im_livechat_ai.max_active_jobs_total: half of db_maxconn
+    (the connection pool of one Odoo process), at least 1, at most
+    MAX_ACTIVE_JOBS_TOTAL."""
+    try:
+        pool = int(config.get('db_maxconn') or 64)
+    except (TypeError, ValueError):
+        pool = 64
+    return max(1, min(MAX_ACTIVE_JOBS_TOTAL, pool // 2))
 
 
 def _job_cursor(db_name):
@@ -283,6 +299,12 @@ class LivechatAiJob(models.Model):
         help='Highest message id sent to the AI backend as conversation; visitor '
              'messages up to it are covered by this job\'s reply',
     )
+    alert_sent = fields.Boolean(
+        string='Operators Alerted',
+        readonly=True,
+        help='This job\'s failure alerted the operators; the same kind of failure of the channel is not '
+             'announced again for 10 minutes.',
+    )
 
     @api.depends('discuss_channel_id')
     def _compute_display_name(self):
@@ -347,7 +369,7 @@ class LivechatAiJob(models.Model):
                 is disabled
         """
         channel_limit = self._active_job_limit('im_livechat_ai.max_active_jobs', MAX_ACTIVE_JOBS_PER_CHANNEL)
-        total_limit = self._active_job_limit('im_livechat_ai.max_active_jobs_total', MAX_ACTIVE_JOBS_TOTAL)
+        total_limit = self._active_job_limit('im_livechat_ai.max_active_jobs_total', default_total_cap())
         slots = []
         if channel_limit > 0:
             slots.append(channel_limit - self.sudo().search_count(
@@ -556,8 +578,9 @@ class LivechatAiJob(models.Model):
         if reference and reference < now - timedelta(minutes=JOB_MAX_AGE_MINUTES):
             note = f'not processed within {JOB_MAX_AGE_MINUTES} minutes: given up'
             self._finish('failed', note)
-            if not self._failure_alert_sent_recently(note):
-                # after an outage the cron gives up the backlog: one alert per channel, not one per job
+            if self._claim_failure_alert(note):
+                # after an outage the cron gives up the backlog: one alert per channel, not one per job (the
+                # recovery threads of one channel claim the alert one after the other)
                 self._notify_failure(
                     lambda env: env._('the visitor message was not processed by the AI within %(minutes)s minutes',
                                       minutes=JOB_MAX_AGE_MINUTES),
@@ -643,7 +666,8 @@ class LivechatAiJob(models.Model):
         elif result['handoff']:
             # Owner decision 40: the backend asked for a human. Its text is
             # posted first, then the same handoff as for a keyword.
-            posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            posted = [channel._create_bot_message(self.env, session, text, assistant=result.get('assistant'))
+                      for text in result['replies']]
             self._count_usage(result, ok=True)
             self._process_backend_handoff(commit_step, posted, result['handoff_reason'])
             return
@@ -652,7 +676,8 @@ class LivechatAiJob(models.Model):
             # (or replies later through its own channel).
             self._finish('done', 'the backend chose not to reply (skip)')
         elif result['replies']:
-            posted = [channel._create_bot_message(self.env, session, text) for text in result['replies']]
+            posted = [channel._create_bot_message(self.env, session, text, assistant=result.get('assistant'))
+                      for text in result['replies']]
             self._count_usage(result, ok=True)
             self._finish('done', False, reply_message=posted[0])
         else:
@@ -909,7 +934,7 @@ class LivechatAiJob(models.Model):
         self._count_usage(result, ok=False)
         if commit_step:
             commit_step()
-        if self._failure_alert_sent_recently(error):
+        if not self._claim_failure_alert(error):
             _logger.info("AI job %s: live chat channel %s failed the same way in the last %s minutes; its "
                          "operators were alerted then", self.id, channel.id, FAILURE_ALERT_MINUTES)
             return
@@ -928,27 +953,39 @@ class LivechatAiJob(models.Model):
         return error.split(':', 1)[0].strip() if ':' in error else error
 
     def _failure_alert_sent_recently(self, error):
-        """True when an earlier job of the same live chat channel failed the same
-        way in the last FAILURE_ALERT_MINUTES (its operators were alerted then):
-        one alert per kind of failure and channel in that window, not one per
-        visitor message. Earlier jobs only (lower ids): of two jobs that fail
-        together, the first one alerts."""
+        """True when another job of the same live chat channel alerted the
+        operators about the same kind of failure in the last
+        FAILURE_ALERT_MINUTES (the window starts at that alert, not at the
+        last failure)."""
         kind = self._failure_kind(error)
         if not kind or not self.livechat_channel_id:
             return False
         since = fields.Datetime.now() - timedelta(minutes=FAILURE_ALERT_MINUTES)
-        earlier = self.search([
+        alerted = self.search([
             ('livechat_channel_id', '=', self.livechat_channel_id.id),
-            ('id', '<', self.id),
-            ('state', '=', 'failed'),
+            ('id', '!=', self.id),
+            ('alert_sent', '=', True),
             ('finished_at', '>=', since),
             ('error', '=like', kind + '%'),
         ], order='id desc', limit=50)
-        return any(self._failure_kind(job.error) == kind for job in earlier)
+        return any(self._failure_kind(job.error) == kind for job in alerted)
 
-    def _rate_limit_alert_sent_recently(self, error):
-        """18.0.2.0.0 drafts: HTTP 429 only (see _failure_alert_sent_recently)."""
-        return (error or '').startswith(RATE_LIMIT_ERROR_PREFIX) and self._failure_alert_sent_recently(error)
+    def _claim_failure_alert(self, error):
+        """Whether this failed job alerts the operators: one alert per kind of
+        failure and live chat channel in FAILURE_ALERT_MINUTES. The check and
+        the mark (alert_sent) run under a transaction lock of the channel, so
+        jobs that fail together in several threads (READ COMMITTED) alert once:
+        the next one waits for the first one's commit and then sees its mark."""
+        self.ensure_one()
+        if not self._failure_kind(error) or not self.livechat_channel_id:
+            return True
+        self.env.cr.execute("SELECT pg_advisory_xact_lock(%s, %s)",
+                            (ALERT_LOCK_NAMESPACE, self.livechat_channel_id.id))
+        if self._failure_alert_sent_recently(error):
+            return False
+        self.write({'alert_sent': True})
+        self.flush_recordset(['alert_sent'])
+        return True
 
     def _has_newer_job(self):
         return bool(self.search_count([

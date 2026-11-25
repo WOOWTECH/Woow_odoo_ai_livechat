@@ -4,15 +4,18 @@ connection; the n8n body; the bot set; the blocked gate; the concurrency
 re-raise; call logs and monthly usage. All HTTP is mocked; no real key."""
 
 import json
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import psycopg2.errors
 import requests
 
+from odoo import fields
 from odoo.tests.common import TransactionCase, new_test_user
-from odoo.tools import mute_logger
+from odoo.tools import config, mute_logger
 
 from odoo.addons.im_livechat_ai.models import im_livechat_channel as ch
+from odoo.addons.im_livechat_ai.models import livechat_ai_job as jobs
 
 from .common import (TEST_BACKEND, TEST_N8N_BACKEND, make_ai_channel, make_assistant, make_connection, run_ai_job,
                      set_ai)
@@ -410,6 +413,45 @@ class TestReplyCaps(RuntimeCase):
         self.assertEqual(len([line for line in logs.output if 'too many unfinished' in line]), 1,
                          'the warning is rate-limited')
 
+    @patch(POST)
+    def test_full_alert_holds_when_slots_free(self, mock_post):
+        """Review r2 #1: a cap that refills at every freed slot ends a period with each queued reply; the
+        10-minute window still holds the operators to one alert."""
+        mock_post.return_value = _ok('好的')
+        self.env['ir.config_parameter'].sudo().set_param('im_livechat_ai.max_active_jobs', '1')
+        ResPartner = type(self.env['res.partner'])
+        ch._FULL_WARNED.pop(self.channel.id, None)
+        first, guest1, _m = self.session(text=None)
+        second, guest2, _m = self.session(text=None)
+        Job = self.env['im_livechat.ai.job']
+
+        def alerts(bus_send):
+            return [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
+
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, mute_logger(CHANNEL_LOGGER):
+            self.guest_post(first, guest1, '第一位')  # queued
+            self.guest_post(second, guest2, '第二位')  # refused: the alert
+            Job.search([('discuss_channel_id', '=', first.id)])._run_job(commit=False)  # the slot frees
+            self.guest_post(first, guest1, '第一位再問')  # queued: the period ends
+            self.assertFalse(self.channel.sudo().ai_blocked_alert_sent)
+            self.guest_post(second, guest2, '第二位再問')  # refused again
+        self.assertEqual(len(alerts(bus_send)), 1, 'one alert in the window')
+        # past the window the next refusal alerts again
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_blocked_alert_sent = FALSE, "
+                            "ai_blocked_alert_at = ai_blocked_alert_at - interval '11 minutes' WHERE id = %s",
+                            (self.channel.id,))
+        self.env.invalidate_all()
+        with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send, mute_logger(CHANNEL_LOGGER):
+            self.guest_post(second, guest2, '第二位第三次')
+        self.assertEqual(len(alerts(bus_send)), 1)
+
+    def test_database_cap_follows_the_pool(self):
+        """Review r2 #8: the default leaves at least half of a process's connection pool free."""
+        for pool, cap in ((64, 32), (200, jobs.MAX_ACTIVE_JOBS_TOTAL), (1, 1), (None, 32)):
+            with patch.dict(config.options, {'db_maxconn': pool}):
+                self.assertEqual(jobs.default_total_cap(), cap, pool)
+
     def test_database_cap(self):
         ICP = self.env['ir.config_parameter'].sudo()
         ICP.set_param('im_livechat_ai.max_active_jobs', '0')
@@ -427,28 +469,107 @@ class TestReplyCaps(RuntimeCase):
 
 
 class TestAlertConcurrency(RuntimeCase):
-    """The flag of the blocked alert is flushed inside its savepoint: a concurrent update is re-raised so
-    Odoo retries the request, and the transaction stays usable (review #10)."""
+    """The claim of the blocked alert runs inside its savepoint: a concurrent update is re-raised so
+    Odoo retries the request, and the transaction stays usable (review #10). The claim is one UPDATE of the
+    channel row with a 10-minute window (review r2 #1, #11)."""
 
-    def test_flag_conflict_is_re_raised(self):
+    def test_claim_conflict_is_re_raised(self):
         self.env.flush_all()
         self.env.cr.execute("UPDATE im_livechat_ai_connection SET api_key_secret = NULL WHERE id = %s",
                             (self.channel.sudo().ai_assistant_id.connection_id.id,))
         self.env.invalidate_all()
         session, guest, _m = self.session(text=None)
         Channel = type(self.env['im_livechat.channel'])
-        original = Channel.flush_recordset
-
-        def flush_recordset(records, fnames=None):
-            if fnames == ['ai_blocked_alert_sent']:
-                raise psycopg2.errors.SerializationFailure('concurrent update')
-            return original(records, fnames)
-
-        with patch.object(Channel, 'flush_recordset', flush_recordset), \
+        with patch.object(Channel, '_ai_claim_alert', side_effect=psycopg2.errors.SerializationFailure('update')), \
                 self.assertRaises(psycopg2.errors.SerializationFailure), mute_logger(CHANNEL_LOGGER):
             self.guest_post(session, guest, '你好')
         self.env.cr.execute("SELECT 1")
         self.assertEqual(self.env.cr.fetchone(), (1,), 'the cursor is still usable')
+
+    def test_claim_reads_the_row(self):
+        """The flag another transaction set wins over this transaction's cache (job threads read committed
+        rows: check-then-set on the cache let each thread alert)."""
+        channel = self.channel.sudo()
+        self.assertFalse(channel.ai_blocked_alert_sent)  # cached
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_blocked_alert_sent = TRUE WHERE id = %s",
+                            (channel.id,))
+        notify = MagicMock()
+        self.channel._ai_alert_once(notify)
+        notify.assert_not_called()
+
+    def _age_alert(self, minutes):
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_blocked_alert_at = ai_blocked_alert_at "
+                            "- interval '%s minutes' WHERE id = %%s" % int(minutes), (self.channel.id,))
+        self.env.invalidate_all()
+
+    def test_window(self):
+        notify = MagicMock()
+        channel = self.channel.sudo()
+        self.channel._ai_alert_once(notify)
+        self.assertEqual(notify.call_count, 1)
+        self.assertTrue(channel.ai_blocked_alert_sent and channel.ai_blocked_alert_at)
+        self._age_alert(11)
+        self.channel._ai_alert_once(notify)
+        self.assertEqual(notify.call_count, 1, 'the period has not ended (no reply queued)')
+        channel.ai_blocked_alert_sent = False  # a reply was queued: the period ends
+        self.channel._ai_alert_once(notify)
+        self.assertEqual(notify.call_count, 2, 'a new period after the window')
+        channel.ai_blocked_alert_sent = False
+        self.channel._ai_alert_once(notify)
+        self.assertEqual(notify.call_count, 2, 'a new period within the window: no alert')
+
+
+class TestFailureAlertClaim(RuntimeCase):
+    """Review r2 #7 and #14: one alert per kind of failure and channel in 10 minutes, whatever the order in
+    which jobs that fail together commit; the window starts at the alert."""
+
+    def _failed(self, error, alerted, minutes_ago):
+        session, _g, message = self.session()
+        job = self.env['im_livechat.ai.job']._create_for_message(session, message)
+        job.write({'state': 'failed', 'error': error, 'alert_sent': alerted,
+                   'finished_at': fields.Datetime.now() - timedelta(minutes=minutes_ago)})
+        return job
+
+    def test_an_alert_by_a_later_job_counts(self):
+        mine = self._failed('HTTP 500: x', False, 0)
+        self._failed('HTTP 500: y', True, 1)  # a higher id that committed first
+        self.assertFalse(mine._claim_failure_alert('HTTP 500: z'))
+        self.assertFalse(mine.alert_sent)
+
+    def test_the_window_starts_at_the_alert(self):
+        self._failed('HTTP 500: a', True, 11)  # the alert, 11 minutes ago
+        self._failed('HTTP 500: b', False, 2)  # announced by that alert
+        mine = self._failed('HTTP 500: c', False, 0)
+        self.assertTrue(mine._claim_failure_alert('HTTP 500: c'))
+        self.assertTrue(mine.alert_sent)
+        later = self._failed('HTTP 500: d', False, 0)
+        self.assertFalse(later._claim_failure_alert('HTTP 500: d'), 'within the new window')
+        self.assertTrue(later._claim_failure_alert('the backend did not answer in time (ReadTimeout)'),
+                        'another kind')
+
+
+class TestAnswerAuthor(RuntimeCase):
+    """Review r2 #12: the answer is posted under the assistant that wrote it, also when a manager switches
+    the channel's assistant while the backend answers."""
+
+    @patch(POST)
+    def test_assistant_switched_during_the_call(self, mock_post):
+        writer = self.channel._get_bot_partner()
+        other = make_assistant(self.env, name='另一位助理')
+
+        def answer(*_args, **_kwargs):
+            self.channel.sudo().ai_assistant_id = other
+            return _ok('原助理的回答')
+
+        mock_post.side_effect = answer
+        session, guest, _m = self.session(text=None)
+        self.guest_post(session, guest, '請問')
+        job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
+        job._run_job(commit=False)
+        self.assertEqual(job.state, 'done')
+        self.assertEqual(job.reply_message_id.author_id, writer)
+        self.assertNotEqual(writer, other.partner_id)
 
 
 class TestUnexpectedErrorFrames(RuntimeCase):

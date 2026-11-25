@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 08:07+0000\n"
-"PO-Revision-Date: 2026-11-25 08:07+0000\n"
+"POT-Creation-Date: 2026-11-25 10:33+0000\n"
+"PO-Revision-Date: 2026-11-25 10:33+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -773,6 +773,11 @@ msgid "Last 7 Days"
 msgstr ""
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_at
+msgid "Last Cannot-Answer Alert"
+msgstr ""
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
 msgid "Last Message In Context"
 msgstr ""
@@ -1116,6 +1121,11 @@ msgid ""
 "Operator replied: the AI stays silent until the pause ends. Visitor asked "
 "for a human: the AI waits for an operator; if none replies, it answers the "
 "messages written meanwhile when the wait ends."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__alert_sent
+msgid "Operators Alerted"
 msgstr ""
 
 #. module: im_livechat_ai
@@ -1906,6 +1916,13 @@ msgid "This field can only be searched as equal to True or False."
 msgstr ""
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__alert_sent
+msgid ""
+"This job's failure alerted the operators; the same kind of failure of the "
+"channel is not announced again for 10 minutes."
+msgstr ""
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
 msgid ""
 "Time for one answer, retries included (10-300 seconds). Each call waits at "
@@ -2054,6 +2071,13 @@ msgstr ""
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__timestamp
 msgid "When the answer was asked"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_at
+msgid ""
+"When the operators were last alerted that the AI of this channel cannot "
+"answer: at most one such alert in 10 minutes."
 msgstr ""
 
 #. module: im_livechat_ai

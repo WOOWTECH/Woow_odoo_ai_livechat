@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 08:07+0000\n"
-"PO-Revision-Date: 2026-11-25 08:07+0000\n"
+"POT-Creation-Date: 2026-11-25 10:33+0000\n"
+"PO-Revision-Date: 2026-11-25 10:33+0000\n"
 "Last-Translator: WOOWTECH\n"
 "Language-Team: Chinese (Traditional)\n"
 "Language: zh_TW\n"
@@ -781,6 +781,11 @@ msgid "Last 7 Days"
 msgstr "最近 7 天"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_at
+msgid "Last Cannot-Answer Alert"
+msgstr "上次「無法回覆」提醒"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__context_message_id
 msgid "Last Message In Context"
 msgstr "送給 AI 的最後一則訊息"
@@ -1143,6 +1148,11 @@ msgid ""
 "for a human: the AI waits for an operator; if none replies, it answers the "
 "messages written meanwhile when the wait ends."
 msgstr "客服已發言：暫停結束前 AI 不出聲。訪客要求真人：AI 等候客服接手；等候結束時若沒有客服回覆，AI 會回答等候期間的訊息。"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__alert_sent
+msgid "Operators Alerted"
+msgstr "已提醒客服人員"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_sent
@@ -1960,6 +1970,13 @@ msgid "This field can only be searched as equal to True or False."
 msgstr "這個欄位只能以等於 True 或 False 搜尋。"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__alert_sent
+msgid ""
+"This job's failure alerted the operators; the same kind of failure of the "
+"channel is not announced again for 10 minutes."
+msgstr "這個回覆工作的失敗已提醒客服人員；這個頻道同一種失敗 10 分鐘內不會再提醒。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
 msgid ""
 "Time for one answer, retries included (10-300 seconds). Each call waits at "
@@ -2117,6 +2134,13 @@ msgstr "客服在對話中發言後，AI 暫停回覆這段對話的分鐘數；
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__timestamp
 msgid "When the answer was asked"
 msgstr "提出請求的時間"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_blocked_alert_at
+msgid ""
+"When the operators were last alerted that the AI of this channel cannot "
+"answer: at most one such alert in 10 minutes."
+msgstr "上次提醒客服人員這個頻道的 AI 無法回覆的時間：10 分鐘內最多提醒一次。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_channel__ai_handoff_wait_minutes

@@ -31,8 +31,9 @@ Odoo only has technical queue caps:
 |---|---|
 | Replies at a time per conversation | one (an advisory lock per conversation); a newer visitor message supersedes the pending reply, which then answers all of them |
 | Unfinished replies per Live Chat channel | 30; system parameter `im_livechat_ai.max_active_jobs` (0 turns the cap off) |
-| Unfinished replies of the whole database | half of `db_maxconn`, the connection pool of one Odoo process (32 with Odoo's default of 64), at most 60; system parameter `im_livechat_ai.max_active_jobs_total` (0 turns the cap off). Each running reply holds a thread and a pooled connection of its process during its call: keep `db_maxconn` at least twice this cap on a process that runs replies |
-| A message a cap refuses | no reply job; the conversation gets the blocked notice once per period, the operators one alert per period and at most one per channel in 10 minutes, the server log a warning at most every 10 minutes |
+| Unfinished replies of the whole database | 60; system parameter `im_livechat_ai.max_active_jobs_total` (0 turns the cap off): an abuse bound, whatever the processes |
+| Reply threads holding a connection, per Odoo process | half of what the process's connection pool (`db_maxconn`) leaves after the cron threads, at least 1; the other half stays free for web requests. A reply thread takes a slot before it opens its database cursor and waits for one holding no connection; after 5 minutes (1 minute for the recovery cron's threads) it gives up and the job stays pending for the recovery cron |
+| A message a cap refuses | no reply job; the conversation gets the blocked notice once per period, the operators one alert per period and at most one per channel in 10 minutes (its own alert: it does not hide the blocked alert), the server log a warning at most every 10 minutes |
 | Debounce | 1.5 s: rapid visitor messages get one reply |
 | Runs of one reply job | at most 3 (a run is restarted only after a crash or a restart) |
 | Age | a reply job older than 30 minutes is given up; the operators are alerted |
@@ -275,9 +276,9 @@ Every reply is treated as untrusted text: a small markdown subset (paragraphs, l
 lists, tables, headings, code) is rendered after escaping, and the result is sanitized. Only `http(s)`
 links to the site's own hosts (`web.base.url` and the websites' domains) become clickable; any other link,
 a link with userinfo (`@`) or a backslash, and every other scheme stay plain text. Quotes and lists deeper
-than 8 levels are rendered flat, so no reply can exhaust the recursion limit. A line longer than 2000
-characters, counted after escaping (an `&` counts 5), is shown without bold, italics, strike-through or
-heading (code spans and links still work). A table has at most 30 columns (a wider one is shown as text) and
+than 8 levels are rendered flat, so no reply can exhaust the recursion limit. A heading line longer than 2000
+characters as written is shown as a paragraph; bold, italics and strike-through are skipped in a piece of a
+line longer than 2000 characters counted after escaping (an `&` counts 5); code spans and links still work. A table has at most 30 columns (a wider one is shown as text) and
 3000 cells (later rows are shown as text). Every step takes time linear in the reply.
 
 ## Signed download URLs
@@ -309,7 +310,9 @@ is not ready (archived, no URL, a URL that is not allowed, no key or no model fo
   history, never answered);
 - the channel's operators get one alert per blocked period (an OdooBot message and a toast), at most one per
   channel in 10 minutes; the alert is claimed with one update of the channel row, so concurrent requests and
-  job threads never both alert;
+  job threads never both alert (the row lock does not conflict with inserts that reference the channel). The
+  alert that the caps refuse messages is a separate one with its own period and window. An alert that reached
+  nobody (no operator found, every message failed) is not counted: the next message tries again;
 - the server log gets a warning at most once every 10 minutes per channel and process.
 
 The gate applies again when the reply job runs and before it posts the answer (contract 3.5): a job blocked

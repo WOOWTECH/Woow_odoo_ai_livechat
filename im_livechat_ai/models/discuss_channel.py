@@ -71,6 +71,14 @@ def strip_handoff_marker(text):
 PAUSE_OPERATOR = 'operator'
 PAUSE_HANDOFF = 'handoff'
 
+# The AI fields of a session at its creation (given explicitly, see DiscussChannel.create)
+SESSION_AI_VALUES = {
+    'ai_paused_until': False,
+    'ai_pause_reason': False,
+    'ai_pause_notice_sent': False,
+    'ai_blocked_notice_sent': False,
+}
+
 # Author kinds returned by _ai_author_kind
 AUTHOR_VISITOR = 'visitor'
 AUTHOR_OPERATOR = 'operator'  # internal (non-share) user who is not the visitor: a human operator
@@ -416,11 +424,14 @@ class DiscussChannel(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         """The client may send a context with default_<field> keys to routes
-        that open a live chat session: the AI fields of a session (pause,
-        notices) are set by this module only, never taken from that context."""
+        that open a live chat session, and the session is created with the
+        visitor's uid (sudo keeps it), whose own ir.default rows create() would
+        read too: the AI fields of a session (pause, notices) are set by this
+        module only, so they are given explicitly and the keys are dropped."""
         if any(key.startswith('default_ai_') for key in self.env.context):
             self = self.with_context({key: value for key, value in self.env.context.items()  # noqa: PLW0642
                                       if not key.startswith('default_ai_')})
+        vals_list = [{**SESSION_AI_VALUES, **vals} for vals in vals_list]
         return super(DiscussChannel, self).create(vals_list)
 
     def _notify_thread(self, message, msg_vals=False, **kwargs):

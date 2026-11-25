@@ -199,9 +199,10 @@ class TestOwnDefaults(ClientContextCase):
             return original(records, vals_list)
 
         with patch.object(Job, 'create', create):
-            job = self.Job._create_for_message(session, message)
+            # from an employee's request: the job is still created by the superuser
+            job = self.env['im_livechat.ai.job'].with_user(self.operator)._create_for_message(session, message)
         self.assertEqual(len(given), 1)
-        self.assertEqual(job.create_uid.id, SUPERUSER_ID, 'created as the superuser')
+        self.assertEqual(job.sudo().create_uid.id, SUPERUSER_ID, 'created as the superuser')
         automatic = set(models.MAGIC_COLUMNS) | {'display_name'}
         stored = {name for name, field in self.Job._fields.items() if field.store and name not in automatic}
         self.assertEqual(stored - set(given[0]), set())
@@ -231,6 +232,27 @@ class TestOwnDefaults(ClientContextCase):
         channel = self.env['im_livechat.channel'].with_user(self.operator).sudo().create({'name': 'Sudo defaults'})
         self.assertFalse(channel.ai_enabled)
         self.assertFalse(channel.ai_assistant_id)
+
+    def test_session_ignores_the_users_own_defaults(self):
+        """Review r3 #6: a session is created with the visitor's uid (sudo keeps it): his own ir.default rows
+        never pause the AI of his session or mark its notices sent."""
+        employee = new_test_user(self.env, login='ctx_session', name='Session Employee', groups='base.group_user')
+        for field, value in (('ai_paused_until', '2099-01-01 00:00:00'), ('ai_pause_reason', 'handoff'),
+                             ('ai_blocked_notice_sent', True), ('ai_pause_notice_sent', True)):
+            self._own_default(employee, 'discuss.channel', field, value)
+        session = self.env['discuss.channel'].with_user(employee).sudo().create({
+            'name': 'Own defaults', 'channel_type': 'livechat', 'livechat_channel_id': self.channel.id,
+            'livechat_operator_id': self.operator.partner_id.id})
+        self.assertFalse(session.ai_paused_until)
+        self.assertFalse(session.ai_pause_reason)
+        self.assertFalse(session.ai_blocked_notice_sent)
+        self.assertFalse(session.ai_pause_notice_sent)
+
+    def test_session_values_cover_every_ai_field(self):
+        from odoo.addons.im_livechat_ai.models.discuss_channel import SESSION_AI_VALUES
+        stored = {name for name, field in self.env['discuss.channel']._fields.items()
+                  if name.startswith('ai_') and field.store}
+        self.assertEqual(stored, set(SESSION_AI_VALUES))
 
     def test_manager_defaults_apply(self):
         assistant = self.channel.sudo().ai_assistant_id

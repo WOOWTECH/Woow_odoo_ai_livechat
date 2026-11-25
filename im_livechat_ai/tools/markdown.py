@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """A small, dependency-free markdown subset -> safe HTML renderer.
 
-Used for every AI reply posted in a live chat (both backends); aligned with
-the renderer of Discuss AI and Project AI, with this module's link rule. Odoo 18 ships no markdown library, so no dependency is added.
+Used for every AI reply posted in a live chat (both backends); the same
+markdown subset and output as the renderers of Discuss AI and Project AI, with
+this module's link rule (the parsing here is linear in the reply). Odoo 18
+ships no markdown library, so no dependency is added.
 Everything the backend sends is treated as untrusted text: each piece of
 text is escaped first and only then wrapped in the few tags generated here;
 the result is passed through Odoo's ``html_sanitize`` as a second line of
@@ -46,11 +48,11 @@ MAX_INPUT_LENGTH = 100000  # characters; longer replies are cut (with a marker)
 # nesting of quotes and lists: deeper levels are rendered flat (their text), so
 # no reply can exhaust the recursion limit (a thousand '>' would)
 MAX_NESTING = 8
-# Lines (and pieces of lines) longer than this, counted after escaping (an &
-# counts 5), are not searched for emphasis or headings: those patterns rescan
-# to the end of the line for every opener that has no closer, which a long
-# answer could use to hold the worker for seconds. Such text is still escaped
-# and shown, links and code spans included.
+# Pieces of a line longer than this, counted after escaping (an & counts 5),
+# are not searched for emphasis (the patterns rescan to the end of the piece
+# for every opener that has no closer), and a line longer than this as written
+# is not a heading. Such text is still escaped and shown, links and code spans
+# included.
 MAX_FORMATTED_LINE = 2000
 # Tables: more columns than this are not a table (shown as text); rows past
 # MAX_TABLE_CELLS cells end the table (shown as text).

@@ -62,7 +62,8 @@ def strip_handoff_marker(text):
     if not text or not HANDOFF_MARKER_RE.search(text):
         return text, False
     text = HANDOFF_MARKER_RE.sub('', text)
-    text = re.sub(r'[ \t]+\n', '\n', text)
+    # trailing blanks of each line, in linear time (the pattern [ \t]+\n is quadratic on a long run of blanks)
+    text = '\n'.join(line.rstrip(' \t') for line in text.split('\n'))
     return re.sub(r'\n{3,}', '\n\n', text).strip(), True
 
 
@@ -288,7 +289,7 @@ def check_token(secret, attachment_id, checksum, token, now=None):
     if not secret or not token or '.' not in token:
         return False
     expires, signature = token.split('.', 1)
-    if not (expires.isascii() and expires.isdigit()) or len(expires) > 12:
+    if not (expires.isascii() and expires.isdigit()) or len(expires) > 12 or not signature.isascii():
         return False
     if int(expires) < int(now if now is not None else time.time()):
         return False

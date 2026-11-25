@@ -26,7 +26,11 @@ Supported (enough for chat replies):
   plain text (its label, or the URL itself), against prompt-injected
   phishing links
 - GFM tables (``| a | b |`` + ``|---|:-:|``), rendered as
-  ``<table class="table table-sm table-bordered">``
+  ``<table class="table table-sm table-bordered">``: at most MAX_TABLE_COLUMNS
+  columns and MAX_TABLE_CELLS cells (further rows are shown as text)
+
+Bounded work: every pattern is linear in its input or runs on at most
+MAX_FORMATTED_LINE characters, so no answer can hold a worker for long.
 """
 
 import re
@@ -42,18 +46,31 @@ MAX_INPUT_LENGTH = 100000  # characters; longer replies are cut (with a marker)
 # nesting of quotes and lists: deeper levels are rendered flat (their text), so
 # no reply can exhaust the recursion limit (a thousand '>' would)
 MAX_NESTING = 8
-# Lines (and pieces of lines) longer than this are not searched for emphasis or
-# headings: those patterns rescan to the end of the line for every opener that
-# has no closer, which a long answer could use to hold the worker for seconds.
-# Such text is still escaped and shown, links included.
+# Lines (and pieces of lines) longer than this, counted after escaping (an &
+# counts 5), are not searched for emphasis or headings: those patterns rescan
+# to the end of the line for every opener that has no closer, which a long
+# answer could use to hold the worker for seconds. Such text is still escaped
+# and shown, links and code spans included.
 MAX_FORMATTED_LINE = 2000
+# Tables: more columns than this are not a table (shown as text); rows past
+# MAX_TABLE_CELLS cells end the table (shown as text).
+MAX_TABLE_COLUMNS = 30
+MAX_TABLE_CELLS = 3000
 
-_FENCE_RE = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)\s*$')
-_HEADING_RE = re.compile(r'^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$')
+# Matched on the line without its trailing blanks: one \s* before the end, not
+# two around the info word (quadratic on a long run of blanks).
+_FENCE_RE = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)$')
+# The heading prefix only; the closing #s and blanks are stripped (_heading):
+# one pattern with \s* on both sides of #* was cubic on a long run of blanks.
+_HEADING_PREFIX_RE = re.compile(r'^\s{0,3}(#{1,6})\s+')
 _HR_RE = re.compile(r'^\s{0,3}([-*_])(\s*\1){2,}\s*$')
 _LIST_RE = re.compile(r'^(?P<indent>\s*)(?P<marker>[-*+]|\d{1,9}[.)])\s+(?P<text>.*)$')
 _QUOTE_RE = re.compile(r'^\s{0,3}>\s?(.*)$')
 _TABLE_SEP_CELL_RE = re.compile(r'^\s*:?-{1,}:?\s*$')
+# Code spans: the rule is this pattern (with re.split); _split_code_spans
+# applies it in linear time (the pattern is cubic in a long run of backticks).
+_CODE_SPAN_RE = re.compile(r'(`+)(.+?)\1')
+_TICKS_RE = re.compile('`+')
 
 # Inline tokens, in priority order. Code spans are handled before this.
 _INLINE_RE = re.compile(
@@ -149,11 +166,54 @@ def _inline_no_code(text):
     return Markup('').join(parts)
 
 
+def _split_code_spans(text):
+    """``_CODE_SPAN_RE.split(text)`` in linear time, for text without a
+    newline: [text, ticks, code, text, ticks, code, ..., text].
+
+    At the first backtick left (a run of R backticks there), the pattern
+    takes the longest opening of L backticks that L later backticks can
+    close: a later run of at least L (the first one closes it), or the same
+    run when 2L + 1 <= R (the content is then one backtick). The longest
+    later run is known for every run, so each run is looked at once."""
+    if '\n' in text:
+        return _CODE_SPAN_RE.split(text)
+    runs = [(match.start(), match.end()) for match in _TICKS_RE.finditer(text)]
+    if not runs:
+        return [text]
+    lengths = [end - start for start, end in runs]
+    longest_after = [0] * (len(runs) + 1)  # longest_after[k]: the longest of runs[k:]
+    for k in range(len(runs) - 1, -1, -1):
+        longest_after[k] = max(lengths[k], longest_after[k + 1])
+    pieces, position, k = [], 0, 0
+    while k < len(runs):
+        start, end = runs[k]
+        if end <= position:
+            k += 1
+            continue
+        first = max(start, position)
+        run = end - first
+        inside = (run - 1) // 2
+        length = max(min(run, longest_after[k + 1]), inside)
+        if length <= 0:
+            break  # no backtick after this one: no more code spans
+        if length <= inside:
+            closing = first + length + 1
+        else:
+            k += 1
+            while lengths[k] < length:
+                k += 1
+            closing = runs[k][0]
+        pieces += [text[position:first], text[first:first + length], text[first + length:closing]]
+        position = closing + length
+    pieces.append(text[position:])
+    return pieces
+
+
 def render_inline(text):
     """One line (or table cell) of markdown -> Markup."""
     parts = []
     # code spans first: their content is never formatted
-    pieces = re.split(r'(`+)(.+?)\1', text)
+    pieces = _split_code_spans(text)
     # re.split with 2 groups yields [text, ticks, code, text, ticks, code, ...]
     i = 0
     while i < len(pieces):
@@ -193,7 +253,8 @@ def _is_table_start(lines, i):
     if '|' not in sep and '-' not in sep:
         return False
     cells = _split_row(sep)
-    return bool(cells) and all(_TABLE_SEP_CELL_RE.match(c) for c in cells) and len(_split_row(lines[i])) >= 1
+    return (bool(cells) and all(_TABLE_SEP_CELL_RE.match(c) for c in cells)
+            and 1 <= len(_split_row(lines[i])) <= MAX_TABLE_COLUMNS)
 
 
 def _render_table(lines, i):
@@ -222,7 +283,10 @@ def _render_table(lines, i):
     out += [cell_html('th', h, a) for h, a in zip(header, aligns)]
     out.append(Markup('</tr></thead><tbody>'))
     i += 2
-    while i < len(lines) and lines[i].strip() and '|' in lines[i]:
+    # every row is padded to the header's columns: bounded by MAX_TABLE_CELLS
+    rows_left = MAX_TABLE_CELLS // ncols - 1
+    while i < len(lines) and lines[i].strip() and '|' in lines[i] and rows_left > 0:
+        rows_left -= 1
         row = (_split_row(lines[i]) + [''] * ncols)[:ncols]
         out.append(Markup('<tr>'))
         out += [cell_html('td', c, a) for c, a in zip(row, aligns)]
@@ -282,13 +346,24 @@ def _render_list(lines, i, depth=0):
 
 
 def _heading(line):
-    return _HEADING_RE.match(line) if len(line) <= MAX_FORMATTED_LINE else None
+    """The text of a heading line ('## Title ##' -> 'Title'; '#' -> '' is a
+    heading too), or None."""
+    if len(line) > MAX_FORMATTED_LINE:
+        return None
+    match = _HEADING_PREFIX_RE.match(line)
+    if not match:
+        return None
+    return line[match.end():].rstrip().rstrip('#').rstrip()
+
+
+def _fence(line):
+    return _FENCE_RE.match(line.rstrip())
 
 
 def _is_block_start(lines, i):
     line = lines[i]
     return bool(
-        _FENCE_RE.match(line) or _heading(line) or _HR_RE.match(line)
+        _fence(line) or _heading(line) is not None or _HR_RE.match(line)
         or _LIST_RE.match(line) or _QUOTE_RE.match(line) or _is_table_start(lines, i)
     )
 
@@ -301,7 +376,7 @@ def _render_blocks(lines, depth=0):
         if not line.strip():
             i += 1
             continue
-        fence = _FENCE_RE.match(line)
+        fence = _fence(line)
         if fence:
             marker = fence.group(1)
             code = []
@@ -313,8 +388,8 @@ def _render_blocks(lines, depth=0):
             out.append(Markup('<pre><code>%s</code></pre>') % '\n'.join(code))
             continue
         heading = _heading(line)
-        if heading:
-            out.append(Markup('<h4>%s</h4>') % render_inline(heading.group(2)))
+        if heading is not None:
+            out.append(Markup('<h4>%s</h4>') % render_inline(heading))
             i += 1
             continue
         if _HR_RE.match(line):
@@ -354,11 +429,20 @@ def _render_blocks(lines, depth=0):
 
 
 def _strip_quote_markers(line):
-    match = _QUOTE_RE.match(line)
-    while match:
-        line = match.group(1)
-        match = _QUOTE_RE.match(line)
-    return line
+    """Every leading quote marker removed (what repeating _QUOTE_RE does), in
+    linear time: one pass over the markers instead of a copy of the rest of
+    the line per marker."""
+    position, length = 0, len(line)
+    while True:
+        cursor = position
+        while cursor < length and cursor - position < 3 and line[cursor].isspace():
+            cursor += 1
+        if cursor >= length or line[cursor] != '>':
+            return line[position:]
+        cursor += 1
+        if cursor < length and line[cursor].isspace():
+            cursor += 1
+        position = cursor
 
 
 def markdown_to_html(text, link_hosts=()):

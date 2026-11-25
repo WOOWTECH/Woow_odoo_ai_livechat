@@ -174,18 +174,25 @@ class LLMEmptyResponse(ValueError):
     """The backend answered with no visible content."""
 
 
+def _think_name(match):
+    """'think' or 'thinking' for a match of the tag name. By its length, not
+    by lower(): the pattern ignores case with Unicode folding, so it matches
+    'thınk' (dotless i) or 'thİnk', whose lower() is neither name."""
+    return 'thinking' if len(match.group(1)) == 8 else 'think'
+
+
 def _strip_think_pairs(text):
     """``_THINK_RE.sub('', text)`` in linear time: each opener is paired with
     the nearest closer of the same name after it, leftmost first."""
     closers = {'think': [], 'thinking': []}
     for match in _THINK_CLOSER_RE.finditer(text):
-        closers[match.group(1).lower()].append((match.start(), match.end()))
+        closers[_think_name(match)].append((match.start(), match.end()))
     starts = {name: [start for start, _end in found] for name, found in closers.items()}
     parts, position = [], 0
     for match in _THINK_OPENER_RE.finditer(text):
         if match.start() < position:
             continue  # inside a block already removed
-        name = match.group(1).lower()
+        name = _think_name(match)
         index = bisect.bisect_left(starts[name], match.end())
         if index == len(starts[name]):
             continue  # no closer of this name after it (an unclosed block is removed below)

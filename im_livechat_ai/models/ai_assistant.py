@@ -119,6 +119,7 @@ class LivechatAiAssistant(models.Model):
 
     # --- Computed (read with administrator rights, only yes / no shown) ---
 
+    @api.depends('active', 'livechat_available')
     def _compute_livechat_selectable(self):
         # sudo: livechat_available is for system administrators; the yes / no is not sensitive
         for assistant in self:

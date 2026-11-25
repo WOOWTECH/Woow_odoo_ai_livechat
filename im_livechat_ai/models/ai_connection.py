@@ -108,9 +108,11 @@ class LivechatAiConnection(models.Model):
                              'LiteLLM connection without one is not ready and fails Test Connection.')
     timeout_seconds = fields.Integer(
         string='Timeout (seconds)', default=LITELLM_DEFAULT_TIMEOUT,
-        help='Total time allowed for one answer, retries included (10-300 seconds). New connections: 45 '
-             'seconds for LiteLLM, 120 seconds for n8n. Live Chat replies are not streamed: the visitor gets '
-             'the whole answer, or the error message when the time is up. A timed-out call is never retried.')
+        help='Time for one answer, retries included (10-300 seconds). Each call waits at most the time left for '
+             'the backend, after at most 10 seconds to connect; a backend that keeps sending bytes slowly can take '
+             'longer. New connections: 45 seconds for LiteLLM, 120 seconds for n8n. Live Chat replies are not '
+             'streamed: the visitor gets the whole answer, or the error message when the time is up. A timed-out '
+             'call is never retried.')
     max_retries = fields.Integer(
         string='Retries', default=DEFAULT_MAX_RETRIES,
         help='Retries (0-2) when the connection could not be opened or the backend answered HTTP 429 or 503, '

@@ -301,6 +301,30 @@ class TestMigration200(MigrationCase):
         self.assertEqual(len(found), 2)
         self.assertTrue(set(possible) - set(found))
 
+    def test_long_retention_listed(self):
+        """Review #13/#17: the channels that kept call logs longer than the fixed 30 days are listed."""
+        post = load_migration('18.0.2.0.0', 'post-migrate')
+        kept = self.legacy('Kept 90 days', ai_endpoint_url='https://x.example/v1', ai_model='m', token='d',
+                           ai_log_retention_days=90)
+        self.legacy('Kept 30 days', ai_endpoint_url='https://x.example/v1', ai_model='m', token='d',
+                    ai_log_retention_days=30)
+        self.env.flush_all()
+        self.assertEqual(post.long_retention_channels(self.env.cr), [kept.id])
+
+    def test_translation_failure_does_not_stop_the_upgrade(self):
+        """Review #34: the translations are labels only; a failure is logged (type name and frames, never the
+        text) and the upgrade goes on."""
+        post = load_migration('18.0.2.0.0', 'post-migrate')
+        channel = self.legacy('Translations', ai_endpoint_url='https://x.example/v1', ai_model='m', token='d')
+        self.migrate()
+        with patch.object(post, 'reload_translations', side_effect=ValueError('private text')), \
+                self.assertLogs(level=logging.WARNING) as logs:
+            post.migrate(self.env.cr, '18.0.1.3.5')
+        dump = '\n'.join(logs.output)
+        self.assertIn('could not be reloaded (ValueError)', dump)
+        self.assertNotIn('private text', dump)
+        self.assertTrue(channel.ai_assistant_id, 'the data moved before stays')
+
 
 class TestUpgradeGuards(MigrationCase):
     """migrations/18.0.2.0.0/pre-migrate.py"""

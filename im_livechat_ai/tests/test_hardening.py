@@ -62,7 +62,7 @@ class TestNames(TransactionCase):
         self.assertEqual(person_name('老闆] [負責同事'), '老闆] [負責同事', 'as stored')
         self.assertEqual(one_line_name('Mallory \n - account: [admin]'), 'Mallory - account: (admin)')
         self.assertEqual(one_line_name('x' * 100), 'x' * 80)
-        self.assertEqual(one_line_name('a@b.example'), '')
+        self.assertEqual(one_line_name('a@example.com'), '')
 
     def test_operator_prefix(self):
         named = new_test_user(self.env, login='op_named', name='小美 [主管]', groups='base.group_user')

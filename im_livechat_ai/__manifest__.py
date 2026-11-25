@@ -15,9 +15,11 @@ such as product lookup, moderation, permissions). Backends: LiteLLM (OpenAI
 compatible /v1/chat/completions, Bearer key) or an n8n webhook (HMAC-SHA256
 signed requests, the secret is never sent). Nothing else.
 
-Two layers, aligned with Discuss AI and Project AI (each product has its own
-core; nothing is shared):
---------------------------------------------------------------------------
+Two layers, aligned with Discuss AI and Project AI:
+---------------------------------------------------
+
+Each product has its own core; nothing is shared.
+
 
 * AI Connections (「AI 連線」, system administrators only): backend type,
   endpoint URL, write-only API key, model, timeout of one answer, retries,

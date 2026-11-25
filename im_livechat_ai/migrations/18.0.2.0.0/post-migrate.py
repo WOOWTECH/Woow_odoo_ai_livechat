@@ -25,6 +25,7 @@ AI connections and AI assistants (models/ai_migration.py).
 
 import json
 import logging
+import traceback
 from urllib.parse import urlsplit
 
 from odoo import SUPERUSER_ID, api
@@ -101,6 +102,14 @@ def reload_translations(cr):
     return langs
 
 
+def long_retention_channels(cr):
+    """Ids of the channels whose 18.0.1.x Log Retention (days) was above the fixed 30 days of 18.0.2.0.0."""
+    if not sql.column_exists(cr, 'im_livechat_channel', 'ai_log_retention_days'):
+        return []
+    cr.execute("SELECT id FROM im_livechat_channel WHERE ai_log_retention_days > 30 ORDER BY id")
+    return [row[0] for row in cr.fetchall()]
+
+
 def migrate(cr, version):
     if not version:
         return
@@ -126,7 +135,20 @@ def migrate(cr, version):
     if possible:
         _logger.info("im_livechat_ai 18.0.2.0.0: possibly Hermes: LiteLLM AI connection(s) %s have no model or "
                      "send documents as links only, the way Hermes ones were set up. Check them", possible)
-    langs = reload_translations(cr)
+    longer = long_retention_channels(cr)
+    if longer:
+        _logger.info("im_livechat_ai 18.0.2.0.0: live chat channel(s) %s kept their call logs longer than 30 days; "
+                     "18.0.2.0.0 keeps call logs and finished reply jobs 30 days, and the next daily cleanup "
+                     "deletes older ones", longer)
+    # Translations are labels only: a failure here must not stop the upgrade of the data moved above.
+    try:
+        with cr.savepoint():
+            langs = reload_translations(cr)
+    except Exception as e:  # noqa: BLE001 - the type name and code frames, never the text (contract 3.9)
+        _logger.warning("im_livechat_ai 18.0.2.0.0: the translations of this module could not be reloaded "
+                        "(%s); load them from Settings > Translations > Load a Translation: %s",
+                        type(e).__name__, ''.join(traceback.format_tb(e.__traceback__)).rstrip())
+        return
     if langs:
         _logger.info("im_livechat_ai 18.0.2.0.0: translations of this module reloaded over the old ones (%s)",
                      ', '.join(langs))

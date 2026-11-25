@@ -17,7 +17,7 @@
 ## Table of Contents
 
 - [Three separate AI products](#three-separate-ai-products)
-- [Alignment (contract v1)](#alignment-contract-v1)
+- [Alignment (contract v1.2)](#alignment-contract-v12)
 - [Overview](#overview)
 - [Upgrading to 18.0.2.0.0](#upgrading-to-180200)
 - [Upgrading to 18.0.1.2.1](#upgrading-to-180121)
@@ -55,11 +55,11 @@ Since 2026-11-24 discuss AI, project AI and Live Chat AI are three separate prod
 
 Live Chat AI is upgraded in place (18.0.2.0.0). The bridge `woow_ai_contact_livechat`, which once moved Live Chat channels onto the Discuss AI core, was removed from Discuss AI in 18.0.2.1.0 and was installed on no site; this module refuses to upgrade while it is installed.
 
-## Alignment (contract v1)
+## Alignment (contract v1.2)
 
-The three products are configured and run the same way through one written contract, [docs/CONTRACT.md](docs/CONTRACT.md): connection and assistant fields, roles and menus, how a turn runs, the n8n and LiteLLM wire formats, what people see, logs and usage, `neutralize.sql`, the zh_TW glossary and the upgrade rules. **This release (18.0.2.0.0) implements contract v1.** Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no identity block in the system message, clickable links only to the site's own hosts (contract 3.1).
+The three products are configured and run the same way through one written contract, [docs/CONTRACT.md](docs/CONTRACT.md): connection and assistant fields, roles and menus, how a turn runs, the n8n and LiteLLM wire formats, what people see, logs and usage, `neutralize.sql`, the zh_TW glossary and the upgrade rules. **This release (18.0.2.0.0) implements contract v1.2.** Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no identity block in the system message, no speaker labels (the text as the person typed it), conversation events in the n8n `events`, clickable links only to the site's own hosts (contract 3.1).
 
-The contract package is copied byte for byte into `im_livechat_ai/tests/contract/` (fixtures, the shared checks and `SHA256SUMS`; check with `cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS`). `tests/test_contract.py` runs the twelve contract checks against this module's own code (test tag `woow_ai_contract`). Never edit the package here: a contract change is a new contract version.
+The contract package is copied byte for byte into `im_livechat_ai/tests/contract/` (fixtures, the shared checks, `SHA256SUMS` and `READY`; check with `cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS`, which CI also runs). `tests/test_contract.py` runs the fourteen contract checks against this module's own code (test tag `woow_ai_contract`). Never edit the package here: a contract change is a new contract version.
 
 ---
 
@@ -77,7 +77,7 @@ Two layers, as in Discuss AI and Project AI (contract 3.2):
 
 Odoo only **records, forwards and manages** the conversation: the persona, tools (product lookup, Odoo MCP, ...), moderation and permissions belong to the backend. Operators stay in control: when an operator replies, or the visitor asks for a human, the AI pauses for that conversation. There is no default URL and no default model: AI stays off until a system administrator sets up an AI connection and an AI assistant and a Live Chat manager picks the assistant. Nothing of this module appears in the Settings app.
 
-**Limits live in the LiteLLM key.** Give each Live Chat connection its own LiteLLM virtual key with requests and tokens per minute, parallel requests and a budget. Odoo has no usage limit, only technical queue caps: one reply at a time per conversation, at most 30 unfinished replies per Live Chat channel (system parameter `im_livechat_ai.max_active_jobs`; 0 turns the cap off), a 1.5 s debounce, at most 3 runs per reply job, and reply jobs older than 30 minutes are given up. **AI Usage** counts replies and tokens per month, as a reference for invoicing by hand. Details: [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps).
+**Limits live in the LiteLLM key.** Give each Live Chat connection its own LiteLLM virtual key with requests and tokens per minute, parallel requests and a budget. Odoo has no usage limit, only technical queue caps: one reply at a time per conversation, at most 30 unfinished replies per Live Chat channel (system parameter `im_livechat_ai.max_active_jobs`) and 60 for the whole database (`im_livechat_ai.max_active_jobs_total`; 0 turns either cap off), a 1.5 s debounce, at most 3 runs per reply job, and reply jobs older than 30 minutes are given up. A visitor message a cap refuses gets the same notice as a blocked channel, and the operators one alert. **AI Usage** counts replies and tokens per month, as a reference for invoicing by hand. Details: [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps).
 
 ---
 
@@ -94,7 +94,9 @@ Odoo only **records, forwards and manages** the conversation: the persona, tools
 | Log Request Content | Off on the new connections; content stored for channels that logged it is erased. The old call logs are linked to their assistant and connection. |
 | Menus | Live Chat > Configuration: 「AI 連線」, 「AI 助理」, 「回覆工作」, 「呼叫紀錄」, 「AI 用量」, for system administrators only. Live Chat managers keep the channel's 「AI 助理」 tab. |
 | Hermes | Not supported any more (LiteLLM or n8n only). The server log lists (INFO, ids only) the connections that look like Hermes; they are not changed. |
-| Translations | This module's shipped translations are reloaded: a translation an administrator changed for one of its terms is replaced by the shipped one. |
+| Translations | This module's shipped translations are reloaded: a translation an administrator changed for one of its terms is replaced by the shipped one. A failure there is logged and does not stop the upgrade. |
+| Log Retention (days) | Gone: call logs and finished reply jobs are kept **30 days**. The next daily cleanup deletes older ones; the post-migration INFO line lists the channels that kept them longer. Export longer-kept call logs first. |
+| AI Usage | Starts empty: replies are counted from the upgrade on (the old call logs are linked to their assistant, not counted). |
 
 **What can stop answering after the upgrade.** An AI-enabled channel answers only when its assistant is active and available in Live Chat and its connection is ready: active, an allowed URL and, for LiteLLM, a key and a model. The upgrade copies the settings as they were, so a channel that could not answer before (no URL, LiteLLM without a key or a model) still cannot. It now gets **no reply job**: the conversation gets one notice per blocked period and the operators one alert. The post-migration WARNING line lists those channel ids.
 
@@ -108,19 +110,40 @@ Odoo only **records, forwards and manages** the conversation: the persona, tools
           COALESCE(btrim(ai_endpoint_url), '') <> '' AS has_url,
           ai_api_token_secret IS NOT NULL AS has_key,
           COALESCE(ai_backend_type, 'openai') AS backend,
-          COALESCE(btrim(ai_model), '') <> '' AS has_model
+          COALESCE(btrim(ai_model), '') <> '' AS has_model,
+          ai_log_retention_days
      FROM im_livechat_channel
     WHERE ai_enabled OR COALESCE(btrim(ai_endpoint_url), '') <> ''
     ORDER BY id;
+   SELECT count(*) AS call_logs_older_than_30_days FROM llm_api_log
+    WHERE create_date < now() at time zone 'UTC' - interval '30 days';
    ```
 
-   A row with `ai_enabled` and no URL, or with `backend = 'openai'` and no key or no model, is a channel that will be blocked: fix it on 18.0.1.3.5 first, or turn its AI off.
+   A row with `ai_enabled` and no URL, or with `backend = 'openai'` and no key or no model, is a channel that will be blocked: fix it on 18.0.1.3.5 first, or turn its AI off. A retention above 30 days means older call logs go at the first daily cleanup.
+3. Look for what still names a removed field (read-only; every query should return no row):
 
-**The upgrade stops, and changes nothing, when:**
+   ```sql
+   -- Settings views naming a removed Live Chat AI setting (18.0.1.1.0)
+   SELECT id FROM ir_ui_view WHERE model = 'res.config.settings' AND arch_db::text ~ '\mlivechat_ai_[a-z_]+';
+   -- views, server actions and automations, filters, exports and mail templates naming a removed channel field
+   WITH f(p) AS (SELECT '\m(ai_api_token|ai_api_token_set|ai_backend_type|ai_bot_name|ai_bot_partner_id|ai_connection_ready|ai_cron_lastcall|ai_document_mode|ai_endpoint_url|ai_error_message|ai_job_warning|ai_log_payload|ai_log_retention_days|ai_max_history|ai_max_retries|ai_model|ai_request_timeout|ai_stale_job_count|ai_system_prompt)\M'::text)
+   SELECT 'view' AS kind, v.id FROM ir_ui_view v, f WHERE v.arch_db::text ~ f.p
+      AND v.id NOT IN (SELECT res_id FROM ir_model_data WHERE model = 'ir.ui.view' AND module = 'im_livechat_ai')
+   UNION ALL SELECT 'server action', a.id FROM ir_act_server a, f WHERE a.code ~ f.p
+   UNION ALL SELECT 'filter', r.id FROM ir_filters r, f WHERE r.domain ~ f.p OR r.context ~ f.p
+   UNION ALL SELECT 'export', e.id FROM ir_exports_line e, f WHERE e.name ~ f.p
+   UNION ALL SELECT 'mail template', t.id FROM mail_template t, f WHERE t.body_html::text ~ f.p;
+   ```
+
+   Change or remove what they find first: such a record fails after the upgrade (the fields of the channel are gone), and a Settings view stops the upgrade.
+
+**The upgrade of this module stops, and changes nothing of its data, when:**
 
 - the database is below 18.0.1.1.0: upgrade to 18.0.1.3.5 first;
 - `woow_ai_contact_livechat` is installed, to upgrade or to remove: uninstall it first;
 - the retired 18.0.1.1.0 Settings view (`im_livechat_ai.res_config_settings_view_form_livechat_ai`) is still there and is not the plain original (edited, inherited by another view, or with another xmlid), or another Settings view still names one of the removed `livechat_ai_*` fields: review those views by hand. The plain retired view is deleted automatically.
+
+Under `-u all` or the platform upgrade gate, the modules loaded before this one stay upgraded and the run keeps failing until the database is fixed: run the checks above before the upgrade.
 
 **After the upgrade:** read the WARNING line, open **AI Connections** (readiness, **Test Connection**) and give every LiteLLM key its limits.
 
@@ -197,7 +220,7 @@ Upgrading to 18.0.1.1.0 (`-u im_livechat_ai`, or the platform upgrade gate, whic
 | **Enable AI Integration** | Turned off on **every** channel. The server log lists the channels that had AI on. |
 | **Retry Delay** | Removed (fixed backoff of 3 s, then 10 s). **Max Retries** converted from total calls to retries (old value - 1, at most 2). |
 | Default English **Error Message** (or empty) | Replaced by the Traditional Chinese default. Custom messages are kept. |
-| **Human Handoff Keywords** equal to the earlier default `真人,客服,人工,真人客服,human,agent,operator` (or empty) | Replaced by the new default of explicit requests (see [Step 5](#step-5-human-handoff)). Customised keywords are kept. |
+| **Human Handoff Keywords** equal to the earlier default `真人,客服,人工,真人客服,human,agent,operator` (or empty) | Replaced by the new default of explicit requests (see [Human Handoff](#human-handoff)). Customised keywords are kept. |
 | AI bot partners | Archived and tagged "AI 機器人", like Odoo chatbot partners; partners without an image get the module's robot avatar. |
 | Existing **API logs** | Conversation content and upstream response bodies removed. |
 
@@ -321,10 +344,10 @@ flowchart TD
 
 - **Durable reply jobs** (`im_livechat.ai.job`) -- Created in the same transaction as the visitor message, so a job exists exactly when the message was committed. Processing starts after commit.
 - **One reply for rapid messages** -- 1.5 s debounce, a PostgreSQL advisory lock per conversation (works across prefork workers and the cron process), and a job that has a newer job in the same conversation is skipped; the newest one answers with the full context.
-- **Bounded calls** -- The connection's timeout bounds the whole answer, retries included (10 - 300 s; 45 s for LiteLLM and 120 s for n8n by default). At most 2 retries (0 - 2, default 1; waits 3 s, then 10 s, only within the timeout), and only when the request was not sent or the backend answered HTTP 429 / 503 -- never after a read timeout (the backend may still be working; a workflow is never started twice). At most 3 processing runs per job.
+- **Bounded calls** -- The connection's timeout is the time for one answer, retries included (10 - 300 s; 45 s for LiteLLM and 120 s for n8n by default): each call waits at most the time left for the backend, after at most 10 s to connect (a backend that keeps sending bytes slowly can take longer). At most 2 retries (0 - 2, default 1; waits 3 s, then 10 s, only within the timeout), and only when the request was not sent or the backend answered HTTP 429 / 503 -- never after a read timeout (the backend may still be working; a workflow is never started twice). At most 3 processing runs per job.
 - **Recovery cron** -- Every 2 minutes, jobs left pending or running by a restart or crash are run again; a job is never answered twice (it is skipped when the bot already replied after its message). Unfinished jobs older than 30 minutes are given up. The cron also runs the deferred replies of a handoff wait (triggered for the end of the wait). Requires a cron process (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
 - **Monitoring** -- The **Reply Processing** block of the AI assistant form (system administrators) shows the cron's last run and the pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck.
-- **Failure handling** -- After the last retry the visitor gets the AI assistant's error message (a default in the visitor's language when it is empty) and the operators are notified (OdooBot message and a sticky notification; after HTTP 429 at most once per channel in 10 minutes).
+- **Failure handling** -- After the last retry the visitor gets the AI assistant's error message (a default in the visitor's language when it is empty) and the operators are notified (OdooBot message and a sticky notification), at most once per kind of failure (HTTP 429, HTTP 500, a timeout ...) and channel in 10 minutes: the alert says that the next ones are not announced.
 - **Visible queue** -- **Live Chat > Configuration > Reply Jobs** (system administrators) shows every job's status, runs, backend calls and short error.
 
 ### Human Handoff
@@ -560,7 +583,7 @@ Then click **Test Connection** (HTTP 200), create the AI assistant on this conne
 
 ## Protocol
 
-The request and answer formats are in [docs/PROTOCOL.md](docs/PROTOCOL.md): the LiteLLM body and metadata, the n8n body and its signature, the accepted answers and the handoff, Test Connection, visitor files and signed download URLs, reply rendering, call logs and usage, and what happens when the AI cannot answer. They follow [contract v1](docs/CONTRACT.md): an n8n workflow written for Discuss AI reads the same keys (`assistant`, `user`, `channel`, `surface`, `message`, `history`, `events`), and Live Chat also sends `contact` (the Live Chat channel) for the workflows written for 18.0.1.x.
+The request and answer formats are in [docs/PROTOCOL.md](docs/PROTOCOL.md): the LiteLLM body and metadata, the n8n body and its signature, the accepted answers and the handoff, Test Connection, visitor files and signed download URLs, reply rendering, call logs and usage, and what happens when the AI cannot answer. They follow [contract v1.2](docs/CONTRACT.md): an n8n workflow written for Discuss AI reads the same keys (`assistant`, `user`, `channel`, `surface`, `message`, `history`, `events`), and Live Chat also sends `contact` (the Live Chat channel) for the workflows written for 18.0.1.x.
 
 ---
 
@@ -604,8 +627,8 @@ im_livechat_ai/
 ├── migrations/
 │   ├── 18.0.1.1.0/ 18.0.1.2.0/ 18.0.1.2.1/  # the 18.0.1.x upgrades (unchanged)
 │   └── 18.0.2.0.0/                      # guards, kept columns, connections and assistants
-├── tests/                               # 491 tests, the contract checks included
-│   └── contract/                        # contract v1 package (byte for byte, never edited)
+├── tests/                               # 530 tests, the contract checks included
+│   └── contract/                        # contract v1.2 package (byte for byte, never edited)
 └── i18n/
     ├── im_livechat_ai.pot               # English source strings
     └── zh_TW.po                         # Traditional Chinese (contract glossary)
@@ -656,15 +679,17 @@ A neutralized copy (`odoo neutralize`) never calls a real backend: the connectio
 
 ### Test Suite Overview
 
-The module has **491 automated tests** (Odoo 18.0-20250807), the twelve contract checks included. All HTTP calls are mocked: no key and no network access are needed.
+The module has **530 automated tests** (Odoo 18.0-20250807 and 18.0-20260926), the fourteen contract checks included. All HTTP calls are mocked: no key and no network access are needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
-| `test_contract.py` | 12 | Contract v1 (tag `woow_ai_contract`): answers, requests, vectors, rendering, glossary, neutralize, sums, secrets, 「可給客戶使用」, retries and deadline, the blocked gate, no identity block |
+| `test_contract.py` | 14 | Contract v1.2 (tag `woow_ai_contract`): answers, requests, vectors, rendering, glossary, neutralize, sums, secrets, 「可給客戶使用」, retries and deadline, the blocked gate at the trigger and when the job runs, no identity block, connections, job rows from explicit values only |
 | `test_connection.py` | 17 | AI connections: write-only key, key dropped on another host or type, the 18.0.1.x copy cleared, 「可給客戶使用」, readiness, timeouts, Test Connection |
-| `test_assistant.py` | 15 | AI assistants: bot partner, copy, names, 「可用在 Live Chat」, the channel's pick, the in-use guard |
-| `test_runtime_reads.py` | 14 | What the runtime reads: n8n body (`assistant`, `surface`, `contact`), call logs, usage, internal notes, HTTP 429 alerts, the blocked gate, concurrency re-raise, retries and deadline |
-| `test_migration_200.py` | 21 | The 18.0.2.0.0 upgrade: normalization, shared connections, the key compared in SQL and never logged, bot partners, idempotence, the guards, the retired Settings view, neutralize |
+| `test_assistant.py` | 18 | AI assistants: bot partner, copy, names, 「可用在 Live Chat」, the channel's pick, the in-use guard, who reads them (administrators, Live Chat managers) |
+| `test_runtime_reads.py` | 25 | What the runtime reads: n8n body (`assistant`, `surface`, `contact`), call logs, usage, internal notes, alerts per kind of failure, the blocked gate at the trigger and when the job runs, the caps and refused messages, concurrency re-raise, retries and deadline, code frames of unexpected errors |
+| `test_migration_200.py` | 26 | The 18.0.2.0.0 upgrade: normalization, shared connections, the key compared in SQL and never logged, bot partners, idempotence, the guards, the retired Settings view, the retention and translation steps, neutralize, the rollback cleanup SQL |
+| `test_client_context.py` | 8 | A client's `default_*` context never sets fields of the reply job, the call log, the operators' chat or the session; `default_ai_*` keys of an operator are refused |
+| `test_hardening.py` | 10 | Linear think stripping and capped formatting, the signed link's expiry, names by the contract rules, the bot set only for authors |
 | `test_backend.py` | 52 | Access by role, LiteLLM request shape, n8n signing, body and answers, retries, the 18.0.1.2.x migrations |
 | `test_edge_cases.py` | 99 | Payloads, HTTP errors, think tags, XSS, limits, logging |
 | `test_handoff.py` | 41 | Portal visitors, operator pause, handoff keywords, operator roles, bot partners |
@@ -685,7 +710,7 @@ odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
 odoo -d test_db -i im_livechat_ai --test-enable --test-tags woow_ai_contract --stop-after-init
 ```
 
-Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai.tests` (twelve `Starting TestContract.test_contract_` lines for the contract): a tag that selects nothing also ends with "0 failed".
+Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai.tests` (fourteen `Starting TestContract.test_contract_` lines for the contract): a tag that selects nothing also ends with "0 failed".
 
 ### Continuous Integration
 
@@ -771,15 +796,16 @@ Per AI connection: a LiteLLM server (`/v1/chat/completions`) or an n8n instance 
 
 ### v18.0.2.0.0
 
-- **Two layers, aligned with Discuss AI and Project AI ([contract v1](docs/CONTRACT.md))**: 「AI 連線」 (`im_livechat.ai.connection`: backend, URL, write-only key, model, timeout, retries, documents, content logging, 「可給客戶使用」, readiness, Test Connection) and 「AI 助理」 (`im_livechat.ai.assistant`: bot partner, prompt, history, error message, 「可用在 Live Chat」), both for system administrators. A Live Chat manager picks an available assistant on the channel's 「AI 助理」 tab.
+- **Two layers, aligned with Discuss AI and Project AI ([contract v1.2](docs/CONTRACT.md))**: 「AI 連線」 (`im_livechat.ai.connection`: backend, URL, write-only key, model, timeout, retries, documents, content logging, 「可給客戶使用」, readiness, Test Connection) and 「AI 助理」 (`im_livechat.ai.assistant`: bot partner, prompt, history, error message, 「可用在 Live Chat」), both for system administrators. A Live Chat manager picks an available assistant on the channel's 「AI 助理」 tab.
 - **LiteLLM and n8n only**: the backend is labelled 「LiteLLM（OpenAI 相容）」 (stored `openai`); Hermes is no longer supported (listed in the upgrade log, not changed).
 - **Upgrade in place**: one assistant per configured channel and one connection per distinct backend setting, the key copied in SQL only; guards (below 18.0.1.1.0, the Discuss AI Live Chat bridge, the retired Settings view); the 18.0.1.x columns kept for one version, for a rollback (see [Upgrading to 18.0.2.0.0](#upgrading-to-180200)).
-- **Readiness and the blocked gate**: a channel whose AI cannot answer queues no job; the conversation gets one notice per blocked period and the operators one alert.
-- **Runtime**: the connection's timeout bounds the whole answer; both backends retry only a request that was not sent and HTTP 429 / 503; one call log per answer with the contract statuses; monthly AI Usage; documents over 4 MB go as links; colleagues' internal notes stay out of the history; PostgreSQL concurrency errors in the message trigger are re-raised so Odoo retries the request; after HTTP 429 the operators get one alert per channel in 10 minutes; LiteLLM requests are sent as compact UTF-8 JSON.
+- **Readiness and the blocked gate**: a channel whose AI cannot answer queues no job; the conversation gets one notice per blocked period and the operators one alert. The gate applies again when the job runs and before it posts the answer (contract 3.5). A message the caps of unfinished replies refuse gets the same notice.
+- **Runtime**: the connection's timeout is the time for one answer, retries included, and each call connects within 10 s (18.0.1.x gave the connect the whole timeout); both backends retry only a request that was not sent and HTTP 429 / 503; one call log per answer with the contract statuses; monthly AI Usage; documents over 4 MB go as links; colleagues' internal notes stay out of the history; PostgreSQL concurrency errors in the message trigger are re-raised so that Odoo retries the request (web and RPC requests; a caller that catches every exception, such as a LINE webhook loop, does not retry); one operator alert per kind of failure and channel in 10 minutes; a database-wide cap of 60 unfinished replies next to the 30 per channel; LiteLLM requests are sent as compact UTF-8 JSON; a name with an `@` counts as no name (contract 3.14).
 - **n8n body**: adds `assistant` and `surface`; `contact` stays the Live Chat channel.
-- **Privacy**: call logs, reply jobs and usage for system administrators only; exception texts never logged; 30-day retention; `data/neutralize.sql`.
+- **Privacy**: call logs, reply jobs and usage for system administrators only; Live Chat managers read only the assistants available in Live Chat; exception texts never logged; 30-day retention; `data/neutralize.sql`; a client's `default_*` context never sets fields of the jobs, logs, alerts or sessions the module creates, and an operator cannot set a channel's AI through `default_ai_*` keys (contract 3.5, check 14).
 - **i18n**: English source strings, `i18n/im_livechat_ai.pot`, zh_TW with the contract glossary.
-- **Docs**: [docs/PROTOCOL.md](docs/PROTOCOL.md) (the protocol moved out of this README) and [docs/CONTRACT.md](docs/CONTRACT.md); the contract checks run in the test suite.
+- **Docs**: [docs/PROTOCOL.md](docs/PROTOCOL.md) (the protocol moved out of this README) and [docs/CONTRACT.md](docs/CONTRACT.md) (contract v1.2); the fourteen contract checks run in the test suite.
+- **Not in 18.0.2.0.0**: the "typing…" indicator while the backend works (contract 3.5 item 7). The AI assistant's bot partner is not a member of the session, and Odoo 18 shows typing only for members; planned for 18.0.2.0.1.
 
 ### v18.0.1.2.0
 

@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 03:15+0000\n"
-"PO-Revision-Date: 2026-11-25 03:15+0000\n"
+"POT-Creation-Date: 2026-11-25 08:07+0000\n"
+"PO-Revision-Date: 2026-11-25 08:07+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -169,6 +169,18 @@ msgstr ""
 #. module: im_livechat_ai
 #: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__backend
 msgid "AI backend"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "AI off"
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "AI on"
 msgstr ""
 
 #. module: im_livechat_ai
@@ -927,6 +939,7 @@ msgid "Live Chat Channel"
 msgstr ""
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_ids
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
 msgid "Live Chat Channels"
 msgstr ""
@@ -1145,6 +1158,14 @@ msgid ""
 msgstr ""
 
 #. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"Other conversations of this channel that fail the same way in the next "
+"%(minutes)s minutes are not announced again."
+msgstr ""
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__partner_id
 msgid ""
 "Partner the AI posts as. Created automatically and kept archived; name and "
@@ -1269,8 +1290,8 @@ msgstr ""
 #: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_usage_month
 msgid ""
 "Replies of the Live Chat AI assistants per month (UTC) and channel: a reference for invoicing by\n"
-"                hand, never a limit (limits live in the LiteLLM keys). Kept permanently; the call logs are kept 30\n"
-"                days."
+"                hand, never a limit (limits live in the LiteLLM keys). Counted from the upgrade to 18.0.2.0.0 on; kept\n"
+"                permanently; the call logs are kept 30 days."
 msgstr ""
 
 #. module: im_livechat_ai
@@ -1671,6 +1692,15 @@ msgstr ""
 
 #. module: im_livechat_ai
 #. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The Live Chat AI has too many unfinished replies (Live Chat channel "
+"\"%(channel)s\", conversation \"%(session)s\"): new visitor messages get no "
+"AI answer until replies finish. Please take over the visitors meanwhile."
+msgstr ""
+
+#. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/ai_assistant.py:0
 msgid ""
 "The Live Chat channel \"%(name)s\" answers visitors with this AI assistant. "
@@ -1876,6 +1906,17 @@ msgid "This field can only be searched as equal to True or False."
 msgstr ""
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
+msgid ""
+"Time for one answer, retries included (10-300 seconds). Each call waits at "
+"most the time left for the backend, after at most 10 seconds to connect; a "
+"backend that keeps sending bytes slowly can take longer. New connections: 45"
+" seconds for LiteLLM, 120 seconds for n8n. Live Chat replies are not "
+"streamed: the visitor gets the whole answer, or the error message when the "
+"time is up. A timed-out call is never retried."
+msgstr ""
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_time
 msgid "Time of the whole answer in seconds (18.0.1.x: of one call)"
 msgstr ""
@@ -1917,15 +1958,6 @@ msgid "Total Tokens"
 msgstr ""
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
-msgid ""
-"Total time allowed for one answer, retries included (10-300 seconds). New "
-"connections: 45 seconds for LiteLLM, 120 seconds for n8n. Live Chat replies "
-"are not streamed: the visitor gets the whole answer, or the error message "
-"when the time is up. A timed-out call is never retried."
-msgstr ""
-
-#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__message_id
 msgid "Trigger Message"
 msgstr ""
@@ -1936,7 +1968,7 @@ msgid "Type"
 msgstr ""
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_ids
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_summary
 msgid "Used By Channels"
 msgstr ""
 

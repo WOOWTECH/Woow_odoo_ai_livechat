@@ -46,8 +46,8 @@
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">No AI reply yet</p>
             <p>Replies of the Live Chat AI assistants per month (UTC) and channel: a reference for invoicing by
-                hand, never a limit (limits live in the LiteLLM keys). Kept permanently; the call logs are kept 30
-                days.</p>
+                hand, never a limit (limits live in the LiteLLM keys). Counted from the upgrade to 18.0.2.0.0 on; kept
+                permanently; the call logs are kept 30 days.</p>
         </field>
     </record>
 

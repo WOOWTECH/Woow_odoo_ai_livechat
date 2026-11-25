@@ -1,7 +1,7 @@
 # Backend protocol (Live Chat AI)
 
 What `im_livechat_ai` 18.0.2.0.0 sends to an AI backend and what it accepts back. It implements
-[contract v1](CONTRACT.md) (sections 3.3 to 3.9), the same wire format as Discuss AI and Project AI, with
+[contract v1.2](CONTRACT.md) (sections 3.3 to 3.9 and 3.14), the same wire format as Discuss AI and Project AI, with
 the Live Chat values of section 3.1: session id prefix `woow-ai`, `surface.type` `livechat`, whole (not
 streamed) LiteLLM replies, text-only replies, clickable links only to the site's own hosts, and no
 identity block in the system message.
@@ -30,11 +30,13 @@ Odoo only has technical queue caps:
 | Cap | Value |
 |---|---|
 | Replies at a time per conversation | one (an advisory lock per conversation); a newer visitor message supersedes the pending reply, which then answers all of them |
-| Unfinished replies per Live Chat channel | 30; system parameter `im_livechat_ai.max_active_jobs` (0 turns the cap off). Messages over the cap get no reply job |
+| Unfinished replies per Live Chat channel | 30; system parameter `im_livechat_ai.max_active_jobs` (0 turns the cap off) |
+| Unfinished replies of the whole database | 60; system parameter `im_livechat_ai.max_active_jobs_total` (0 turns the cap off): each running reply holds a thread and a pooled database connection during its call |
+| A message a cap refuses | no reply job; the conversation gets the blocked notice once per period, the operators one alert, the server log a warning at most every 10 minutes |
 | Debounce | 1.5 s: rapid visitor messages get one reply |
 | Runs of one reply job | at most 3 (a run is restarted only after a crash or a restart) |
 | Age | a reply job older than 30 minutes is given up; the operators are alerted |
-| HTTP 429 alerts | the visitor gets the error message every time; the operators get at most one alert per channel in 10 minutes |
+| Failure alerts | the visitor gets the error message every time; the operators get at most one alert per kind of failure (HTTP 429, HTTP 500, a timeout, an aged-out job ...) and channel in 10 minutes |
 
 ## Common context
 
@@ -47,6 +49,10 @@ Odoo only has technical queue caps:
 - **Events**: facts the model must know, `{time, kind, text}`: `operator` (operators wrote in the
   conversation) and `resume` (a handoff wait ended and no operator answered).
 - **System prompt**: the AI assistant's prompt. Odoo adds no persona.
+- **Names** (contract 3.14): Live Chat sends a person's text as typed (no speaker label). A name with an `@` (a
+  partner named after an email address) counts as no name; a name inside text the model reads (the operator's
+  name in `[真人客服 <name>] `, the metadata) follows the one-line rule: one line, brackets as parentheses, at
+  most 80 characters.
 - **Visitor identity** (n8n only): `user` with `user_id`, `partner_id`, `guest_id`, `name`, `email`, `lang`,
   `tz`, `is_portal`, `is_guest`, `company_id` and `visitor_key` (`guest:<id>`, `partner:<id>`, or `public`
   for the website's public user). Never the IP address, visited pages or tracking data. LiteLLM never
@@ -54,8 +60,10 @@ Odoo only has technical queue caps:
 
 ## Timeouts and retries
 
-- The connection's **Timeout (seconds)** bounds the whole answer, retries included: 10 to 300 s; new
-  connections get 45 s (LiteLLM) or 120 s (n8n). The connect timeout is 10 s.
+- The connection's **Timeout (seconds)** is the time for one answer, retries included: 10 to 300 s; new
+  connections get 45 s (LiteLLM) or 120 s (n8n). Each call waits at most the time left for the backend (the
+  wait between received bytes), after at most 10 s to connect, so a backend that keeps sending bytes slowly can
+  take longer.
 - A call is retried (at most the connection's **Retries**, 0 to 2, default 1) only when the request was not
   sent (connection refused, unknown host, connect timeout) or the backend answered HTTP 429 or 503. The
   waits are 3 s, then 10 s, and a retry never starts when its wait would reach the deadline.
@@ -299,4 +307,12 @@ is not ready (archived, no URL, a URL that is not allowed, no key or no model fo
 - the channel's operators get one alert per blocked period (an OdooBot message and a toast);
 - the server log gets a warning at most once every 10 minutes per channel and process.
 
+The gate applies again when the reply job runs and before it posts the answer (contract 3.5): a job blocked
+then makes no call, or posts no answer, is `skipped`, and the conversation gets the notice once per blocked
+period. A job whose channel's AI was turned off is skipped quietly.
+
 The blocked period ends when the AI answers again (a reply job is queued).
+
+**Not in 18.0.2.0.0:** the "typing…" indicator while the backend works (contract 3.5 item 7): the AI
+assistant's bot partner is not a member of the session, and Odoo 18 shows typing only for members. Planned for
+18.0.2.0.1.

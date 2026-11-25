@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 03:15+0000\n"
-"PO-Revision-Date: 2026-11-25 03:15+0000\n"
+"POT-Creation-Date: 2026-11-25 08:07+0000\n"
+"PO-Revision-Date: 2026-11-25 08:07+0000\n"
 "Last-Translator: WOOWTECH\n"
 "Language-Team: Chinese (Traditional)\n"
 "Language: zh_TW\n"
@@ -174,6 +174,18 @@ msgstr "AI 歡迎訊息"
 #: model:ir.model.fields.selection,name:im_livechat_ai.selection__im_livechat_ai_job__handoff_source__backend
 msgid "AI backend"
 msgstr "AI 後端"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "AI off"
+msgstr "AI 已關閉"
+
+#. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/ai_assistant.py:0
+msgid "AI on"
+msgstr "AI 已開啟"
 
 #. module: im_livechat_ai
 #: model:res.partner.category,name:im_livechat_ai.partner_category_ai_bot
@@ -948,6 +960,7 @@ msgid "Live Chat Channel"
 msgstr "線上客服頻道"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_ids
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_assistant_form
 msgid "Live Chat Channels"
 msgstr "線上客服頻道"
@@ -1177,6 +1190,14 @@ msgstr ""
 "Chat Trigger）。留空則保留目前的簽章金鑰；按「移除 API 金鑰」停止簽章。變更後端主機或後端類型會移除它。"
 
 #. module: im_livechat_ai
+#. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"Other conversations of this channel that fail the same way in the next "
+"%(minutes)s minutes are not announced again."
+msgstr "接下來 %(minutes)s 分鐘內，這個頻道其他以同樣方式失敗的對話不會再另行通知。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_assistant__partner_id
 msgid ""
 "Partner the AI posts as. Created automatically and kept archived; name and "
@@ -1305,11 +1326,11 @@ msgstr ""
 #: model_terms:ir.actions.act_window,help:im_livechat_ai.action_im_livechat_ai_usage_month
 msgid ""
 "Replies of the Live Chat AI assistants per month (UTC) and channel: a reference for invoicing by\n"
-"                hand, never a limit (limits live in the LiteLLM keys). Kept permanently; the call logs are kept 30\n"
-"                days."
+"                hand, never a limit (limits live in the LiteLLM keys). Counted from the upgrade to 18.0.2.0.0 on; kept\n"
+"                permanently; the call logs are kept 30 days."
 msgstr ""
-"線上客服 AI 助理每月（UTC）、每個頻道的回覆數：人工開立發票時的參考，絕不是限制（限制設在 LiteLLM 金鑰上）。永久保留；呼叫紀錄保留 30"
-" 天。"
+"線上客服 AI 助理每月（UTC）、每個頻道的回覆數：人工開立發票時的參考，絕不是限制（限制設在 LiteLLM 金鑰上）。從升級到 "
+"18.0.2.0.0 起開始計算；永久保留；呼叫紀錄保留 30 天。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_usage_month__replies_ok
@@ -1718,6 +1739,17 @@ msgstr "AI 客服無法回覆對話「%(session)s」（%(reason)s）。已向訪
 
 #. module: im_livechat_ai
 #. odoo-python
+#: code:addons/im_livechat_ai/models/livechat_ai_job.py:0
+msgid ""
+"The Live Chat AI has too many unfinished replies (Live Chat channel "
+"\"%(channel)s\", conversation \"%(session)s\"): new visitor messages get no "
+"AI answer until replies finish. Please take over the visitors meanwhile."
+msgstr ""
+"AI 客服未完成的回覆太多（線上客服頻道「%(channel)s」，對話「%(session)s」）：回覆完成前，新的訪客訊息不會由 AI "
+"回答。這段期間請接手回覆訪客。"
+
+#. module: im_livechat_ai
+#. odoo-python
 #: code:addons/im_livechat_ai/models/ai_assistant.py:0
 msgid ""
 "The Live Chat channel \"%(name)s\" answers visitors with this AI assistant. "
@@ -1928,6 +1960,20 @@ msgid "This field can only be searched as equal to True or False."
 msgstr "這個欄位只能以等於 True 或 False 搜尋。"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
+msgid ""
+"Time for one answer, retries included (10-300 seconds). Each call waits at "
+"most the time left for the backend, after at most 10 seconds to connect; a "
+"backend that keeps sending bytes slowly can take longer. New connections: 45"
+" seconds for LiteLLM, 120 seconds for n8n. Live Chat replies are not "
+"streamed: the visitor gets the whole answer, or the error message when the "
+"time is up. A timed-out call is never retried."
+msgstr ""
+"一次回答的時間，包含重試（10-300 秒）。每次呼叫連線最多 10 "
+"秒，之後最多等候剩下的時間；後端若一直緩慢地送出資料，可能會更久。新連線：LiteLLM 45 秒、n8n 120 "
+"秒。線上客服的回覆不串流：訪客收到完整回答，時間到則收到錯誤訊息。逾時的呼叫一律不重試。"
+
+#. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_llm_api_log__response_time
 msgid "Time of the whole answer in seconds (18.0.1.x: of one call)"
 msgstr "整個回答花費的秒數（18.0.1.x：單次呼叫）"
@@ -1969,17 +2015,6 @@ msgid "Total Tokens"
 msgstr "總 Token 數"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__timeout_seconds
-msgid ""
-"Total time allowed for one answer, retries included (10-300 seconds). New "
-"connections: 45 seconds for LiteLLM, 120 seconds for n8n. Live Chat replies "
-"are not streamed: the visitor gets the whole answer, or the error message "
-"when the time is up. A timed-out call is never retried."
-msgstr ""
-"一次回答可用的總時間，包含重試（10-300 秒）。新連線：LiteLLM 45 秒、n8n 120 "
-"秒。線上客服的回覆不串流：訪客收到完整回答，時間到則收到錯誤訊息。逾時的呼叫一律不重試。"
-
-#. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__message_id
 msgid "Trigger Message"
 msgstr "觸發訊息"
@@ -1990,7 +2025,7 @@ msgid "Type"
 msgstr "類型"
 
 #. module: im_livechat_ai
-#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_ids
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__livechat_channel_summary
 msgid "Used By Channels"
 msgstr "使用中的頻道"
 

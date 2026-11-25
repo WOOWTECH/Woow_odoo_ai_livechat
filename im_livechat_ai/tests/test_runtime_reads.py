@@ -86,7 +86,7 @@ class TestRuntimeReads(RuntimeCase):
         args, kwargs = mock_post.call_args
         self.assertEqual(args[0], 'https://gateway.example/v1/chat/completions')
         self.assertEqual(kwargs['headers']['Authorization'], 'Bearer dummy-gw')
-        payload = kwargs['json']
+        payload = json.loads(kwargs['data'])
         self.assertEqual(payload['model'], 'pool/model-x')
         self.assertEqual(payload['messages'], [{'role': 'system', 'content': '新的提示'},
                                                {'role': 'user', 'content': '第二句'}])

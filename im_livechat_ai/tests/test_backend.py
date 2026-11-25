@@ -47,7 +47,7 @@ from .common import (
     call_backend,
     ok_response,
 )
-from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, set_ai,
+from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, sent_json, set_ai,
                      set_legacy_channel_values)
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
@@ -264,7 +264,7 @@ class TestOpenAiRequest(BackendCase):
         self.assertEqual(connect, 10)
         self.assertAlmostEqual(read, LLM_REQUEST_TIMEOUT, delta=1)
         self.assertIs(kwargs['allow_redirects'], False)
-        payload = kwargs['json']
+        payload = json.loads(kwargs['data'])
         self.assertEqual(list(payload), ['model', 'messages', 'user', 'metadata'])
         session_id = 'woow-ai-0edfec80-%s' % session.id
         self.assertEqual(payload['user'], session_id)
@@ -306,7 +306,7 @@ class TestOpenAiRequest(BackendCase):
             'message_type': 'comment', 'author_id': portal.partner_id.id,
         })
         call_backend(self.channel, session=session)
-        payload = mock_post.call_args.kwargs['json']
+        payload = sent_json(mock_post.call_args)
         self.assertEqual(payload['metadata']['odoo_partner_id'], str(portal.partner_id.id))
         self.assertEqual(payload['metadata']['odoo_is_portal'], 'true')
         self.assertEqual(payload['metadata']['odoo_is_guest'], 'false')
@@ -326,7 +326,7 @@ class TestOpenAiRequest(BackendCase):
         })
         self._post_bot(session, self.channel, '抱歉，AI 暫時無法回覆。')
         call_backend(self.channel, session=session)
-        messages = mock_post.call_args.kwargs['json']['messages']
+        messages = sent_json(mock_post.call_args)['messages']
         # No prompt and no event: no system message at all.
         self.assertEqual(messages, [
             {'role': 'user', 'content': '[Messages you (the assistant) sent before this user message]\n'

@@ -18,6 +18,8 @@ from odoo import api, fields, models
 from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools.mimetypes import guess_mimetype
 
+from ..tools.backend import exception_frames
+
 _logger = logging.getLogger(__name__)
 
 # Regex to strip HTML tags for building clean LLM context
@@ -434,10 +436,8 @@ class DiscussChannel(models.Model):
             # transaction is aborted, Odoo retries the whole request
             raise
         except Exception as e:  # noqa: BLE001 - the visitor's message stays
-            _logger.warning(
-                "Failed to trigger AI response for channel %s: %s",
-                self.id, type(e).__name__, exc_info=True,
-            )
+            # the type name and code frames, never the exception text (contract 3.9)
+            _logger.warning("Failed to trigger AI response for channel %s: %s", self.id, exception_frames(e))
 
         return rdata
 

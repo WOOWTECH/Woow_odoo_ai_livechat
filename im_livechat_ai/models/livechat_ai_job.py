@@ -50,6 +50,7 @@ from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 from odoo import api, fields, models, SUPERUSER_ID
 from odoo.modules.registry import Registry
 
+from ..tools.backend import exception_frames
 from .discuss_channel import PAUSE_HANDOFF
 from .im_livechat_channel import (
     LLM_MAX_RETRIES,
@@ -150,8 +151,8 @@ def _job_worker(db_name, job_id, wait=True):
             if not next_id or next_id == job_id:
                 return
             job_id, first, wait = next_id, False, True
-    except Exception:  # noqa: BLE001 - a background thread must never die loudly
-        _logger.exception("Live chat AI job worker failed (job %s)", job_id)
+    except Exception as e:  # noqa: BLE001 - a background thread must never die loudly
+        _logger.error("Live chat AI job worker failed (job %s): %s", job_id, exception_frames(e))
 
 
 def _recovery_worker(db_name, job_ids):
@@ -395,8 +396,8 @@ class LivechatAiJob(models.Model):
                         name=f'im_livechat_ai.job.{job_id}',
                         daemon=False,
                     ).start()
-                except Exception:  # noqa: BLE001 - the cron recovers the job
-                    _logger.exception("Could not start live chat AI job %s", job_id)
+                except Exception as e:  # noqa: BLE001 - the cron recovers the job
+                    _logger.error("Could not start live chat AI job %s: %s", job_id, exception_frames(e))
 
         start_ai_job_threads.im_livechat_ai_job_ids = job_ids
         self.env.cr.postcommit.add(start_ai_job_threads)
@@ -497,12 +498,13 @@ class LivechatAiJob(models.Model):
         except Exception as e:
             if not commit:
                 raise
-            _logger.exception("AI job %s failed unexpectedly; the cron will retry it", self.id)
+            _logger.error("AI job %s failed unexpectedly; the cron will retry it: %s", self.id, exception_frames(e))
             cr.rollback()
             self.env.invalidate_all()
             try:
                 if self.exists() and self.state in ('pending', 'running'):
-                    self.write({'error': f'{type(e).__name__}: {e}'[:MAX_JOB_ERROR_LENGTH]})
+                    # the exception type name only, never its text (contract 3.9)
+                    self.write({'error': f'unexpected error ({type(e).__name__})'[:MAX_JOB_ERROR_LENGTH]})
                     cr.commit()
             except Exception:  # noqa: BLE001
                 cr.rollback()
@@ -511,8 +513,8 @@ class LivechatAiJob(models.Model):
                 self._unlock_session(session_id)
                 if commit:
                     cr.commit()
-            except Exception:  # noqa: BLE001 - never return a pooled connection holding the lock
-                _logger.exception("AI job %s: could not release the session lock", self.id)
+            except Exception as e:  # noqa: BLE001 - never return a pooled connection holding the lock
+                _logger.error("AI job %s: could not release the session lock: %s", self.id, exception_frames(e))
                 cr.rollback()
                 cr.execute("SELECT pg_advisory_unlock_all()")
         return session_id, True
@@ -1030,8 +1032,8 @@ class LivechatAiJob(models.Model):
                             message_type='comment',
                             subtype_xmlid='mail.mt_comment',
                         )
-                except Exception:  # noqa: BLE001 - notification must not undo the job result
-                    _logger.exception("%s: could not notify partner %s", ref, partner.id)
+                except Exception as e:  # noqa: BLE001 - notification must not undo the job result
+                    _logger.error("%s: could not notify partner %s: %s", ref, partner.id, exception_frames(e))
             try:
                 group._bus_send('simple_notification', {
                     'title': title,
@@ -1039,8 +1041,8 @@ class LivechatAiJob(models.Model):
                     'sticky': True,
                     'type': notification_type,
                 })
-            except Exception:  # noqa: BLE001
-                _logger.exception("%s: could not send the bus notification", ref)
+            except Exception as e:  # noqa: BLE001
+                _logger.error("%s: could not send the bus notification: %s", ref, exception_frames(e))
 
     # --- Recovery cron ---
 

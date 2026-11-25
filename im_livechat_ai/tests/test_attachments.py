@@ -21,7 +21,7 @@ from odoo.tools import mute_logger
 
 from odoo.addons.im_livechat_ai.models import discuss_channel as dc
 
-from .common import TEST_BACKEND, TEST_N8N_BACKEND, call_backend, ok_response
+from .common import TEST_BACKEND, TEST_N8N_BACKEND, call_backend, ok_response, sent_json
 from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, set_ai,
                      set_legacy_channel_values)
 from .test_backend import _json_response, _load_migration
@@ -114,7 +114,7 @@ class AttachmentCase(TransactionCase):
         with patch(POST) as mock_post:
             mock_post.return_value = ok_response('好的')
             call_backend(channel, session=session)
-        return mock_post.call_args.kwargs['json']['messages']
+        return sent_json(mock_post.call_args)['messages']
 
     @staticmethod
     def text_of(content):

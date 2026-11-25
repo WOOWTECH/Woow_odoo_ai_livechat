@@ -28,7 +28,7 @@ from odoo.addons.im_livechat_ai.models.livechat_ai_job import (
     STALE_PENDING_SECONDS,
 )
 
-from .common import livechat_operator, make_ai_channel, set_ai, TEST_BACKEND
+from .common import livechat_operator, make_ai_channel, sent_json, set_ai, TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -198,7 +198,7 @@ class TestJobProcessing(AiJobCase):
         self.assertEqual(jobs.mapped('state'), ['skipped', 'skipped', 'done'])
         self.assertEqual(mock_post.call_count, 1)
         self.assertEqual(len(self._bot_messages()), 1)
-        sent = [m['content'] for m in mock_post.call_args.kwargs['json']['messages']]
+        sent = [m['content'] for m in sent_json(mock_post.call_args)['messages']]
         for body in ('第一個問題', '第二個問題', '第三個問題'):
             self.assertIn(body, sent)
 
@@ -234,7 +234,7 @@ class TestJobProcessing(AiJobCase):
         second._run_job(commit=False)
         self.assertEqual(second.state, 'done')
         self.assertEqual(len(self._bot_messages()), 1)
-        sent = [m['content'] for m in mock_post.call_args.kwargs['json']['messages']]
+        sent = [m['content'] for m in sent_json(mock_post.call_args)['messages']]
         self.assertIn('第一個問題', sent)
         self.assertIn('還有一個問題', sent)
 

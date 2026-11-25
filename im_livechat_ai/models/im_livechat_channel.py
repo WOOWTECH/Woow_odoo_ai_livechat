@@ -48,6 +48,7 @@ from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signa
     BACKEND_N8N,
     BACKEND_OPENAI,
     endpoint_url_allowed,
+    exception_frames,
     json_dumps,
     n8n_signature_headers,
     request_not_sent,
@@ -328,7 +329,8 @@ class ImLivechatChannel(models.Model):
         help='Off: the AI does not answer this channel. Ready: the AI answers the visitors. Blocked: the AI '
              'is on but cannot answer; see why below.')
     ai_state_reason = fields.Text(string='AI Status Details', compute='_compute_ai_state', groups=AI_CONFIG_GROUP)
-    ai_customer_safe_warning = fields.Boolean(compute='_compute_ai_state', groups=AI_CONFIG_GROUP)
+    ai_customer_safe_warning = fields.Boolean(string='Connection Not Safe for Customers', compute='_compute_ai_state',
+                                              groups=AI_CONFIG_GROUP)
     ai_handoff_pause_minutes = fields.Integer(
         string='Pause After Human Reply (minutes)',
         groups=AI_CONFIG_GROUP,
@@ -381,7 +383,10 @@ class ImLivechatChannel(models.Model):
     )
     # Technical: operators were told once that the AI of this channel cannot
     # answer; cleared when the AI answers again (one alert per blocked period).
-    ai_blocked_alert_sent = fields.Boolean(copy=False, readonly=True, groups=SYSTEM_GROUP)
+    ai_blocked_alert_sent = fields.Boolean(
+        string='Operators Told the AI Cannot Answer', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='The operators were alerted once that the AI of this channel cannot answer; cleared when it answers '
+             'again.')
 
     # --- Status (read with administrator rights; fixed sentences only) ---
 
@@ -767,9 +772,9 @@ class ImLivechatChannel(models.Model):
                 with self.env.cr.savepoint():
                     channel.ai_blocked_alert_sent = True
                     self.env['im_livechat.ai.job']._notify_blocked(self, session)
-            except Exception:  # noqa: BLE001 - the visitor's message stays; the next one tries again
-                _logger.exception("Live chat channel %s: could not alert the operators that the AI cannot "
-                                  "answer", self.id)
+            except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
+                _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
+                              self.id, exception_frames(e))
 
     # --- Backend requests ---
 
@@ -852,7 +857,7 @@ class ImLivechatChannel(models.Model):
         headers['Authorization'] = 'Bearer %s' % token
         return {
             'backend': backend, 'url': url + '/chat/completions', 'headers': headers,
-            'payload': payload, 'body': None, 'token': None, 'timeout': timeout,
+            'payload': payload, 'body': json_dumps(payload).encode(), 'token': None, 'timeout': timeout,
         }
 
     def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None):
@@ -905,22 +910,19 @@ class ImLivechatChannel(models.Model):
 
     @staticmethod
     def _ai_post(request, timeout=None):
-        """One HTTP POST (no database access). n8n bodies are signed per call
-        (fresh timestamp) when a signing secret is set; redirects are never
-        followed. ``timeout``: (connect, read) seconds."""
+        """One HTTP POST (no database access) of the request's compact UTF-8
+        JSON bytes (both backends). n8n bodies are signed per call (fresh
+        timestamp) when a signing secret is set; redirects are never followed.
+        ``timeout``: (connect, read) seconds."""
         headers = dict(request['headers'])
         n8n = request['backend'] == BACKEND_N8N
         if timeout is None:
             seconds = request.get('timeout') or (N8N_REQUEST_TIMEOUT if n8n else LLM_REQUEST_TIMEOUT)
             timeout = (min(CONNECT_TIMEOUT, seconds), seconds)
-        kwargs = {'headers': headers, 'timeout': timeout, 'allow_redirects': False}
-        if n8n:
-            if request['token']:
-                headers.update(n8n_signature_headers(request['token'], request['body']))
-            kwargs['data'] = request['body']
-        else:
-            kwargs['json'] = request['payload']
-        return requests.post(request['url'], **kwargs)
+        body = request['body'] if request.get('body') is not None else json_dumps(request['payload']).encode()
+        if n8n and request['token']:
+            headers.update(n8n_signature_headers(request['token'], body))
+        return requests.post(request['url'], data=body, headers=headers, timeout=timeout, allow_redirects=False)
 
     @staticmethod
     def _ai_parse_response(backend, response):

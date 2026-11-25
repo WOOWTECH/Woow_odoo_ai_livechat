@@ -6,7 +6,7 @@ from odoo.tests.common import TransactionCase
 
 
 from .common import TEST_BASE_URL, livechat_operator, run_ai_job, TEST_BACKEND
-from .common import make_ai_channel
+from .common import make_ai_channel, sent_json
 
 
 class TestAIIntegration(TransactionCase):
@@ -192,7 +192,7 @@ class TestAIIntegration(TransactionCase):
         self.assertNotEqual(called_url, TEST_BASE_URL + '/chat/completions')
 
         # Channel-specific model was sent
-        sent_payload = mock_post.call_args[1]['json']
+        sent_payload = sent_json(mock_post.call_args)
         self.assertEqual(sent_payload['model'], 'other-pool/other-model')
 
     def test_disabled_channel_no_trigger(self):

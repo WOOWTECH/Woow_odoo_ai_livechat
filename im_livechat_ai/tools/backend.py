@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import time
+import traceback
 from urllib.parse import urlsplit
 
 import requests
@@ -93,3 +94,12 @@ def request_not_sent(error):
     if isinstance(reason, MaxRetryError):
         reason = reason.reason
     return isinstance(reason, NewConnectionError)
+
+
+def exception_frames(error):
+    """What the server log says about an unexpected exception: its type name
+    and its code frames, never its text (the text of an HTTP library error can
+    hold a header value, an upstream body or a key; contract 3.9)."""
+    frames = ''.join(traceback.format_tb(getattr(error, '__traceback__', None))).rstrip()
+    name = type(error).__name__
+    return '%s\n%s' % (name, frames) if frames else name

@@ -22,7 +22,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_API_KEY, TEST_BACKEND, call_backend, livechat_operator, ok_response, run_ai_job
-from .common import make_ai_channel, set_ai
+from .common import make_ai_channel, sent_json, set_ai
 
 
 class TestStripThinkTags(TransactionCase):
@@ -367,7 +367,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         """The backend decides: no temperature, max_tokens, tools or stream."""
         mock_post.return_value = ok_response()
         call_backend(self.channel)
-        payload = mock_post.call_args[1]['json']
+        payload = sent_json(mock_post.call_args)
         self.assertEqual(set(payload), {'model', 'messages', 'user', 'metadata'})
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
@@ -378,7 +378,7 @@ class TestCallLlmApiEdgeCases(TransactionCase):
         set_ai(self.channel, {'ai_model': False})
         mock_post.return_value = ok_response()
         call_backend(self.channel)
-        self.assertNotIn('model', mock_post.call_args[1]['json'])
+        self.assertNotIn('model', sent_json(mock_post.call_args))
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_authorization_header_format(self, mock_post):

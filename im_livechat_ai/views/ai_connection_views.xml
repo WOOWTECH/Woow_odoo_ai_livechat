@@ -84,7 +84,6 @@
                                            placeholder="Optional. Leave empty to keep the current secret"/>
                                     <field name="api_key_set"/>
                                     <field name="model" invisible="backend_type != 'openai'"
-                                           required="backend_type == 'openai'"
                                            placeholder="e.g. chatgpt-pool/gpt-6-sol"/>
                                 </group>
                                 <group>

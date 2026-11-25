@@ -28,7 +28,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
-from .common import make_ai_channel, set_ai
+from .common import make_ai_channel, sent_json, set_ai
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -180,7 +180,7 @@ class TestVisitorDetection(HandoffCase):
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
         self.assertIn('您好，入口網站客戶', job.reply_message_id.body)
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         self.assertIn({'role': 'user', 'content': '我的訂單到哪了？'}, sent)
 
     @patch(POST)
@@ -460,7 +460,7 @@ class TestHistoryRoles(HandoffCase):
         job = self._jobs()[-1]
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         self.assertIn({'role': 'user', 'content': '[真人客服 王小明] 有現貨，今天出貨。'}, sent)
         self.assertEqual(sent[-1], {'role': 'user', 'content': '那運費多少？'})
         self.assertIn(OPERATOR_SYSTEM_NOTE, sent[0]['content'])

@@ -9,6 +9,7 @@ where it lives now, so the tests of behaviour that did not change keep their
 setup and assertions.
 """
 
+import json
 from unittest.mock import MagicMock
 
 from odoo.addons.im_livechat_ai.models.ai_connection import LITELLM_DEFAULT_TIMEOUT, N8N_DEFAULT_TIMEOUT
@@ -191,6 +192,13 @@ def call_backend(channel, text='test', session=None, before_call=None):
     if session is None:
         session = make_session(channel, text)
     return channel._generate_ai_reply(session, session._ai_conversation(channel), before_call=before_call)
+
+
+def sent_json(call):
+    """The JSON body of a mocked requests.post call: both backends send the
+    compact UTF-8 JSON bytes as ``data`` (contract 3.6 / 3.7)."""
+    kwargs = call.kwargs if hasattr(call, 'kwargs') else call[1]
+    return json.loads(kwargs['data'])
 
 
 def ok_response(content='OK', usage=None):

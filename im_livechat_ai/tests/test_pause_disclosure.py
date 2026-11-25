@@ -32,7 +32,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
-from .common import make_ai_channel, set_ai
+from .common import make_ai_channel, sent_json, set_ai
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -255,7 +255,7 @@ class TestHandoffWait(PauseCase):
         self.assertEqual(self.Job._cron_recover_jobs(commit=False), 1)
         self.assertEqual(deferred.mapped('state'), ['skipped', 'done'])
         self.assertEqual(mock_post.call_count, 1)
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         users = [m['content'] for m in sent if m['role'] == 'user']
         self.assertEqual(users[-2:], ['運費多少？', '營業時間呢？'])
         self.assertIn(RESUME_SYSTEM_NOTE, sent[0]['content'])

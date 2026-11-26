@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Live Chat > Configuration > AI Connections (system administrators): where the brain of the AI
+         assistants is (LiteLLM or n8n), its key and its call settings. -->
+    <record id="view_im_livechat_ai_connection_list" model="ir.ui.view">
+        <field name="name">im_livechat.ai.connection.list</field>
+        <field name="model">im_livechat.ai.connection</field>
+        <field name="arch" type="xml">
+            <list string="AI Connections" decoration-warning="readiness == 'blocked'">
+                <field name="name"/>
+                <field name="backend_type"/>
+                <field name="endpoint_url"/>
+                <field name="api_key_set" string="Key Set"/>
+                <field name="model" optional="show"/>
+                <field name="customer_safe" optional="show"/>
+                <field name="readiness"/>
+                <field name="assistant_count" string="Assistants" optional="show"/>
+                <field name="legacy_migrated" optional="hide"/>
+                <field name="active" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_im_livechat_ai_connection_form" model="ir.ui.view">
+        <field name="name">im_livechat.ai.connection.form</field>
+        <field name="model">im_livechat.ai.connection</field>
+        <field name="arch" type="xml">
+            <form string="AI Connection">
+                <header>
+                    <button name="action_clear_api_key" type="object" string="Remove API Key"
+                            invisible="not api_key_set" class="btn-secondary"
+                            confirm="Remove the saved backend API key?"/>
+                    <button name="action_test_connection" type="object" string="Test Connection"
+                            invisible="not id or not endpoint_url or (backend_type == 'openai' and not api_key_set)"
+                            class="btn-secondary"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_assistants" type="object" class="oe_stat_button"
+                                icon="fa-commenting-o" invisible="not id">
+                            <field name="assistant_count" widget="statinfo" string="AI Assistants"/>
+                        </button>
+                        <button name="action_view_call_logs" type="object" class="oe_stat_button" icon="fa-list-alt"
+                                invisible="not id">
+                            <field name="call_log_count" widget="statinfo" string="Call Logs"/>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="e.g. Company LiteLLM"/></h1>
+                    </div>
+                    <field name="active" invisible="1"/>
+                    <div class="alert alert-warning" role="alert" invisible="readiness != 'blocked'">
+                        <strong>Not ready:</strong>
+                        <field name="readiness_reason" nolabel="1" class="d-block"/>
+                    </div>
+                    <div class="alert alert-success" role="status" invisible="readiness != 'ok'">
+                        Ready to use.
+                    </div>
+                    <field name="readiness" invisible="1"/>
+                    <group>
+                        <field name="description" placeholder="What this backend is and who runs it"/>
+                        <field name="legacy_migrated" invisible="not legacy_migrated"/>
+                    </group>
+                    <notebook>
+                        <page string="Backend" name="backend">
+                            <div class="alert alert-warning" role="alert" invisible="api_key_set or not id or backend_type == 'n8n'">
+                                No API key is saved. Changing the endpoint host or the backend type removes the saved key, so it is never sent to another server: enter the key again.
+                            </div>
+                            <div class="alert alert-info" role="status" invisible="api_key_set or backend_type != 'n8n'">
+                                No signing secret: requests to n8n are not signed (fine for a public n8n Chat Trigger, which checks no signature). Set one when the workflow verifies X-Woow-Signature.
+                            </div>
+                            <group>
+                                <group>
+                                    <field name="backend_type" widget="radio"/>
+                                    <field name="endpoint_url"
+                                           placeholder="https://litellm.example.com/v1 or https://n8n.example.com/webhook/…"/>
+                                    <field name="api_key" password="True" invisible="backend_type == 'n8n'"
+                                           placeholder="Leave empty to keep the current key"/>
+                                    <field name="api_key" string="Signing Secret" password="True"
+                                           invisible="backend_type != 'n8n'"
+                                           help="Optional. Secret of the X-Woow-Signature HMAC. It is never sent to n8n: verify the signature in the workflow. Without a secret requests are not signed (e.g. a public n8n Chat Trigger). Leave empty to keep the current secret; use Remove API Key to stop signing. Changing the endpoint host or the backend type removes it."
+                                           placeholder="Optional. Leave empty to keep the current secret"/>
+                                    <field name="api_key_set"/>
+                                    <field name="model" invisible="backend_type != 'openai'"
+                                           placeholder="e.g. chatgpt-pool/gpt-6-sol"/>
+                                </group>
+                                <group>
+                                    <field name="timeout_seconds"/>
+                                    <field name="max_retries"/>
+                                </group>
+                            </group>
+                            <div class="text-muted">
+                                Rate limits live in the LiteLLM key (requests and tokens per minute, parallel
+                                requests): Odoo has no usage limit, only technical queue caps (one reply at a time
+                                per conversation, at most 30 unfinished replies per Live Chat channel).
+                            </div>
+                        </page>
+                        <page string="Capabilities" name="capabilities">
+                            <group>
+                                <group>
+                                    <field name="customer_safe" readonly="backend_type == 'openai'"/>
+                                </group>
+                            </group>
+                            <div class="text-muted" invisible="backend_type != 'openai'">
+                                LiteLLM connections are chat-only: Odoo sends the conversation and never any tool,
+                                so they are always safe for customers.
+                            </div>
+                            <div class="text-muted" invisible="backend_type != 'n8n'">
+                                Live Chat visitors are mostly anonymous customers. Tick it only after checking that
+                                this n8n workflow looks up no company data, calls no tools and keeps no memory across
+                                conversations. It is cleared when the endpoint URL or the backend type changes. A
+                                Live Chat channel whose AI assistant uses a connection that is not safe shows a
+                                warning.
+                            </div>
+                        </page>
+                        <page string="Files" name="files" invisible="backend_type != 'openai'">
+                            <group string="Files Visitors Send" name="user_files">
+                                <field name="document_mode" widget="radio"/>
+                            </group>
+                            <div class="text-muted mb-3">
+                                Images are always sent inline. Documents of at most 4 MB are sent as they are (Odoo
+                                converts nothing) or as links. n8n backends get every attachment as a signed download
+                                link (the workflow downloads it). Replies are text only.
+                            </div>
+                        </page>
+                        <page string="AI Assistants" name="assistants">
+                            <field name="assistant_ids" nolabel="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="livechat_available"/>
+                                    <field name="active"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Debug" name="debug">
+                            <group>
+                                <field name="log_payload"/>
+                            </group>
+                            <div class="alert alert-warning" role="alert" invisible="not log_payload">
+                                Call logs now store the conversation content sent to and received from the backend.
+                                Private conversations become readable by administrators. Turn it off after debugging:
+                                stored content is then erased.
+                            </div>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_im_livechat_ai_connection_search" model="ir.ui.view">
+        <field name="name">im_livechat.ai.connection.search</field>
+        <field name="model">im_livechat.ai.connection</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="endpoint_url"/>
+                <filter name="ready" string="Ready" domain="[('readiness', '=', 'ok')]"/>
+                <filter name="blocked" string="Blocked" domain="[('readiness', '=', 'blocked')]"/>
+                <filter name="customer_safe" string="Safe for Customers" domain="[('customer_safe', '=', True)]"/>
+                <separator/>
+                <filter name="archived" string="Archived" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_backend" string="Backend" context="{'group_by': 'backend_type'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_im_livechat_ai_connection" model="ir.actions.act_window">
+        <field name="name">AI Connections</field>
+        <field name="res_model">im_livechat.ai.connection</field>
+        <field name="view_mode">list,form</field>
+        <field name="groups_id" eval="[(6, 0, [ref('base.group_system')])]"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Create an AI connection</p>
+            <p>An AI connection says where the brain of the Live Chat AI assistants is: a LiteLLM server or an n8n
+                webhook, with its key and call settings.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_im_livechat_ai_connection"
+              name="AI Connections"
+              parent="im_livechat.livechat_config"
+              action="action_im_livechat_ai_connection"
+              groups="base.group_system"
+              sequence="46"/>
+</odoo>

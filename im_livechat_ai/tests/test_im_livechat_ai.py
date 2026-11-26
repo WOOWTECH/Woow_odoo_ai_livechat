@@ -8,6 +8,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from .common import TEST_BACKEND, TEST_BASE_URL, call_backend, ok_response
+from .common import make_ai_channel, sent_json, set_ai
 
 
 class TestImLivechatChannel(TransactionCase):
@@ -16,7 +17,7 @@ class TestImLivechatChannel(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Test AI Channel',
             'ai_enabled': True,
@@ -28,63 +29,65 @@ class TestImLivechatChannel(TransactionCase):
 
     def test_max_history_valid(self):
         """Valid max_history should pass."""
-        self.channel.write({'ai_max_history': 100})
-        self.assertEqual(self.channel.ai_max_history, 100)
+        set_ai(self.channel, {'ai_max_history': 100})
+        self.assertEqual(self.channel.sudo().ai_assistant_id.max_history, 100)
 
     def test_max_history_too_low(self):
         """Max history below 1 should raise UserError."""
         with self.assertRaises(UserError):
-            self.channel.write({'ai_max_history': 0})
+            set_ai(self.channel, {'ai_max_history': 0})
 
     def test_max_history_too_high(self):
         """Max history above 200 should raise UserError."""
         with self.assertRaises(UserError):
-            self.channel.write({'ai_max_history': 201})
+            set_ai(self.channel, {'ai_max_history': 201})
 
     def test_default_values(self):
         """Default values should be set correctly."""
         channel = self.env['im_livechat.channel'].create({'name': 'Defaults Test'})
         self.assertFalse(channel.ai_enabled)
-        self.assertEqual(channel.ai_max_history, 50)
-        self.assertEqual(channel.ai_max_retries, 2)
-        self.assertEqual(channel.ai_bot_name, 'AI 客服助理')
-        self.assertEqual(channel.ai_backend_type, 'openai')
-        self.assertEqual(channel.ai_log_retention_days, 14)
-        self.assertFalse(channel.ai_log_payload)
-        # 18.0.1.2.0: no default model, no default URL, no token.
-        self.assertFalse(channel.ai_model)
-        self.assertFalse(channel.ai_endpoint_url)
-        self.assertFalse(channel.ai_api_token_set)
-        self.assertFalse(channel.ai_connection_ready)
-        self.assertNotIn('ai_temperature', channel._fields)
-        self.assertNotIn('ai_max_tokens', channel._fields)
-        self.assertNotIn('ai_product_lookup', channel._fields)
+        self.assertFalse(channel.ai_assistant_id)
+        self.assertEqual(channel.ai_state, 'off')
+        self.assertFalse(channel._ai_connection_is_ready())
+        connection = self.env['im_livechat.ai.connection'].create({'name': 'Defaults'})
+        self.assertEqual(connection.backend_type, 'openai')
+        self.assertEqual(connection.max_retries, 1)
+        self.assertEqual(connection.timeout_seconds, 45)
+        self.assertEqual(connection.document_mode, 'file')
+        self.assertFalse(connection.log_payload)
+        self.assertTrue(connection.customer_safe)
+        self.assertFalse(connection.model)
+        self.assertFalse(connection.endpoint_url)
+        self.assertFalse(connection.api_key_set)
+        self.assertEqual(connection.readiness, 'blocked')
+        assistant = self.env['im_livechat.ai.assistant'].create({'name': 'A', 'connection_id': connection.id})
+        self.assertEqual(assistant.max_history, 50)
+        self.assertFalse(assistant.livechat_available)
+        for removed in ('ai_temperature', 'ai_max_tokens', 'ai_product_lookup', 'ai_model', 'ai_endpoint_url',
+                        'ai_system_prompt', 'ai_bot_partner_id', 'ai_log_retention_days'):
+            self.assertNotIn(removed, channel._fields)
 
     # --- Bot Partner Tests ---
 
     def test_get_or_create_bot_partner_creates_new(self):
-        """The partner is created when AI is enabled (P2-6), not on first reply."""
-        partner = self.channel.ai_bot_partner_id
+        """The partner is created with the AI assistant, not on first reply."""
+        partner = self.channel._get_bot_partner()
         self.assertTrue(partner.exists())
         self.assertEqual(partner.name, 'AI 客服助理')
-        self.assertEqual(self.channel._get_or_create_bot_partner(), partner)
-        channel = self.env['im_livechat.channel'].create({'name': 'Created Later'})
-        self.assertFalse(channel.ai_bot_partner_id)
-        created = channel._get_or_create_bot_partner()
-        self.assertTrue(created.exists())
-        self.assertEqual(channel.ai_bot_partner_id, created)
+        self.assertEqual(self.channel._get_bot_partner(), partner)
+        self.assertEqual(partner, self.channel.sudo().ai_assistant_id.partner_id)
 
     def test_get_or_create_bot_partner_returns_existing(self):
         """Should return existing partner on subsequent calls."""
-        partner1 = self.channel._get_or_create_bot_partner()
-        partner2 = self.channel._get_or_create_bot_partner()
+        partner1 = self.channel._get_bot_partner()
+        partner2 = self.channel._get_bot_partner()
         self.assertEqual(partner1.id, partner2.id)
 
     def test_get_or_create_bot_partner_updates_name(self):
         """Should update partner name when bot name changes."""
-        self.channel._get_or_create_bot_partner()
-        self.channel.write({'ai_bot_name': 'Customer Service Bot'})
-        partner = self.channel._get_or_create_bot_partner()
+        self.channel._get_bot_partner()
+        set_ai(self.channel, {'ai_bot_name': 'Customer Service Bot'})
+        partner = self.channel._get_bot_partner()
         self.assertEqual(partner.name, 'Customer Service Bot')
 
     # --- API Call Tests (mocked) ---
@@ -109,7 +112,8 @@ class TestImLivechatChannel(TransactionCase):
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_call_backend_url_no_double_path(self, mock_post):
         """A pasted /chat/completions is not appended twice."""
-        self.channel.write({'ai_endpoint_url': 'https://api.example.com/v1/chat/completions/'})
+        set_ai(self.channel, {'ai_endpoint_url': 'https://api.example.com/v1/chat/completions/',
+                              'ai_api_token': 'dummy-other'})
         mock_post.return_value = ok_response()
         call_backend(self.channel)
         self.assertEqual(mock_post.call_args[0][0], 'https://api.example.com/v1/chat/completions')
@@ -123,14 +127,14 @@ class TestImLivechatChannel(TransactionCase):
         mock_post.return_value = response
         result = call_backend(self.channel)
         self.assertFalse(result['replies'])
-        self.assertIn('回應格式不正確', result['error'])
+        self.assertIn('the answer has an invalid format', result['error'])
 
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_call_backend_sends_correct_payload(self, mock_post):
         """model, messages, user, metadata; no temperature, max_tokens or tools."""
         mock_post.return_value = ok_response()
         call_backend(self.channel, 'Hi')
-        sent_payload = mock_post.call_args[1]['json']
+        sent_payload = sent_json(mock_post.call_args)
         self.assertEqual(sent_payload['model'], 'gpt-4o')
         self.assertEqual(sent_payload['messages'], [
             {'role': 'system', 'content': 'You are a helpful assistant.'},
@@ -141,18 +145,20 @@ class TestImLivechatChannel(TransactionCase):
 
     # --- Test Connection Action ---
 
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_action_test_connection_success(self, mock_post):
+    @patch('odoo.addons.im_livechat_ai.models.ai_connection.requests.get')
+    def test_action_test_connection_success(self, mock_get):
         """Successful test should return success notification."""
-        mock_post.return_value = ok_response()
+        mock_get.return_value = ok_response()
+        mock_get.return_value.json.return_value = {'data': [{'id': 'gpt-4o'}]}
         result = self.channel.action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
 
-    @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
-    def test_action_test_connection_works_with_ai_disabled(self, mock_post):
+    @patch('odoo.addons.im_livechat_ai.models.ai_connection.requests.get')
+    def test_action_test_connection_works_with_ai_disabled(self, mock_get):
         """The administrator tests the connection before enabling AI."""
         self.channel.write({'ai_enabled': False})
-        mock_post.return_value = ok_response()
+        mock_get.return_value = ok_response()
+        mock_get.return_value.json.return_value = {'data': [{'id': 'gpt-4o'}]}
         result = self.channel.action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
 
@@ -162,7 +168,7 @@ class TestImLivechatChannel(TransactionCase):
         with self.assertRaises(UserError):
             channel.action_test_ai_connection()
         with self.assertRaises(UserError):
-            self.channel.write({'ai_endpoint_url': False})
+            set_ai(self.channel, {'ai_endpoint_url': False})
 
     # --- View Action Tests ---
 
@@ -221,7 +227,7 @@ class TestLLMApiLog(TransactionCase):
         self.assertEqual(logs[0].id, log2.id)
 
     def test_cleanup_old_logs(self):
-        """Should delete logs older than the retention (14 days by default)."""
+        """Should delete logs older than the retention (30 days)."""
         old_log = self.env['llm.api.log'].create({
             'status': 'success',
             'timestamp': fields.Datetime.now() - timedelta(days=31),
@@ -236,15 +242,15 @@ class TestLLMApiLog(TransactionCase):
         self.assertFalse(old_log.exists())
         self.assertTrue(recent_log.exists())
 
-    def test_cleanup_boundary_14_days(self):
-        """Default retention is 14 days: just inside is kept, just outside is deleted."""
+    def test_cleanup_boundary_30_days(self):
+        """Retention is 30 days: just inside is kept, just outside is deleted."""
         inside_log = self.env['llm.api.log'].create({
             'status': 'success',
-            'timestamp': fields.Datetime.now() - timedelta(days=14) + timedelta(minutes=5),
+            'timestamp': fields.Datetime.now() - timedelta(days=30) + timedelta(minutes=5),
         })
         outside_log = self.env['llm.api.log'].create({
             'status': 'success',
-            'timestamp': fields.Datetime.now() - timedelta(days=14) - timedelta(minutes=5),
+            'timestamp': fields.Datetime.now() - timedelta(days=30) - timedelta(minutes=5),
         })
 
         self.env['llm.api.log']._cleanup_old_logs()

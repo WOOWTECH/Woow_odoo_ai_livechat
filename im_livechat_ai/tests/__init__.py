@@ -14,3 +14,10 @@ from . import test_reply_markdown
 from . import test_backend_handoff
 from . import test_skip_answered
 from . import test_security_limits
+from . import test_connection
+from . import test_assistant
+from . import test_runtime_reads
+from . import test_migration_200
+from . import test_contract
+from . import test_client_context
+from . import test_hardening

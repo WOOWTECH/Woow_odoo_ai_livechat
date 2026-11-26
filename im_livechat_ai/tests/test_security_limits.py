@@ -14,6 +14,7 @@ from odoo.addons.im_livechat_ai.models.discuss_channel import (
 from odoo.addons.im_livechat_ai.tools.markdown import markdown_to_html, safe_url
 
 from .common import TEST_BACKEND, livechat_operator
+from .common import make_ai_channel
 from .test_ai_job import POST, _ok
 
 HOSTS = {'store.example'}
@@ -49,7 +50,7 @@ class TestActiveJobCap(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND, 'name': 'Cap Channel', 'ai_enabled': True,
             'ai_model': 'chatgpt-pool/gpt-6-sol',
         })
@@ -142,7 +143,7 @@ class TestDeferredJobCap(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND, 'name': 'Deferred Cap Channel', 'ai_enabled': True,
         })
         cls.operator = livechat_operator(cls.env)
@@ -280,7 +281,7 @@ class TestDeferredJobCap(TransactionCase):
     @patch(POST)
     def test_one_session_is_not_blocked_by_the_cap_of_another_channel(self, mock_post):
         mock_post.return_value = _ok()
-        other = self.env['im_livechat.channel'].create({
+        other = make_ai_channel(self.env, {
             **TEST_BACKEND, 'name': 'Other Channel', 'ai_enabled': True})
         self._due_deferred_job('Busy 1', state='running')
         self._due_deferred_job('Busy 2', state='running')
@@ -377,7 +378,7 @@ class TestDeferredJobCap(TransactionCase):
 class TestLongVisitorMessage(TransactionCase):
 
     def test_long_visitor_message_is_truncated_for_the_backend(self):
-        channel = self.env['im_livechat.channel'].create({
+        channel = make_ai_channel(self.env, {
             **TEST_BACKEND, 'name': 'Long Message Channel', 'ai_enabled': True})
         operator = livechat_operator(self.env)
         visitor = self.env['res.partner'].create({'name': 'Long Visitor'})

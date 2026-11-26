@@ -51,6 +51,23 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Check the contract package and the documented rollback SQL
+        shell: bash
+        run: |
+          set -eu
+          # in the checkout, where ../../../docs/CONTRACT.md exists (the Odoo run sees the module alone)
+          (cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS && \
+            if [ -f READY ]; then [ "$(sha256sum SHA256SUMS | cut -c1-64)" = "$(cat READY)" ]; fi)
+          python3 - <<'PY'
+          import sys
+          sql = open('im_livechat_ai/migrations/18.0.2.0.0/rollback-cleanup.sql', encoding='utf-8').read()
+          block = sql[sql.index('DO $$'):sql.index('END $$;') + len('END $$;')]
+          missing = [name for name in ('README.md', 'README_zh-TW.md')
+                     if block not in open(name, encoding='utf-8').read()]
+          if missing:
+              sys.exit('README rollback SQL differs from rollback-cleanup.sql in: ' + ', '.join(missing))
+          PY
+
       - name: Install module into the addons path
         run: |
           set -eu
@@ -80,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          started=$(grep -cE 'odoo\.addons\.im_livechat_ai\.tests\.[a-z_]+: Starting ' "$LOG_FILE" || true)
+          started=$(grep -cE 'odoo\.addons\.im_livechat_ai\.tests\.[a-z0-9_]+: Starting ' "$LOG_FILE" || true)
           problems=$(grep -cE '^[0-9-]+ [0-9:,]+ [0-9]+ (ERROR|CRITICAL) ' "$LOG_FILE" || true)
           fails=$(grep -cE '(^| )(FAIL|ERROR): ' "$LOG_FILE" || true)
           summary=$({ grep -E 'odoo\.tests\.result: .*failed, .*error\(s\) of [0-9]+ tests' "$LOG_FILE" || true; } | tail -1)

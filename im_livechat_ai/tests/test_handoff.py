@@ -28,6 +28,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
+from .common import make_ai_channel, sent_json, set_ai
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -48,14 +49,14 @@ class HandoffCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Handoff Channel',
             'ai_enabled': True,
             'ai_model': 'chatgpt-pool/gpt-6-sol',
             'ai_system_prompt': '你是客服助理。',
         })
-        cls.bot = cls.channel.ai_bot_partner_id
+        cls.bot = cls.channel._get_bot_partner()
         cls.operator_user = new_test_user(
             cls.env, login='handoff_operator', name='王小明',
             groups='base.group_user,im_livechat.im_livechat_group_user',
@@ -179,7 +180,7 @@ class TestVisitorDetection(HandoffCase):
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
         self.assertIn('您好，入口網站客戶', job.reply_message_id.body)
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         self.assertIn({'role': 'user', 'content': '我的訂單到哪了？'}, sent)
 
     @patch(POST)
@@ -264,7 +265,7 @@ class TestOperatorPause(HandoffCase):
         self._post('有的，我幫您查', self.operator)
         job._run_job(commit=False)
         self.assertEqual(job.state, 'skipped')
-        self.assertIn('真人客服', job.error)
+        self.assertIn('an operator', job.error)
         mock_post.assert_not_called()
         self.assertFalse(self._bot_messages())
 
@@ -309,7 +310,7 @@ class TestKeywordHandoff(HandoffCase):
         # Operators: OdooBot chat message and a sticky toast.
         notes = self._odoobot_chat_messages(self.operator)
         self.assertEqual(len(notes), 1)
-        self.assertIn('要求真人客服', notes.body)
+        self.assertIn('asked for a human', notes.body)
         self.assertIn(f'discuss.channel_{self.session.id}', notes.body)
         calls = [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
         self.assertEqual(len(calls), 1)
@@ -367,8 +368,10 @@ class TestKeywordHandoff(HandoffCase):
 
     def test_handoff_without_backend(self):
         """The handoff notice needs no backend, so it works without the token."""
-        self.channel._ai_set_token(False)
-        self.channel.invalidate_recordset()
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET api_key_secret = NULL WHERE id = %s",
+                            (self.channel.sudo().ai_assistant_id.connection_id.id,))
+        self.env.invalidate_all()
         self.assertFalse(self.channel._ai_connection_is_ready())
         self._post('找客服', self.visitor)
         job = self._jobs()
@@ -434,7 +437,7 @@ class TestHistoryRoles(HandoffCase):
         self.assertEqual(messages[0], {'role': 'system', 'content': '你是客服助理。'})
 
     def test_operator_note_without_custom_prompt(self):
-        self.channel.ai_system_prompt = False
+        set_ai(self.channel, {'ai_system_prompt': False})
         self._msg(self.operator, '稍等')
         self._msg(self.visitor, '好')
         messages = self.session._build_llm_messages(self.channel)
@@ -457,14 +460,15 @@ class TestHistoryRoles(HandoffCase):
         job = self._jobs()[-1]
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         self.assertIn({'role': 'user', 'content': '[真人客服 王小明] 有現貨，今天出貨。'}, sent)
         self.assertEqual(sent[-1], {'role': 'user', 'content': '那運費多少？'})
         self.assertIn(OPERATOR_SYSTEM_NOTE, sent[0]['content'])
 
 
 class TestBotPartnerTiming(TransactionCase):
-    """P2-6: the bot partner is created when AI is enabled, never while replying."""
+    """18.0.2.0.0: the bot partner is created with the AI assistant (archived,
+    tagged, the robot avatar), never while replying."""
 
     @classmethod
     def setUpClass(cls):
@@ -472,11 +476,11 @@ class TestBotPartnerTiming(TransactionCase):
         cls.category = cls.env.ref('im_livechat_ai.partner_category_ai_bot')
 
     def test_created_with_ai_enabled(self):
-        channel = self.env['im_livechat.channel'].create({
+        channel = make_ai_channel(self.env, {
             **TEST_BACKEND,
             'name': 'Bot On Create', 'ai_enabled': True, 'ai_bot_name': '小幫手',
         })
-        bot = channel.ai_bot_partner_id
+        bot = channel._get_bot_partner()
         self.assertTrue(bot)
         self.assertEqual(bot.name, '小幫手')
         self.assertFalse(bot.active, 'bot partners are archived (hidden from contacts)')
@@ -484,29 +488,32 @@ class TestBotPartnerTiming(TransactionCase):
         self.assertEqual(self.category.name, 'AI 機器人')
 
     def test_not_created_without_ai(self):
+        partners = self.env['res.partner'].with_context(active_test=False).search_count([])
         channel = self.env['im_livechat.channel'].create({'name': 'No AI'})
-        self.assertFalse(channel.ai_bot_partner_id)
+        # no assistant: the module's default bot, nothing created
+        self.assertEqual(channel._get_bot_partner(), self.env.ref('im_livechat_ai.partner_ai_bot'))
+        self.assertEqual(self.env['res.partner'].with_context(active_test=False).search_count([]), partners)
 
     def test_created_when_ai_enabled_later_and_renamed(self):
-        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Enable Later'})
+        channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Enable Later'})
         channel.write({'ai_enabled': True})
-        bot = channel.ai_bot_partner_id
+        bot = channel._get_bot_partner()
         self.assertTrue(bot)
-        channel.write({'ai_bot_name': '新名字'})
-        self.assertEqual(channel.ai_bot_partner_id, bot)
+        set_ai(channel, {'ai_bot_name': '新名字'})
+        self.assertEqual(channel._get_bot_partner(), bot)
         self.assertEqual(bot.name, '新名字')
         # Disabling and re-enabling keeps the same partner.
         channel.write({'ai_enabled': False})
         channel.write({'ai_enabled': True})
-        self.assertEqual(channel.ai_bot_partner_id, bot)
+        self.assertEqual(channel._get_bot_partner(), bot)
 
     def test_manager_enabling_ai_creates_bot(self):
         manager = new_test_user(self.env, login='bot_timing_manager',
                                 groups='base.group_user,im_livechat.im_livechat_group_manager')
         # The system administrator sets the connection, the manager enables AI.
-        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Manager Channel'})
+        channel = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Manager Channel'})
         channel.with_user(manager).write({'ai_enabled': True})
-        self.assertTrue(channel.sudo().ai_bot_partner_id)
+        self.assertTrue(channel.sudo()._get_bot_partner())
 
     def test_default_bot_is_archived_and_tagged(self):
         default_bot = self.env.ref('im_livechat_ai.partner_ai_bot')
@@ -516,13 +523,11 @@ class TestBotPartnerTiming(TransactionCase):
     @patch(POST)
     def test_reply_processing_never_creates_or_writes_bot(self, mock_post):
         mock_post.return_value = _ok('回覆')
-        channel = self.env['im_livechat.channel'].create({
+        channel = make_ai_channel(self.env, {
             **TEST_BACKEND,
             'name': 'Lost Bot', 'ai_enabled': True, 'ai_model': 'chatgpt-pool/gpt-6-sol',
         })
-        channel.ai_bot_partner_id.unlink()  # ondelete set null
-        channel.invalidate_recordset()
-        self.assertFalse(channel.ai_bot_partner_id)
+        bot = channel._get_bot_partner()
         session = self.env['discuss.channel'].create({
             'name': 'Lost Bot Session', 'channel_type': 'livechat',
             'livechat_operator_id': self.env.ref('base.partner_admin').id,
@@ -531,22 +536,20 @@ class TestBotPartnerTiming(TransactionCase):
         visitor = self.env['res.partner'].create({'name': 'Lost Bot Visitor'})
         session.message_post(body='hi', author_id=visitor.id,
                              message_type='comment', subtype_xmlid='mail.mt_comment')
-        Channel = type(self.env['im_livechat.channel'])
         job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
         partners_before = self.env['res.partner'].with_context(active_test=False).search_count([])
-        with patch.object(Channel, '_get_or_create_bot_partner', autospec=True) as ensure:
-            job._run_job(commit=False)
-        ensure.assert_not_called()
+        write_date = bot.write_date
+        job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
-        self.assertEqual(job.reply_message_id.author_id, self.env.ref('im_livechat_ai.partner_ai_bot'))
-        self.assertFalse(channel.ai_bot_partner_id)
+        self.assertEqual(job.reply_message_id.author_id, bot)
+        self.assertEqual(bot.write_date, write_date)
         self.assertEqual(
             self.env['res.partner'].with_context(active_test=False).search_count([]), partners_before)
 
     @patch(POST)
     def test_reply_authored_by_archived_bot(self, mock_post):
         mock_post.return_value = _ok('封存的機器人也能發言')
-        channel = self.env['im_livechat.channel'].create({
+        channel = make_ai_channel(self.env, {
             **TEST_BACKEND,
             'name': 'Archived Bot', 'ai_enabled': True, 'ai_model': 'chatgpt-pool/gpt-6-sol',
         })
@@ -561,56 +564,25 @@ class TestBotPartnerTiming(TransactionCase):
         job = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
         job._run_job(commit=False)
         self.assertEqual(job.state, 'done')
-        self.assertEqual(job.reply_message_id.author_id, channel.ai_bot_partner_id)
+        self.assertEqual(job.reply_message_id.author_id, channel._get_bot_partner())
         # The bot's own message must not trigger another job (loop guard).
         self.assertEqual(len(self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])), 1)
 
 
 class TestChineseErrorMessage(TransactionCase):
-    """P2-7: Traditional Chinese default error message and its migration."""
+    """The default texts are English sources with a zh_TW translation (18.0.2.0.0):
+    an AI assistant without an error message uses the default one in the
+    visitor's language; a channel keeps its own handoff texts. (The 18.0.1.1.0
+    data conversions run only from 18.0.1.0.x, which 18.0.2.0.0 refuses: they
+    are tested by the 18.0.1.3.5 suite.)"""
 
-    def _load_post_migrate(self):
-        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                            'migrations', '18.0.1.1.0', 'post-migrate.py')
-        spec = importlib.util.spec_from_file_location('im_livechat_ai_post_migrate_1_1_0', path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    def test_default_is_chinese(self):
+    def test_defaults(self):
         channel = self.env['im_livechat.channel'].create({'name': 'Default Error'})
-        self.assertEqual(channel.ai_error_message, DEFAULT_ERROR_MESSAGE)
-        self.assertIn('AI 客服暫時無法回覆', channel.ai_error_message)
-        self.assertIn('聯絡方式', channel.ai_error_message)
         self.assertEqual(channel.ai_handoff_message, DEFAULT_HANDOFF_MESSAGE)
         self.assertEqual(channel.ai_handoff_pause_minutes, DEFAULT_HANDOFF_PAUSE_MINUTES)
-
-    def test_migration_replaces_old_english_default(self):
-        Channel = self.env['im_livechat.channel']
-        old = Channel.create({'name': 'Old English', 'ai_error_message': LEGACY_ERROR_MESSAGE})
-        empty = Channel.create({'name': 'Empty'})
-        custom = Channel.create({'name': 'Custom', 'ai_error_message': '請撥 02-1234-5678'})
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_error_message = NULL WHERE id = %s",
-                            (empty.id,))
-        module = self._load_post_migrate()
-        self.assertEqual(module.LEGACY_ERROR_MESSAGE, LEGACY_ERROR_MESSAGE)
-        self.assertEqual(module.NEW_ERROR_MESSAGE, DEFAULT_ERROR_MESSAGE)
-        changed = module.translate_error_message(self.env.cr)
-        self.env.invalidate_all()
-        self.assertIn(old.id, changed)
-        self.assertIn(empty.id, changed)
-        self.assertNotIn(custom.id, changed)
-        self.assertEqual(old.ai_error_message, DEFAULT_ERROR_MESSAGE)
-        self.assertEqual(empty.ai_error_message, DEFAULT_ERROR_MESSAGE)
-        self.assertEqual(custom.ai_error_message, '請撥 02-1234-5678')
-
-    def test_migration_archives_and_tags_existing_bots(self):
-        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Old Bot', 'ai_enabled': True})
-        bot = channel.ai_bot_partner_id
-        category = self.env.ref('im_livechat_ai.partner_category_ai_bot')
-        bot.write({'active': True, 'category_id': [(5, 0, 0)]})
-        module = self._load_post_migrate()
-        self.assertGreaterEqual(module.tag_bot_partners(self.env.cr), 2)
-        self.env.invalidate_all()
-        self.assertFalse(bot.active)
-        self.assertIn(category, bot.category_id)
+        assistant = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'With Assistant'}).sudo().ai_assistant_id
+        self.assertFalse(assistant.error_message)
+        self.assertEqual(assistant._error_text('en_US'), DEFAULT_ERROR_MESSAGE)
+        self.assertIn('leave your contact details', assistant._error_text())
+        assistant.error_message = '請撥 02-1234-5678'
+        self.assertEqual(assistant._error_text('en_US'), '請撥 02-1234-5678')

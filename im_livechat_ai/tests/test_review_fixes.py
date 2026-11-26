@@ -23,6 +23,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
+from .common import make_ai_channel, set_ai
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -44,7 +45,7 @@ class ReviewCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Review Channel',
             'ai_enabled': True,
@@ -70,50 +71,60 @@ class ReviewCase(TransactionCase):
 
 
 class TestAiConfigAccess(ReviewCase):
-    """Only Live Chat managers read or change the AI configuration."""
+    """Live Chat managers pick the AI assistant and turn the AI on; system
+    administrators own the AI connections and assistants (Q12 A in place);
+    operators, employees, portal users and the public read nothing."""
 
     def test_operator_cannot_change_ai_fields(self):
         Channel = self.env['im_livechat.channel'].with_user(self.lc_user)
-        for vals in ({'ai_system_prompt': '改掉提示'}, {'ai_max_history': 100},
-                     {'ai_enabled': False}, {'ai_error_message': '假的錯誤訊息'},
-                     {'ai_model': 'other/model'}, {'ai_endpoint_url': 'https://evil.example/v1'},
-                     {'ai_api_token': 'dummy'}):
+        assistant = self.channel.sudo().ai_assistant_id
+        for vals in ({'ai_enabled': False}, {'ai_assistant_id': False}, {'ai_handoff_keywords': 'x'},
+                     {'ai_welcome_message': '假的歡迎'}):
             with self.assertRaises(AccessError, msg=vals):
                 self.channel.with_user(self.lc_user).write(vals)
         with self.assertRaises(AccessError):
-            Channel.create({**TEST_BACKEND, 'name': 'Operator AI', 'ai_enabled': True})
+            Channel.create({'name': 'Operator AI', 'ai_enabled': True, 'ai_assistant_id': assistant.id})
         with self.assertRaises(AccessError):
-            Channel.create({'name': 'Operator AI', 'ai_system_prompt': 'x'})
-        self.assertEqual(self.channel.ai_system_prompt, '內部提示：不要透露折扣規則。')
+            assistant.with_user(self.lc_user).write({'system_prompt': '改掉提示'})
+        self.assertEqual(assistant.system_prompt, '內部提示：不要透露折扣規則。')
         self.assertTrue(self.channel.ai_enabled)
 
     def test_operator_can_still_create_and_rename_channels(self):
         channel = self.env['im_livechat.channel'].with_user(self.lc_user).create({'name': '客服建立'})
         self.assertFalse(channel.sudo().ai_enabled)
-        self.assertFalse(channel.sudo().ai_bot_partner_id)
+        self.assertFalse(channel.sudo().ai_assistant_id)
         self.channel.with_user(self.lc_user).write({'name': 'Review Channel 改名'})
         self.assertEqual(self.channel.name, 'Review Channel 改名')
 
     def test_operator_form_has_no_ai_fields(self):
         arch = self.env['im_livechat.channel'].with_user(self.lc_user).get_views(
             [(False, 'form')])['views']['form']['arch']
-        self.assertNotIn('ai_system_prompt', arch)
+        self.assertNotIn('ai_assistant_id', arch)
         self.assertNotIn('action_test_ai_connection', arch)
         arch = self.env['im_livechat.channel'].with_user(self.manager).get_views(
             [(False, 'form')])['views']['form']['arch']
-        self.assertIn('ai_system_prompt', arch)
+        self.assertIn('ai_assistant_id', arch)
+        self.assertNotIn('system_prompt', arch)
 
-    def test_manager_configures_ai_with_history_cap(self):
-        channel = self.channel.with_user(self.manager)
-        channel.write({'ai_system_prompt': '主管改的提示', 'ai_max_history': 200, 'ai_model': 'pool/other'})
-        self.assertEqual(self.channel.ai_max_history, 200)
-        self.assertEqual(self.channel.ai_model, 'pool/other')
+    def test_manager_cannot_change_the_persona(self):
+        assistant = self.channel.sudo().ai_assistant_id
+        with self.assertRaises(AccessError):
+            assistant.with_user(self.manager).write({'system_prompt': '主管改的提示'})
+        with self.assertRaises(AccessError):
+            assistant.connection_id.with_user(self.manager).write({'model': 'pool/other'})
+        # a system administrator can; the range is checked
+        set_ai(self.channel, {'ai_system_prompt': '管理員改的提示', 'ai_max_history': 200})
+        self.assertEqual(assistant.max_history, 200)
         with self.assertRaises(ValidationError):
-            channel.write({'ai_max_history': 201})
+            set_ai(self.channel, {'ai_max_history': 201})
 
     def test_prompt_not_readable_by_portal_or_employees(self):
+        assistant = self.channel.sudo().ai_assistant_id
+        for user in (self.portal_user, self.employee, self.lc_user, self.manager):
+            with self.assertRaises(AccessError, msg=user.login):
+                assistant.with_user(user).read(['system_prompt'])
         for user in (self.portal_user, self.employee, self.lc_user):
-            for fname in ('ai_system_prompt', 'ai_handoff_keywords', 'ai_error_message', 'ai_model'):
+            for fname in ('ai_handoff_keywords', 'ai_assistant_id', 'ai_enabled'):
                 with self.assertRaises(AccessError, msg=(user.login, fname)):
                     self.env['im_livechat.channel'].with_user(user).search_read(
                         [('id', '=', self.channel.id)], [fname])
@@ -121,10 +132,10 @@ class TestAiConfigAccess(ReviewCase):
         rows = self.env['im_livechat.channel'].with_user(self.employee).search_read(
             [('id', '=', self.channel.id)])
         self.assertTrue(rows)
-        self.assertNotIn('ai_system_prompt', rows[0])
-        self.assertEqual(
-            self.channel.with_user(self.manager).read(['ai_system_prompt'])[0]['ai_system_prompt'],
-            '內部提示：不要透露折扣規則。')
+        self.assertNotIn('ai_assistant_id', rows[0])
+        # a manager reads the assistant's name and description, not its prompt
+        values = assistant.with_user(self.manager).read(['name', 'description', 'customer_safe'])[0]
+        self.assertEqual(values['name'], assistant.name)
 
     @patch(POST)
     def test_guest_post_still_queues_reply(self, mock_post):
@@ -143,84 +154,72 @@ class TestAiConfigAccess(ReviewCase):
 
 
 class TestBotPartnerProtection(ReviewCase):
-    """Nobody chooses the bot partner; a real person is never renamed."""
+    """The bot partner belongs to its AI assistant: created with it, archived and
+    tagged, never a person, never shared; nobody chooses it."""
 
-    def test_operator_cannot_point_bot_at_admin(self):
+    def test_nobody_points_the_bot_at_a_person(self):
         name = self.admin_partner.name
-        with self.assertRaises(AccessError):
-            self.channel.with_user(self.lc_user).write({
-                'ai_bot_partner_id': self.admin_partner.id, 'ai_bot_name': 'Hijacked',
-            })
-        with self.assertRaises(AccessError):
-            self.channel.with_user(self.manager).write({
-                'ai_bot_partner_id': self.admin_partner.id, 'ai_bot_name': 'Hijacked',
-            })
-        with self.assertRaises(AccessError):
-            self.env['im_livechat.channel'].with_user(self.manager).create({
-                'name': 'Hijack', 'ai_bot_partner_id': self.admin_partner.id,
-            })
+        assistant = self.channel.sudo().ai_assistant_id
+        for user in (self.lc_user, self.manager):
+            with self.assertRaises(AccessError):
+                assistant.with_user(user).write({'partner_id': self.admin_partner.id, 'name': 'Hijacked'})
+        # a partner with a user can never be a bot partner, not even set by the superuser
+        user_partner = self.lc_user.partner_id
+        with self.assertRaises(ValidationError):
+            assistant.write({'partner_id': user_partner.id})
         self.assertEqual(self.admin_partner.name, name)
         category = self.env.ref('im_livechat_ai.partner_category_ai_bot')
         self.assertNotIn(category, self.admin_partner.category_id)
 
-    def test_linked_real_partner_is_replaced_not_renamed(self):
-        """A non-bot partner linked by other means (e.g. old data) is left alone."""
-        old_bot = self.channel.ai_bot_partner_id
-        name = self.admin_partner.name
-        self.channel.write({'ai_bot_partner_id': self.admin_partner.id})  # superuser
-        self.channel.with_user(self.manager).write({'ai_bot_name': '新的機器人'})
-        self.assertEqual(self.admin_partner.name, name)
-        new_bot = self.channel.ai_bot_partner_id
-        self.assertNotIn(new_bot, self.admin_partner | old_bot)
-        self.assertEqual(new_bot.name, '新的機器人')
-        self.assertFalse(new_bot.active)
+    def test_bot_follows_the_assistant(self):
+        bot = self.channel._get_bot_partner()
+        self.assertFalse(bot.active)
+        self.assertIn(self.env.ref('im_livechat_ai.partner_category_ai_bot'), bot.category_id)
+        set_ai(self.channel, {'ai_bot_name': '新的機器人'})
+        self.assertEqual(bot.name, '新的機器人')
+        self.assertFalse(bot.active)
 
-    def test_other_channels_bot_is_not_shared(self):
-        other = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Other', 'ai_enabled': True})
-        other_bot = other.ai_bot_partner_id
-        other_name = other_bot.name
-        self.channel.write({'ai_bot_partner_id': other_bot.id})
-        self.channel.write({'ai_bot_name': '自己的機器人'})
-        self.assertEqual(other_bot.name, other_name)
-        self.assertNotEqual(self.channel.ai_bot_partner_id, other_bot)
+    def test_other_assistants_bot_is_not_shared(self):
+        other = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'Other', 'ai_enabled': True})
+        other_bot = other._get_bot_partner()
+        with self.assertRaises(Exception), self.env.cr.savepoint(), mute_logger('odoo.sql_db'):
+            self.channel.sudo().ai_assistant_id.write({'partner_id': other_bot.id})
+            self.env.flush_all()
+        self.assertNotEqual(self.channel._get_bot_partner(), other_bot)
 
     def test_copy_gets_its_own_bot(self):
-        copy = self.channel.copy()
-        # The copy starts with AI off and without the token.
-        self.assertFalse(copy.ai_enabled)
-        self.assertFalse(copy.ai_api_token_set)
-        self.assertFalse(copy.ai_bot_partner_id)
-        copy.write({'ai_endpoint_url': 'https://litellm.test/v1', 'ai_api_token': 'dummy-copy-token',
-                    'ai_enabled': True})
-        self.assertTrue(copy.ai_bot_partner_id)
-        self.assertNotEqual(copy.ai_bot_partner_id, self.channel.ai_bot_partner_id)
+        assistant = self.channel.sudo().ai_assistant_id
+        copy = assistant.copy()
+        self.assertTrue(copy.partner_id)
+        self.assertNotEqual(copy.partner_id, assistant.partner_id)
+        self.assertIn('(copy)', copy.name)
+        channel_copy = self.channel.copy()
+        self.assertFalse(channel_copy.ai_enabled)
+        self.assertEqual(channel_copy.sudo().ai_assistant_id, assistant)
 
-    def test_default_bot_name_is_chinese(self):
-        self.assertEqual(DEFAULT_BOT_NAME, 'AI 客服助理')
-        channel = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'New', 'ai_enabled': True})
-        self.assertEqual(channel.ai_bot_partner_id.name, 'AI 客服助理')
+    def test_default_bot_name(self):
+        self.assertEqual(DEFAULT_BOT_NAME, 'AI Customer Service Assistant')
+        # the noupdate data record keeps its Chinese name
         self.assertEqual(self.env.ref('im_livechat_ai.partner_ai_bot').name, 'AI 客服助理')
 
 
 class TestConnectionTestPermission(ReviewCase):
-    """The connection test uses the channel's token: system administrators only."""
+    """The connection test uses the connection's key; the call logs are for
+    system administrators only (Q13 ②)."""
 
-    @patch(POST)
-    def test_non_managers_cannot_test_connection(self, mock_post):
-        mock_post.return_value = _ok('OK')
-        for user in (self.portal_user, self.employee, self.lc_user):
+    @patch('odoo.addons.im_livechat_ai.models.ai_connection.requests.get')
+    def test_non_admins_cannot_test_connection(self, mock_get):
+        mock_get.return_value = _ok('OK')
+        mock_get.return_value.json.return_value = {'data': [{'id': 'chatgpt-pool/gpt-6-sol'}]}
+        for user in (self.portal_user, self.employee, self.lc_user, self.manager):
             with self.assertRaises(AccessError, msg=user.login):
                 self.channel.with_user(user).action_test_ai_connection()
             with self.assertRaises(AccessError, msg=user.login):
                 self.channel.with_user(user).action_view_api_logs()
-        with self.assertRaises(AccessError):
-            self.channel.with_user(self.manager).action_test_ai_connection()
-        mock_post.assert_not_called()
-        # Live Chat managers still open the API logs.
-        self.channel.with_user(self.manager).action_view_api_logs()
+        mock_get.assert_not_called()
         result = self.channel.action_test_ai_connection()
         self.assertEqual(result['params']['type'], 'success')
-        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(mock_get.call_count, 1)
 
 
 class TestWhichMessagesTrigger(ReviewCase):
@@ -329,7 +328,7 @@ class TestNoTransactionDuringLlmCall(ReviewCase):
             self.env.invalidate_all()
             marks.append(cr.sql_log_count)
 
-        results = [requests.Timeout('slow'), _ok('第二次成功')]
+        results = [requests.ConnectTimeout('not sent'), _ok('第二次成功')]
 
         def post(*args, **kwargs):
             self.assertEqual(cr.sql_log_count, marks[-1], 'a query ran after before_call')
@@ -354,61 +353,3 @@ class TestNoTransactionDuringLlmCall(ReviewCase):
         self.assertEqual(mock_post.call_count, 2)
         # Committed before the HTTP call and again before the retry wait.
         self.assertGreaterEqual(len(marks), 3)
-
-
-class TestRetriesMigration(TransactionCase):
-    """ai_max_retries counted total calls in 18.0.1.0.x; now retries."""
-
-    def _load_post_migrate(self):
-        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                            'migrations', '18.0.1.1.0', 'post-migrate.py')
-        spec = importlib.util.spec_from_file_location('im_livechat_ai_post_migrate_review', path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    def test_total_calls_become_retries(self):
-        Channel = self.env['im_livechat.channel']
-        channels = {value: Channel.create({'name': f'Retries {value}'}) for value in (1, 2, 3, 10, 0, None)}
-        for value, channel in channels.items():
-            self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_retries = %s WHERE id = %s",
-                                (value, channel.id))
-        self._load_post_migrate().convert_max_retries(self.env.cr)
-        self.env.invalidate_all()
-        expected = {1: 0, 2: 1, 3: 2, 10: 2, 0: 2, None: 2}
-        self.assertEqual({v: c.ai_max_retries for v, c in channels.items()}, expected)
-
-    def test_max_tokens_cap_without_column(self):
-        """18.0.1.2.0 has no ai_max_tokens field: the 18.0.1.1.0 step is a no-op
-        on a fresh install (the column is only there on upgraded databases)."""
-        if sql.column_exists(self.env.cr, 'im_livechat_channel', 'ai_max_tokens'):
-            self.skipTest('upgraded database: legacy column present')
-        self.assertFalse(self._load_post_migrate().cap_max_tokens(self.env.cr))
-
-    def test_legacy_bot_name_renamed_and_user_partner_unlinked(self):
-        Channel = self.env['im_livechat.channel']
-        legacy = Channel.create({**TEST_BACKEND, 'name': 'Legacy Name', 'ai_enabled': True})
-        legacy.write({'ai_bot_name': LEGACY_BOT_NAME})
-        legacy.ai_bot_partner_id.name = LEGACY_BOT_NAME
-        custom = Channel.create({**TEST_BACKEND, 'name': 'Custom Name', 'ai_enabled': True, 'ai_bot_name': 'WoowTech AI'})
-        admin = self.env.ref('base.partner_admin')
-        admin_name = admin.name
-        hijacked = Channel.create({'name': 'Hijacked'})
-        hijacked.write({'ai_bot_partner_id': admin.id})
-        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot')
-        default_bot.name = LEGACY_BOT_NAME
-        Channel.search([]).write({'ai_enabled': False})
-        module = self._load_post_migrate()
-        self.assertIn(hijacked.id, module.unlink_user_bot_partners(self.env.cr))
-        renamed = module.rename_legacy_bot_name(self.env.cr)
-        module.tag_bot_partners(self.env.cr)
-        self.env.invalidate_all()
-        self.assertIn(legacy.id, renamed)
-        self.assertNotIn(custom.id, renamed)
-        self.assertEqual(legacy.ai_bot_name, DEFAULT_BOT_NAME)
-        self.assertEqual(legacy.ai_bot_partner_id.name, DEFAULT_BOT_NAME)
-        self.assertEqual(custom.ai_bot_name, 'WoowTech AI')
-        self.assertEqual(default_bot.name, DEFAULT_BOT_NAME)
-        self.assertFalse(hijacked.ai_bot_partner_id)
-        self.assertEqual(admin.name, admin_name)
-        self.assertTrue(admin.active)

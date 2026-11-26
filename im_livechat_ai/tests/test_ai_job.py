@@ -28,7 +28,7 @@ from odoo.addons.im_livechat_ai.models.livechat_ai_job import (
     STALE_PENDING_SECONDS,
 )
 
-from .common import livechat_operator, TEST_BACKEND
+from .common import livechat_operator, make_ai_channel, sent_json, set_ai, TEST_BACKEND
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -52,7 +52,7 @@ class AiJobCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Job Channel',
             'ai_enabled': True,
@@ -60,7 +60,7 @@ class AiJobCase(TransactionCase):
             'ai_max_retries': 2,
             'ai_error_message': ERROR_TEXT,
         })
-        cls.bot = cls.channel._get_or_create_bot_partner()
+        cls.bot = cls.channel._get_bot_partner()
         cls.operator = livechat_operator(cls.env)
         cls.visitor = cls.env['res.partner'].create({'name': 'Job Visitor'})
         cls.session = cls.env['discuss.channel'].create({
@@ -198,7 +198,7 @@ class TestJobProcessing(AiJobCase):
         self.assertEqual(jobs.mapped('state'), ['skipped', 'skipped', 'done'])
         self.assertEqual(mock_post.call_count, 1)
         self.assertEqual(len(self._bot_messages()), 1)
-        sent = [m['content'] for m in mock_post.call_args.kwargs['json']['messages']]
+        sent = [m['content'] for m in sent_json(mock_post.call_args)['messages']]
         for body in ('第一個問題', '第二個問題', '第三個問題'):
             self.assertIn(body, sent)
 
@@ -234,7 +234,7 @@ class TestJobProcessing(AiJobCase):
         second._run_job(commit=False)
         self.assertEqual(second.state, 'done')
         self.assertEqual(len(self._bot_messages()), 1)
-        sent = [m['content'] for m in mock_post.call_args.kwargs['json']['messages']]
+        sent = [m['content'] for m in sent_json(mock_post.call_args)['messages']]
         self.assertIn('第一個問題', sent)
         self.assertIn('還有一個問題', sent)
 
@@ -358,7 +358,7 @@ class TestJobRecovery(AiJobCase):
         self._make_stale(job_b, state='running', attempts=1)
         self.Job._cron_recover_jobs(commit=False)
         self.assertEqual(job_b.state, 'done')
-        self.assertIn('一併回答', job_b.error)
+        self.assertIn('answered by an earlier AI reply', job_b.error)
         mock_post.assert_not_called()
         self.assertEqual(len(self._bot_messages()), 1)
 
@@ -568,7 +568,7 @@ class TestJobRecovery(AiJobCase):
         old = self._jobs()
         old.write({'state': 'done'})
         self.env.cr.execute(
-            "UPDATE im_livechat_ai_job SET create_date = now() - interval '30 days' WHERE id = %s", (old.id,))
+            "UPDATE im_livechat_ai_job SET create_date = now() - interval '31 days' WHERE id = %s", (old.id,))
         self._visitor_post('新的')
         new = self._jobs() - old
         self.env.invalidate_all()
@@ -589,15 +589,16 @@ class TestJobFailure(AiJobCase):
         with patch.object(ResPartner, '_bus_send', autospec=True) as bus_send:
             job._run_job(commit=False)
         self.assertEqual(job.state, 'failed')
-        self.assertEqual(job.llm_calls, 3)
-        self.assertIn('無法連線到 AI 後端', job.error)
-        # Visitor gets the channel's Chinese error message.
+        # a connection refused after sending is never retried (Q13 ③)
+        self.assertEqual(job.llm_calls, 1)
+        self.assertIn('could not connect to the AI backend', job.error)
+        # Visitor gets the assistant's error message.
         self.assertEqual(len(self._bot_messages()), 1)
         self.assertIn(ERROR_TEXT, self._bot_messages().body)
         # Operator gets a persistent OdooBot chat message ...
         notes = self._odoobot_chat_messages(self.operator)
         self.assertEqual(len(notes), 1)
-        self.assertIn('AI 客服無法回覆', notes.body)
+        self.assertIn('could not answer conversation', notes.body)
         self.assertIn(f'discuss.channel_{self.session.id}', notes.body)
         # ... and a sticky toast through the bus.
         calls = [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
@@ -608,12 +609,13 @@ class TestJobFailure(AiJobCase):
 
     @patch(SLEEP)
     @patch(POST)
-    def test_default_error_message_is_chinese(self, mock_post, mock_sleep):
+    def test_default_error_message(self, mock_post, mock_sleep):
+        """An assistant without an error message: the default text, in the visitor's language."""
         mock_post.side_effect = requests.ConnectionError('refused')
-        self.channel.write({'ai_error_message': False})
+        set_ai(self.channel, {'ai_error_message': False})
         self._visitor_post('hi')
         self._jobs()._run_job(commit=False)
-        self.assertIn('AI 客服暫時無法回覆', self._bot_messages().body)
+        self.assertIn('the AI assistant cannot answer right now', self._bot_messages().body)
 
     @patch(SLEEP)
     @patch(POST)
@@ -640,27 +642,47 @@ class TestTimeoutsAndRetries(AiJobCase):
 
     @patch(SLEEP)
     @patch(POST)
-    def test_timeout_retries_and_backoff(self, mock_post, mock_sleep):
+    def test_read_timeout_is_not_retried(self, mock_post, mock_sleep):
+        """Q13 ③: a read timeout is never retried (the backend may be answering);
+        one call log row for the answer."""
         mock_post.side_effect = requests.Timeout('read timeout')
         self._visitor_post('逾時測試')
         job = self._jobs()
         job._run_job(commit=False)
-        self.assertEqual(mock_post.call_count, 3)  # 1 call + 2 retries
-        for call in mock_post.call_args_list:
-            self.assertEqual(call.kwargs['timeout'], LLM_REQUEST_TIMEOUT)
+        self.assertEqual(mock_post.call_count, 1)
+        connect, read = mock_post.call_args.kwargs['timeout']
         self.assertEqual(LLM_REQUEST_TIMEOUT, 45)
-        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3, 10])
-        self.assertEqual(job.llm_calls, 3)
+        self.assertLessEqual(read, LLM_REQUEST_TIMEOUT)
+        self.assertLessEqual(connect, 10)
+        mock_sleep.assert_not_called()
+        self.assertEqual(job.llm_calls, 1)
         self.assertEqual(job.attempts, 1)
         self.assertEqual(job.state, 'failed')
-        self.assertIn('連線逾時', job.error)
+        self.assertIn('the backend did not answer in time', job.error)
         logs = self.env['llm.api.log'].search([('discuss_channel_id', '=', self.session.id)], order='id')
-        self.assertEqual(logs.mapped('status'), ['retry', 'retry', 'error'])
+        self.assertEqual(logs.mapped('status'), ['timeout'])
+        self.assertEqual(logs.error_message, 'Timeout')
+
+    @patch(SLEEP)
+    @patch(POST)
+    def test_not_sent_retries_and_backoff(self, mock_post, mock_sleep):
+        """A request that was not sent (connect timeout) is retried after 3 s and 10 s."""
+        mock_post.side_effect = requests.ConnectTimeout('connect timeout')
+        self._visitor_post('連不上')
+        job = self._jobs()
+        job._run_job(commit=False)
+        self.assertEqual(mock_post.call_count, 3)  # 1 call + 2 retries
+        self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3, 10])
+        self.assertEqual(job.llm_calls, 3)
+        self.assertEqual(job.state, 'failed')
+        logs = self.env['llm.api.log'].search([('discuss_channel_id', '=', self.session.id)], order='id')
+        self.assertEqual(len(logs), 1, 'one call log row per answer')
+        self.assertEqual(logs.retry_count, 2)
 
     @patch(SLEEP)
     @patch(POST)
     def test_retry_then_success(self, mock_post, mock_sleep):
-        mock_post.side_effect = [requests.Timeout('slow'), _ok('第二次成功')]
+        mock_post.side_effect = [requests.ConnectTimeout('slow'), _ok('第二次成功')]
         self._visitor_post('重試測試')
         job = self._jobs()
         job._run_job(commit=False)
@@ -671,8 +693,8 @@ class TestTimeoutsAndRetries(AiJobCase):
     @patch(SLEEP)
     @patch(POST)
     def test_zero_retries(self, mock_post, mock_sleep):
-        mock_post.side_effect = requests.Timeout('slow')
-        self.channel.write({'ai_max_retries': 0})
+        mock_post.side_effect = requests.ConnectTimeout('slow')
+        set_ai(self.channel, {'ai_max_retries': 0})
         self._visitor_post('不重試')
         self._jobs()._run_job(commit=False)
         self.assertEqual(mock_post.call_count, 1)
@@ -682,9 +704,9 @@ class TestTimeoutsAndRetries(AiJobCase):
     @patch(POST)
     def test_legacy_retry_value_is_capped(self, mock_post, mock_sleep):
         """A value stored before the cap (old range 1-10) still makes at most 3 calls."""
-        mock_post.side_effect = requests.Timeout('slow')
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_retries = 10 WHERE id = %s",
-                            (self.channel.id,))
+        mock_post.side_effect = requests.ConnectTimeout('slow')
+        self.env.cr.execute("UPDATE im_livechat_ai_connection SET max_retries = 10 WHERE id = %s",
+                            (self.channel.sudo().ai_assistant_id.connection_id.id,))
         self.env.invalidate_all()
         self._visitor_post('舊設定')
         self._jobs()._run_job(commit=False)
@@ -693,17 +715,21 @@ class TestTimeoutsAndRetries(AiJobCase):
 
 class TestJobAccess(AiJobCase):
 
-    def test_manager_read_only_others_denied(self):
+    def test_admin_read_only_others_denied(self):
+        """Q13 ②: reply jobs are for system administrators only (read and delete)."""
         self._visitor_post('hi')
         job = self._jobs()
+        admin = new_test_user(self.env, login='job_admin', name='Job Admin',
+                              groups='base.group_user,base.group_system')
         manager = new_test_user(self.env, login='job_manager', name='Job Manager',
                                 groups='base.group_user,im_livechat.im_livechat_group_manager')
         lc_user = new_test_user(self.env, login='job_lc_user', name='Job LC User',
                                 groups='base.group_user,im_livechat.im_livechat_group_user')
-        self.assertEqual(job.with_user(manager).read(['state'])[0]['state'], 'pending')
+        self.assertEqual(job.with_user(admin).read(['state'])[0]['state'], 'pending')
         with self.assertRaises(AccessError):
-            job.with_user(manager).write({'state': 'done'})
+            job.with_user(admin).write({'state': 'done'})
         with self.assertRaises(AccessError):
-            self.Job.with_user(manager).create({'discuss_channel_id': self.session.id})
-        with self.assertRaises(AccessError):
-            job.with_user(lc_user).read(['state'])
+            self.Job.with_user(admin).create({'discuss_channel_id': self.session.id})
+        for user in (manager, lc_user):
+            with self.assertRaises(AccessError):
+                job.with_user(user).read(['state'])

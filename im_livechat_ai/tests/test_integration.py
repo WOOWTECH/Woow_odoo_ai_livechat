@@ -6,6 +6,7 @@ from odoo.tests.common import TransactionCase
 
 
 from .common import TEST_BASE_URL, livechat_operator, run_ai_job, TEST_BACKEND
+from .common import make_ai_channel, sent_json
 
 
 class TestAIIntegration(TransactionCase):
@@ -15,7 +16,7 @@ class TestAIIntegration(TransactionCase):
     def setUpClass(cls):
         super().setUpClass()
 
-        cls.livechat_channel = cls.env['im_livechat.channel'].create({
+        cls.livechat_channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Integration Test Channel',
             'ai_enabled': True,
@@ -25,7 +26,7 @@ class TestAIIntegration(TransactionCase):
             'ai_error_message': 'AI is unavailable.',
         })
 
-        cls.bot_partner = cls.livechat_channel._get_or_create_bot_partner()
+        cls.bot_partner = cls.livechat_channel._get_bot_partner()
 
         cls.visitor_partner = cls.env['res.partner'].create({
             'name': 'Integration Visitor',
@@ -80,7 +81,7 @@ class TestAIIntegration(TransactionCase):
         # Verify log was created
         logs = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.livechat_channel.id),
-            ('status', '=', 'success'),
+            ('status', '=', 'ok'),
         ])
         self.assertTrue(len(logs) >= 1)
         self.assertEqual(logs[0].total_tokens, 60)
@@ -121,10 +122,11 @@ class TestAIIntegration(TransactionCase):
         }
         success_response.raise_for_status = MagicMock()
 
-        # Fail first 2 times, succeed on 3rd
+        # Not sent twice (retried: Q13 ③), succeed on 3rd
+        import requests
         mock_post.side_effect = [
-            Exception("Error 1"),
-            Exception("Error 2"),
+            requests.ConnectTimeout("Error 1"),
+            requests.ConnectTimeout("Error 2"),
             success_response,
         ]
 
@@ -139,12 +141,11 @@ class TestAIIntegration(TransactionCase):
         success_msgs = [m for m in bot_messages if 'Success after retry!' in (m.body or '')]
         self.assertTrue(len(success_msgs) >= 1)
 
-        # Verify retry logs exist
-        retry_logs = self.env['llm.api.log'].search([
-            ('livechat_channel_id', '=', self.livechat_channel.id),
-            ('status', '=', 'retry'),
-        ])
-        self.assertTrue(len(retry_logs) >= 2)
+        # One call log row for the answer, with its two retries
+        logs = self.env['llm.api.log'].search([('livechat_channel_id', '=', self.livechat_channel.id)])
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs.status, 'ok')
+        self.assertEqual(logs.retry_count, 2)
 
         # Verify the 3 s / 10 s backoff between retries
         self.assertEqual([c.args[0] for c in mock_sleep.call_args_list], [3, 10])
@@ -154,7 +155,7 @@ class TestAIIntegration(TransactionCase):
     @patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post')
     def test_multi_channel_isolation(self, mock_post):
         """Each channel uses its own backend connection and model."""
-        channel_b = self.env['im_livechat.channel'].create({
+        channel_b = make_ai_channel(self.env, {
             **TEST_BACKEND,
             'ai_endpoint_url': 'https://other-gateway.test/v1',
             'ai_api_token': 'dummy-other-token',
@@ -191,7 +192,7 @@ class TestAIIntegration(TransactionCase):
         self.assertNotEqual(called_url, TEST_BASE_URL + '/chat/completions')
 
         # Channel-specific model was sent
-        sent_payload = mock_post.call_args[1]['json']
+        sent_payload = sent_json(mock_post.call_args)
         self.assertEqual(sent_payload['model'], 'other-pool/other-model')
 
     def test_disabled_channel_no_trigger(self):
@@ -208,7 +209,7 @@ class TestAIIntegration(TransactionCase):
     def test_missing_config_constraint(self):
         """Enabling AI on a channel without a backend connection raises an error."""
         from odoo.exceptions import UserError
-        channel = self.env['im_livechat.channel'].create({'name': 'No Backend', 'ai_model': 'gpt-4o'})
+        channel = make_ai_channel(self.env, {'name': 'No Backend', 'ai_model': 'gpt-4o'})
         with self.assertRaises(UserError):
             channel.write({'ai_enabled': True})
 
@@ -216,17 +217,17 @@ class TestAIIntegration(TransactionCase):
 
     def test_each_channel_has_own_bot(self):
         """Each channel should create its own bot partner."""
-        channel_a = self.env['im_livechat.channel'].create({
+        channel_a = make_ai_channel(self.env, {
             'name': 'Channel A Bot Test',
             'ai_bot_name': 'Bot Alpha',
         })
-        channel_b = self.env['im_livechat.channel'].create({
+        channel_b = make_ai_channel(self.env, {
             'name': 'Channel B Bot Test',
             'ai_bot_name': 'Bot Beta',
         })
 
-        bot_a = channel_a._get_or_create_bot_partner()
-        bot_b = channel_b._get_or_create_bot_partner()
+        bot_a = channel_a._get_bot_partner()
+        bot_b = channel_b._get_bot_partner()
 
         self.assertNotEqual(bot_a.id, bot_b.id)
         self.assertEqual(bot_a.name, 'Bot Alpha')
@@ -250,7 +251,7 @@ class TestAIIntegration(TransactionCase):
 
         log = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.livechat_channel.id),
-            ('status', '=', 'success'),
+            ('status', '=', 'ok'),
         ], limit=1, order='id desc')
 
         self.assertEqual(log.prompt_tokens, 100)
@@ -273,7 +274,7 @@ class TestAIIntegration(TransactionCase):
 
         log = self.env['llm.api.log'].search([
             ('livechat_channel_id', '=', self.livechat_channel.id),
-            ('status', '=', 'success'),
+            ('status', '=', 'ok'),
         ], limit=1, order='id desc')
 
         self.assertIsNotNone(log.response_time)

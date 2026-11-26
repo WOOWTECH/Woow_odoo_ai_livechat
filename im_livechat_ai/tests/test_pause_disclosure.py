@@ -32,6 +32,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
+from .common import make_ai_channel, sent_json, set_ai
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -60,13 +61,13 @@ class PauseCase(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'R2 Channel',
             'ai_enabled': True,
             'ai_system_prompt': '你是客服助理。',
         })
-        cls.bot = cls.channel.ai_bot_partner_id
+        cls.bot = cls.channel._get_bot_partner()
         cls.operator_user = new_test_user(
             cls.env, login='r2_operator', name='林客服',
             groups='base.group_user,im_livechat.im_livechat_group_user',
@@ -202,7 +203,7 @@ class TestHandoffWait(PauseCase):
             self._jobs(kind='handoff')._run_job(commit=False)
         calls = [c for c in bus_send.call_args_list if c.args[1] == 'simple_notification']
         self.assertEqual(len(calls), 1)
-        self.assertIn('等候 10 分鐘', calls[0].args[2]['message'])
+        self.assertIn('waits 10 minutes', calls[0].args[2]['message'])
         self.assertIn(DEFAULT_HANDOFF_MESSAGE, self._bot_bodies()[0])
 
     @patch(POST)
@@ -227,7 +228,7 @@ class TestHandoffWait(PauseCase):
         self.assertEqual(notice.state, 'done')
         bodies = self._bot_bodies()
         self.assertEqual(len(bodies), 2)
-        self.assertIn('AI 助理會在 10 分鐘後繼續為您服務', bodies[-1])
+        self.assertIn('the AI assistant will continue in 10 minutes', bodies[-1])
         mock_post.assert_not_called()
         # Not due: neither chained nor run early.
         self.assertFalse(self.Job._next_pending_job_id(self.session.id))
@@ -254,7 +255,7 @@ class TestHandoffWait(PauseCase):
         self.assertEqual(self.Job._cron_recover_jobs(commit=False), 1)
         self.assertEqual(deferred.mapped('state'), ['skipped', 'done'])
         self.assertEqual(mock_post.call_count, 1)
-        sent = mock_post.call_args.kwargs['json']['messages']
+        sent = sent_json(mock_post.call_args)['messages']
         users = [m['content'] for m in sent if m['role'] == 'user']
         self.assertEqual(users[-2:], ['運費多少？', '營業時間呢？'])
         self.assertIn(RESUME_SYSTEM_NOTE, sent[0]['content'])
@@ -285,7 +286,7 @@ class TestHandoffWait(PauseCase):
         self._make_due(deferred)
         self.Job._cron_recover_jobs(commit=False)
         self.assertEqual(deferred.state, 'skipped')
-        self.assertIn('真人客服已接手', deferred.error)
+        self.assertIn('took over', deferred.error)
         mock_post.assert_not_called()
         self.assertEqual(len(self._bot_bodies()), 1)  # only the handoff notice
 
@@ -400,7 +401,7 @@ class TestHandoffWait(PauseCase):
             channel.ai_pause_notice = text
             self.assertEqual(channel._ai_pause_notice_text(), expected)
         channel.ai_pause_notice = False
-        self.assertIn('7 分鐘', channel._ai_pause_notice_text())
+        self.assertIn('continue in 7 minutes', channel._ai_pause_notice_text())
 
     def test_notice_html_is_escaped(self):
         self.channel.ai_pause_notice = '<script>x</script> %(minutes)s'
@@ -413,26 +414,31 @@ class TestHandoffWait(PauseCase):
 
 
 class TestRangeValidation(TransactionCase):
-    """P1-1: ranges checked with AI off; enabling AI re-validates; runtime clamp."""
+    """Ranges are checked whether the AI is on or off; enabling AI re-validates
+    the channel's own values; the runtime clamps values written around the
+    constraints. History and retries are settings of the assistant and the
+    connection (18.0.2.0.0)."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Ranges', 'ai_enabled': False})
+        cls.channel = make_ai_channel(cls.env, {**TEST_BACKEND, 'name': 'Ranges', 'ai_enabled': False})
 
     def test_checked_with_ai_off(self):
         for field, bad in (('ai_max_history', 0), ('ai_max_history', 201),
                            ('ai_max_retries', 3), ('ai_max_retries', -1),
                            ('ai_handoff_pause_minutes', 0), ('ai_handoff_wait_minutes', 1441),
-                           ('ai_log_retention_days', 0), ('ai_log_retention_days', 3651)):
+                           ('ai_request_timeout', 5), ('ai_request_timeout', 301)):
             with self.subTest(field=field, value=bad), self.assertRaises(ValidationError):
                 with self.env.cr.savepoint():
-                    self.channel.write({field: bad})
+                    set_ai(self.channel, {field: bad})
+                    self.env.flush_all()
         with self.assertRaises(ValidationError):
-            self.env['im_livechat.channel'].create({'name': 'Bad', 'ai_max_history': 99999})
+            make_ai_channel(self.env, {'name': 'Bad', 'ai_max_history': 99999})
 
     def test_enabling_revalidates_legacy_values(self):
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 0 "
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_wait_minutes = 0 "
                             "WHERE id = %s", (self.channel.id,))
         self.env.invalidate_all()
         # Unrelated writes and turning AI off still work.
@@ -440,53 +446,60 @@ class TestRangeValidation(TransactionCase):
         with self.assertRaises(ValidationError), self.env.cr.savepoint():
             self.channel.write({'ai_enabled': True})
         self.env.invalidate_all()
-        self.channel.write({'ai_enabled': True, 'ai_max_history': 20})
+        self.channel.write({'ai_enabled': True, 'ai_handoff_wait_minutes': 20})
         self.assertTrue(self.channel.ai_enabled)
 
     def test_runtime_clamp(self):
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_max_history = 5000 WHERE id = %s",
-                            (self.channel.id,))
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_assistant SET max_history = 5000 WHERE id = %s",
+                            (self.channel.sudo().ai_assistant_id.id,))
         self.env.invalidate_all()
         self.assertEqual(self.channel._ai_max_history_value(), 200)
 
 
 class TestFreeTextModel(TransactionCase):
-    """18.0.1.2.0: the model is free text (no LiteLLM model list), optional,
-    required only to enable AI on an OpenAI compatible backend."""
+    """The model is free text on the AI connection (system administrators),
+    required for a LiteLLM connection to be ready (18.0.1.x refused to enable
+    AI without it; 18.0.2.0.0 keeps the rule through readiness and the in-use
+    guard). Live Chat managers cannot change it (Q12 A in place)."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.manager = new_test_user(cls.env, login='r2_model_manager',
                                     groups='base.group_user,im_livechat.im_livechat_group_manager')
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Models', 'ai_enabled': True, 'ai_model': 'pool/a',
         })
+        cls.connection = cls.channel.sudo().ai_assistant_id.connection_id
 
     def test_any_model_name_allowed(self):
-        self.channel.with_user(self.manager).write({'ai_model': 'MiniMax-M1'})
-        self.assertEqual(self.channel.ai_model, 'MiniMax-M1')
-        self.channel.with_user(self.manager).write({'ai_model': 'hermes-agent'})
-        self.assertEqual(self.channel.ai_model, 'hermes-agent')
-        self.assertEqual(self.channel._fields['ai_model'].type, 'char')
+        self.connection.write({'model': 'MiniMax-M1'})
+        self.assertEqual(self.connection.model, 'MiniMax-M1')
+        self.assertEqual(self.connection._fields['model'].type, 'char')
+        with self.assertRaises(AccessError):
+            self.connection.with_user(self.manager).write({'model': 'other'})
 
-    def test_model_required_to_enable_openai(self):
+    def test_model_required_for_litellm(self):
+        # in use by an AI-enabled channel: removing the model is refused
         with self.assertRaises(UserError), self.env.cr.savepoint():
-            self.channel.with_user(self.manager).write({'ai_model': False})
-        off = self.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'No Model', 'ai_model': False})
+            self.connection.write({'model': False})
+        off = make_ai_channel(self.env, {**TEST_BACKEND, 'name': 'No Model', 'ai_model': False})
+        self.assertEqual(off.sudo().ai_assistant_id.connection_id.readiness, 'blocked')
         with self.assertRaises(UserError), self.env.cr.savepoint():
             off.with_user(self.manager).write({'ai_enabled': True})
-        off.with_user(self.manager).write({'ai_enabled': True, 'ai_model': 'pool/b'})
+        set_ai(off, {'ai_model': 'pool/b'})
+        off.with_user(self.manager).write({'ai_enabled': True})
         self.assertTrue(off.ai_enabled)
 
     def test_model_not_needed_for_n8n(self):
-        channel = self.env['im_livechat.channel'].create({
+        channel = make_ai_channel(self.env, {
             'name': 'n8n', 'ai_backend_type': 'n8n', 'ai_endpoint_url': 'https://n8n.test/webhook/x',
             'ai_api_token': 'dummy-secret', 'ai_enabled': True,
         })
         self.assertTrue(channel.ai_enabled)
-        self.assertTrue(channel.ai_connection_ready)
+        self.assertTrue(channel._ai_connection_is_ready())
 
 
 class TestNoSettingsPage(TransactionCase):
@@ -513,34 +526,37 @@ class TestNoSettingsPage(TransactionCase):
 
 
 class TestJobMonitoring(TransactionCase):
-    """P1-6: last run of the recovery cron and stuck jobs on the channel's AI tab."""
+    """Q13 ④ (18.0.2.0.0): the recovery cron's last run and the stuck jobs are
+    shown on the AI assistant form, to system administrators only; Live Chat
+    managers see the channel's AI status."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.cron = cls.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs')
-        channel = cls.env['im_livechat.channel'].create({**TEST_BACKEND, 'name': 'Monitor', 'ai_enabled': True})
+        channel = make_ai_channel(cls.env, {**TEST_BACKEND, 'name': 'Monitor', 'ai_enabled': True})
         cls.session = cls.env['discuss.channel'].create({
             'name': 'Monitor Session', 'channel_type': 'livechat',
             'livechat_operator_id': cls.env.ref('base.partner_admin').id,
             'livechat_channel_id': channel.id,
         })
         cls.channel = channel
+        cls.assistant = channel.sudo().ai_assistant_id
+        cls.admin = new_test_user(cls.env, login='r2_monitor_admin', groups='base.group_user,base.group_system')
         cls.manager = new_test_user(cls.env, login='r2_monitor_manager',
                                     groups='base.group_user,im_livechat.im_livechat_group_manager')
 
     def _monitor(self):
-        channel = self.channel.with_user(self.manager)
-        channel.invalidate_recordset()
-        return channel
+        assistant = self.assistant.with_user(self.admin)
+        assistant.invalidate_recordset()
+        return assistant
 
     def test_ok_when_recent_and_no_stale_jobs(self):
         self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=1)
         self.env['im_livechat.ai.job'].search([]).unlink()
-        channel = self._monitor()
-        self.assertEqual(channel.ai_cron_lastcall, self.cron.lastcall)
-        self.assertEqual(channel.ai_stale_job_count, 0)
-        self.assertFalse(channel.ai_job_warning)
+        assistant = self._monitor()
+        self.assertFalse(assistant.job_runner_warning)
+        self.assertIn('Last run of the scheduled action', assistant.job_runner_info)
 
     def test_warning_when_cron_late_or_jobs_stuck(self):
         self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=12)
@@ -549,8 +565,8 @@ class TestJobMonitoring(TransactionCase):
         old = fields.Datetime.now() - timedelta(minutes=8)
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'run_after': old})
-        # A run may legitimately take MAX_RUN_SECONDS (3 calls of up to 300 s):
-        # a job running for 8 minutes is not stuck yet, one running for 20 is.
+        # A run may legitimately take MAX_RUN_SECONDS: a job running for 8
+        # minutes is not stuck yet, one running for 20 is.
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'state': 'running', 'started_at': old})
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
@@ -559,32 +575,25 @@ class TestJobMonitoring(TransactionCase):
                     'run_after': fields.Datetime.now() - timedelta(minutes=1)})
         Job.create({'discuss_channel_id': self.session.id, 'livechat_channel_id': self.channel.id,
                     'deferred': True, 'run_after': fields.Datetime.now() + timedelta(minutes=9)})
-        channel = self._monitor()
-        self.assertEqual(channel.ai_stale_job_count, 2)
-        self.assertIn('超過 5 分鐘沒有執行', channel.ai_job_warning)
-        self.assertIn('2 個 AI 回覆工作', channel.ai_job_warning)
+        assistant = self._monitor()
+        self.assertTrue(assistant.job_runner_warning)
+        self.assertIn('has not run for more than 5 minutes', assistant.job_runner_info)
+        self.assertIn('2 reply job(s)', assistant.job_runner_info)
 
     def test_warning_when_never_run_or_inactive(self):
         self.cron.lastcall = False
-        self.assertIn('沒有執行', self._monitor().ai_job_warning)
+        self.assertIn('has not run for more than', self._monitor().job_runner_info)
         self.cron.active = False
-        self.assertIn('已停用', self._monitor().ai_job_warning)
+        self.assertIn('is disabled', self._monitor().job_runner_info)
 
-    def test_channel_form_onchange_shows_values(self):
-        """A new channel form (onchange) gets the monitoring values too."""
-        self.cron.lastcall = fields.Datetime.now() - timedelta(minutes=12)
-        spec = {name: {} for name in ('ai_enabled', 'ai_cron_lastcall', 'ai_stale_job_count',
-                                      'ai_job_warning', 'ai_connection_ready')}
-        value = self.env['im_livechat.channel'].with_user(self.manager).onchange({}, [], spec)['value']
-        self.assertTrue(value['ai_cron_lastcall'])
-        self.assertIn('超過 5 分鐘沒有執行', value['ai_job_warning'])
-        self.assertFalse(value['ai_connection_ready'])
-
-    def test_monitoring_hidden_from_operators(self):
+    def test_monitoring_hidden_from_managers_and_operators(self):
         operator = new_test_user(self.env, login='r2_monitor_operator',
                                  groups='base.group_user,im_livechat.im_livechat_group_user')
-        with self.assertRaises(AccessError):
-            self.channel.with_user(operator).read(['ai_job_warning'])
+        for user in (self.manager, operator):
+            with self.assertRaises(AccessError):
+                self.assistant.with_user(user).read(['job_runner_info'])
+        # the manager sees the channel's AI status instead
+        self.assertEqual(self.channel.with_user(self.manager).ai_state, 'ok')
 
 
 class TestAiDisclosure(TransactionCase):
@@ -593,7 +602,7 @@ class TestAiDisclosure(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.channel = cls.env['im_livechat.channel'].create({
+        cls.channel = make_ai_channel(cls.env, {
             **TEST_BACKEND,
             'name': 'Disclosure', 'ai_enabled': True, 'ai_bot_name': '小沃', 'ai_system_prompt': '只回答商品問題。',
         })
@@ -601,13 +610,16 @@ class TestAiDisclosure(TransactionCase):
     def test_bot_partners_have_avatar(self):
         avatar = self.env['im_livechat.channel']._ai_bot_avatar()
         self.assertTrue(base64.b64decode(avatar).startswith(b'\x89PNG'))
-        self.assertTrue(self.channel.ai_bot_partner_id.image_1920)
+        self.assertTrue(self.channel._get_bot_partner().image_1920)
         self.assertTrue(self.env.ref('im_livechat_ai.partner_ai_bot').image_1920)
-        # An existing bot without image gets it when AI is (re)enabled.
-        bot = self.channel.ai_bot_partner_id
-        bot.image_1920 = False
-        self.channel.write({'ai_bot_name': '小沃二號'})
+        # Clearing the assistant's image gives the bot partner the robot avatar again.
+        bot = self.channel._get_bot_partner()
+        assistant = self.channel.sudo().ai_assistant_id
+        assistant.image_1920 = False
         self.assertTrue(bot.image_1920)
+        set_ai(self.channel, {'ai_bot_name': '小沃二號'})
+        self.assertEqual(bot.name, '小沃二號')
+        self.assertFalse(bot.active)
 
     def test_welcome_message(self):
         infos = self.channel._get_channel_infos()
@@ -641,156 +653,3 @@ class TestAiDisclosure(TransactionCase):
         for text in ('不要自稱', '商品資料規則', '小沃', self.env.company.name):
             self.assertNotIn(text, dumped)
         self.assertFalse(hasattr(self.channel, '_ai_identity_block'))
-
-
-class TestMigrationIdempotency(TransactionCase):
-    """P2-4: the legacy-only steps need the flag from pre-migrate; a re-run on
-    a migrated database changes nothing."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.pre = _load_migration('pre-migrate')
-        cls.post = _load_migration('post-migrate')
-        Channel = cls.env['im_livechat.channel']
-        cls.on = Channel.create({**TEST_BACKEND, 'name': 'Migrated On', 'ai_enabled': True, 'ai_max_retries': 1})
-        cls.custom = Channel.create({'name': 'Custom Keywords', 'ai_handoff_keywords': '專人,manager'})
-        cls.log = cls.env['llm.api.log'].create({'status': 'success', 'request_payload': '[{"x": 1}]'})
-
-    def _snapshot(self):
-        cr = self.env.cr
-        self.env.flush_all()
-        cr.execute("""SELECT id, ai_enabled, ai_max_retries, ai_handoff_keywords,
-                             ai_error_message, ai_bot_name, ai_bot_partner_id
-                        FROM im_livechat_channel ORDER BY id""")
-        channels = cr.fetchall()
-        cr.execute("SELECT id, request_payload, error_message FROM llm_api_log ORDER BY id")
-        logs = cr.fetchall()
-        cr.execute("""SELECT p.id, p.name, p.active, md5(coalesce(a.db_datas::text, a.store_fname, ''))
-                        FROM res_partner p
-                        LEFT JOIN ir_attachment a ON a.res_model = 'res.partner' AND a.res_id = p.id
-                                                AND a.res_field = 'image_1920'
-                       WHERE p.id IN (SELECT ai_bot_partner_id FROM im_livechat_channel)
-                    ORDER BY p.id""")
-        partners = cr.fetchall()
-        cr.execute("SELECT count(*) FROM ir_config_parameter WHERE key = %s", (self.pre.LEGACY_FLAG_KEY,))
-        return channels, logs, partners, cr.fetchone()[0]
-
-    def test_rerun_on_migrated_db_changes_nothing(self):
-        before = self._snapshot()
-        for _i in range(2):
-            self.pre.migrate(self.env.cr, '18.0.1.1.0')
-            self.post.migrate(self.env.cr, '18.0.1.1.0')
-            self.env.invalidate_all()
-            self.assertEqual(self._snapshot(), before)
-        self.assertTrue(self.on.ai_enabled)
-        self.assertEqual(self.on.ai_max_retries, 1)
-        self.assertEqual(self.log.request_payload, '[{"x": 1}]')
-
-    def test_rerun_keeps_values_cleared_after_migration(self):
-        """Values an administrator cleared or changed after the upgrade (bot
-        name, error message, keywords, an unarchived/untagged bot partner
-        without avatar) stay as they are when the scripts run again."""
-        bot = self.on.ai_bot_partner_id
-        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot')
-        category = self.env.ref('im_livechat_ai.partner_category_ai_bot')
-        self.env.cr.execute("""UPDATE im_livechat_channel
-                                  SET ai_bot_name = NULL, ai_error_message = NULL, ai_handoff_keywords = NULL
-                                WHERE id = %s""", (self.on.id,))
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_error_message = '' WHERE id = %s",
-                            (self.custom.id,))
-        (bot | default_bot).with_context(active_test=False).write({
-            'active': True, 'category_id': [(3, category.id)], 'image_1920': False,
-        })
-        self.env.invalidate_all()
-
-        def state():
-            self.env.flush_all()
-            self.env.cr.execute("""SELECT p.id, p.name, p.active,
-                                          array(SELECT category_id FROM res_partner_res_partner_category_rel r
-                                                 WHERE r.partner_id = p.id ORDER BY category_id),
-                                          (SELECT count(*) FROM ir_attachment a
-                                            WHERE a.res_model = 'res.partner' AND a.res_id = p.id
-                                              AND a.res_field = 'image_1920')
-                                     FROM res_partner p WHERE p.id IN %s ORDER BY p.id""",
-                                   (tuple((bot | default_bot).ids),))
-            partners = self.env.cr.fetchall()
-            return self._snapshot(), partners
-
-        before = state()
-        self.assertEqual(before[1][0][4], 0)  # avatar really removed
-        for version in ('18.0.1.1.0', '18.0.1.0.1'):
-            self.pre.migrate(self.env.cr, version)
-            self.post.migrate(self.env.cr, version)
-            self.env.invalidate_all()
-            self.assertEqual(state(), before)
-        self.assertFalse(self.on.ai_bot_name)
-        self.assertFalse(self.on.ai_error_message)
-        self.assertFalse(self.on.ai_handoff_keywords)
-        self.assertTrue(bot.active)
-        self.assertNotIn(category, bot.category_id)
-        self.assertFalse(bot.image_1920)
-
-    def test_legacy_schema_sets_flag_and_converts(self):
-        self.env.cr.execute(SQL("ALTER TABLE im_livechat_channel ADD COLUMN %s integer",
-                                SQL.identifier('ai_retry_delay')))
-        self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.cr.execute("SELECT value FROM ir_config_parameter WHERE key = %s", (self.pre.LEGACY_FLAG_KEY,))
-        self.assertEqual(self.env.cr.fetchone()[0], '1')
-        with self.assertLogs(self.post.__name__, level='WARNING'):
-            self.post.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.invalidate_all()
-        self.assertFalse(sql.column_exists(self.env.cr, 'im_livechat_channel', 'ai_retry_delay'))
-        self.assertFalse(self.on.ai_enabled)
-        self.assertEqual(self.on.ai_max_retries, 0)  # 1 total call -> 0 retries
-        self.assertFalse(self.log.request_payload)
-        self.env.cr.execute("SELECT count(*) FROM ir_config_parameter WHERE key = %s", (self.pre.LEGACY_FLAG_KEY,))
-        self.assertEqual(self.env.cr.fetchone()[0], 0)
-        # A second run (no legacy columns any more) changes nothing.
-        self.on.write({'ai_enabled': True})
-        before = self._snapshot()
-        self.pre.migrate(self.env.cr, '18.0.1.0.1')
-        self.post.migrate(self.env.cr, '18.0.1.0.1')
-        self.env.invalidate_all()
-        self.assertEqual(self._snapshot(), before)
-
-    def test_handoff_keywords_migration(self):
-        Channel = self.env['im_livechat.channel']
-        # Channels outside the test (created at install) have no keywords since
-        # owner decision 40: give them a custom value, so only ours change.
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = 'x' "
-                            "WHERE ai_handoff_keywords IS NULL")
-        old = Channel.create({'name': 'Old Keywords'})
-        empty = Channel.create({'name': 'No Keywords'})
-        spaced = Channel.create({'name': 'Spaced Old Keywords'})
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = %s WHERE id = %s",
-                            (LEGACY_HANDOFF_KEYWORDS, old.id))
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = NULL WHERE id = %s",
-                            (empty.id,))
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_handoff_keywords = %s WHERE id = %s",
-                            (LEGACY_HANDOFF_KEYWORDS.replace(',', ', '), spaced.id))
-        self.assertEqual(self.post.LEGACY_HANDOFF_KEYWORDS, LEGACY_HANDOFF_KEYWORDS)
-        self.assertEqual(self.post.NEW_HANDOFF_KEYWORDS, HANDOFF_KEYWORDS_1_1_0)
-        changed = self.post.migrate_handoff_keywords(self.env.cr)
-        self.env.invalidate_all()
-        self.assertEqual(set(changed), {old.id, empty.id, spaced.id})
-        for channel in (old, empty, spaced):
-            self.assertEqual(channel.ai_handoff_keywords, HANDOFF_KEYWORDS_1_1_0)
-        self.assertEqual(self.custom.ai_handoff_keywords, '專人,manager')
-        self.assertFalse(self.post.migrate_handoff_keywords(self.env.cr))
-
-    def test_bot_avatars_migration(self):
-        bot = self.on.ai_bot_partner_id
-        bot.image_1920 = False
-        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot')
-        default_bot.image_1920 = False
-        real = new_test_user(self.env, login='r2_real_person').partner_id
-        self.env.cr.execute("UPDATE im_livechat_channel SET ai_bot_partner_id = %s WHERE id = %s",
-                            (real.id, self.custom.id))
-        self.env.invalidate_all()
-        self.assertGreaterEqual(self.post.set_bot_avatars(self.env.cr), 2)
-        self.env.invalidate_all()
-        self.assertTrue(bot.image_1920)
-        self.assertTrue(default_bot.image_1920)
-        self.assertFalse(real.image_1920 and real.image_1920 == bot.image_1920)
-        self.assertEqual(self.post.set_bot_avatars(self.env.cr), 0)

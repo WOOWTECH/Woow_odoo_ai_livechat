@@ -1,75 +1,84 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Live Chat AI Integration',
-    'version': '18.0.1.3.5',
+    'version': '18.0.2.0.0',
     'category': 'Website/Live Chat',
-    'summary': 'Answer Live Chat visitors through a per-channel AI backend (OpenAI compatible or n8n)',
+    'summary': 'Answer Live Chat visitors with an AI assistant (LiteLLM or n8n), configured in two layers: '
+               'AI connections and AI assistants',
     'description': """
 Live Chat AI Integration
 =========================
 
-Answers Live Chat visitors through an AI backend chosen per channel. Odoo
-records, forwards and manages the conversation; the backend does everything
-else (persona, tools such as product lookup, moderation, permissions).
+Answers Live Chat visitors with an AI assistant. Odoo records, forwards and
+manages the conversation; the backend does everything else (persona, tools
+such as product lookup, moderation, permissions). Backends: LiteLLM (OpenAI
+compatible /v1/chat/completions, Bearer key) or an n8n webhook (HMAC-SHA256
+signed requests, the secret is never sent). Nothing else.
+
+Two layers, aligned with Discuss AI and Project AI:
+---------------------------------------------------
+
+Each product has its own core; nothing is shared.
+
+
+* AI Connections (「AI 連線」, system administrators only): backend type,
+  endpoint URL, write-only API key, model, timeout of one answer, retries,
+  documents, content logging, "Safe for Customers", readiness and Test
+  Connection
+* AI Assistants (「AI 助理」, system administrators only): the name visitors
+  see, avatar and archived bot partner, system prompt, error message,
+  history length, the AI connection, and "Available in Live Chat"
+  (「可用在 Live Chat」)
+* Live Chat channel, tab "AI Assistant" (Live Chat managers): pick one of the
+  assistants available in Live Chat, turn the AI on; welcome and handoff
+  texts, pause and wait minutes, keywords; the status of the AI
 
 Features:
 ---------
-* Per-channel backend connection (Live Chat > Configuration > Channels >
-  AI tab), set by system administrators: OpenAI compatible
-  (/v1/chat/completions, e.g. LiteLLM or Hermes, Bearer token) or an n8n
-  webhook (HMAC-SHA256 signed requests, the secret is never sent)
-* The access token is write-only: never shown again, never readable by Live
-  Chat managers; endpoint URLs must use https (http only for localhost and
-  hosts ending in .svc.cluster.local)
-* Conversation history context for multi-turn dialogue, the channel's
-  optional system prompt, a stable session id and the visitor identity
+* The API key is write-only: never shown again, removed when the endpoint
+  host or the backend type changes; endpoint URLs must use https (http only
+  for localhost and hosts ending in .svc.cluster.local)
+* Conversation history, the assistant's optional system prompt, a stable
+  session id and the visitor identity (never the email for LiteLLM)
 * Visitor images and files go to the backend as they are (no text
-  extraction): OpenAI compatible backends get images as image_url data URIs
-  and documents as file parts ("Visitor Files" = Attach the file) or signed
-  download links (Download link only, e.g. Hermes); n8n gets signed download
-  URLs (/im_livechat_ai/attachment/..., valid 1 hour, live chat attachments
-  only). Dangerous types are links only; size, count and 7 MB limits
-* Per-channel bot partner with custom name
+  extraction): LiteLLM gets images as data URIs and documents of at most
+  4 MB as file parts (or signed links); n8n gets signed download URLs
+  (/im_livechat_ai/attachment/..., valid 1 hour, live chat attachments
+  only). Dangerous types are links only
 * Durable reply jobs: queued in the visitor's transaction, processed after
   commit, one at a time per conversation (rapid messages get one reply),
-  recovered by a cron after a restart
-* Bounded backend calls (timeout per channel, by default 45 s for OpenAI
-  compatible backends and 120 s for n8n, 10-300 s; at most 2 retries; n8n only retried
-  when the call could not be delivered or got HTTP 429/503); on failure the
-  visitor gets an error message and the operators are notified
-* Portal (logged-in) customers are answered like guests; internal users,
-  the session operator and the bots never trigger the AI
-* Human handoff: an operator's reply pauses the AI for the conversation
-  (30 minutes by default, per channel, extended by every operator reply);
-  the backend decides when the visitor wants a human (its reply ends with
-  [[handoff]], n8n answers "handoff": true; channels with operators get one
-  system line about it); Odoo posts the reply, notifies the operators and
-  waits for an operator (10 minutes by default); optional handoff keywords
-  hand over without calling the backend (empty by default); the first visitor message during the wait gets
-  one waiting notice, and if no operator replies the AI answers what the
-  visitor wrote meanwhile when the wait ends (recovery cron)
-* AI disclosure: robot avatar on the AI bot and an AI welcome message in the
-  chat window
-* The AI tab shows the last run of the reply recovery cron and stuck jobs
-* Operator replies are sent to the backend as colleague replies
-  ("[真人客服 name]") so the AI does not contradict them
-* AI API logs with token usage and HTTP status (Live Chat administrators
-  only; conversation content is not stored unless enabled per channel;
-  retention per channel)
+  recovered by a cron after a restart; at most 30 unfinished replies per
+  channel (system parameter im_livechat_ai.max_active_jobs)
+* The connection's timeout bounds one answer, retries included (LiteLLM 45 s,
+  n8n 120 s by default, 10-300 s); retries only when the request was not
+  sent or the backend answered HTTP 429/503; on failure the visitor gets the
+  error message and the operators are notified
+* When the AI is on but cannot answer, no job is queued: the conversation
+  gets one notice and the operators one alert per blocked period
+* Human handoff: an operator's reply pauses the AI for the conversation;
+  the backend decides when the visitor wants a human ([[handoff]] or n8n
+  "handoff": true); Odoo waits for an operator, then the AI answers again
+* AI disclosure: robot avatar on the AI bot and an AI welcome message
+* Call logs (one per answer, kept 30 days) and monthly usage, system
+  administrators only; content is stored only while enabled on the
+  connection
+* Rate limits live in the LiteLLM key; Odoo keeps only technical queue caps
 
 Requirements:
 -------------
 * Odoo 18.0+
 * im_livechat module
-* An OpenAI compatible server (LiteLLM, Hermes, ...) or an n8n instance
+* A LiteLLM server or an n8n instance
 
 Configuration:
 --------------
-1. A system administrator opens Live Chat > Configuration > Channels >
-   (channel) > AI tab, picks the backend type, fills in the endpoint URL,
-   the access token (and the model for LiteLLM) and clicks
-   "Test Connection".
-2. A Live Chat manager enables AI on that channel.
+1. A system administrator creates an AI connection (Live Chat >
+   Configuration > AI Connections) and clicks "Test Connection".
+2. A system administrator creates an AI assistant with that connection and
+   ticks "Available in Live Chat" (Live Chat > Configuration > AI
+   Assistants).
+3. A Live Chat manager picks the assistant on the channel's "AI Assistant"
+   tab and turns the AI on.
     """,
     'author': 'WOOWTECH',
     'website': 'https://github.com/WOOWTECH/Woow_odoo_ai_livechat',
@@ -82,11 +91,15 @@ Configuration:
     'data': [
         # Security
         'security/ir.model.access.csv',
+        'security/ir_rule.xml',
 
         # Views
+        'views/ai_connection_views.xml',
+        'views/ai_assistant_views.xml',
         'views/im_livechat_channel_views.xml',
         'views/llm_api_log_views.xml',
         'views/livechat_ai_job_views.xml',
+        'views/ai_usage_views.xml',
 
         # Data
         'data/ai_data.xml',

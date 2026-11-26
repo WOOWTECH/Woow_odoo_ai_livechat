@@ -1,94 +1,118 @@
 # -*- coding: utf-8 -*-
-"""Live Chat channel: per-channel AI backend (OpenAI compatible or n8n webhook).
+"""Live Chat channel: the AI assistant that answers its visitors.
 
-18.0.1.2.0: every channel has its own backend connection (type, endpoint
-URL, access token), managed by system administrators on the channel's AI
-tab. Odoo records, forwards and manages the conversation; the backend does
+18.0.2.0.0: the AI is configured in two layers, aligned with Discuss AI and
+Project AI. A system administrator sets up 「AI 連線」 (``im_livechat.ai.connection``:
+LiteLLM or n8n, URL, key, model, timeout, retries, documents, content
+logging) and 「AI 助理」 (``im_livechat.ai.assistant``: the name visitors see,
+avatar, bot partner, prompt, error message, history length) and ticks
+「可用在 Live Chat」. A Live Chat manager picks one of those assistants on the
+channel's 「AI 助理」 tab and turns the AI on; the channel keeps the switch,
+the welcome and handoff texts, the pause and wait minutes and the keywords.
+Odoo records, forwards and manages the conversation; the backend does
 everything else (persona, tools, product data, moderation, permissions).
 
-Wire format (docs: README "AI backends"), compatible with the n8n section of
-woow_ai_contact docs/PROTOCOL.md:
+Wire format (docs/PROTOCOL.md), aligned with Discuss AI and Project AI:
 
-- openai: ``POST {url}/chat/completions`` with ``Authorization: Bearer
-  <token>``, body ``model`` (only when set), ``messages`` (start and end with
-  a user turn), ``user`` (session id) and ``metadata`` (strings). No tools,
-  no temperature, no max_tokens; not streamed.
+- LiteLLM (``openai``): ``POST {url}/chat/completions`` with
+  ``Authorization: Bearer <key>``, body ``model``, ``messages`` (start and
+  end with a user turn), ``user`` (session id) and ``metadata`` (strings, no
+  email). No tools, no temperature, no max_tokens; not streamed.
 - n8n: ``POST {url}`` with ``X-Woow-Timestamp`` and ``X-Woow-Signature:
-  sha256=HMAC(token, "<ts>.<raw body>")`` when a token is set (never sent;
-  without a token, e.g. a public Chat Trigger, nothing is signed). The body
-  also carries the n8n Chat Trigger fields ``action`` / ``sessionId`` /
-  ``chatInput``. The answer is ``reply`` / ``replies`` / ``skip``, or the
-  AI Agent's ``output``.
+  sha256=HMAC(secret, "<ts>.<raw body>")`` when a signing secret is set (never
+  sent). The body carries ``assistant``, ``surface`` and the Live Chat
+  channel as ``contact``, plus the n8n Chat Trigger fields ``action`` /
+  ``sessionId`` / ``chatInput``. The answer is ``reply`` / ``replies`` /
+  ``skip``, or the AI Agent's ``output``.
 
-Visitor attachments (owner decision 39) go to the backend as they are, no
-text extraction: openai gets images as ``image_url`` data URIs and, in the
-channel's 'file' document mode, documents as ``file`` parts (original bytes
-and mimetype); everything else, and n8n always, gets signed download URLs
-(``/im_livechat_ai/attachment/<id>/<expires>.<hmac>``, valid 1 hour). See
-discuss_channel.py for the limits.
+Visitor attachments go to the backend as they are, no text extraction:
+LiteLLM gets images as ``image_url`` data URIs and, in the connection's 'file'
+document mode, documents as ``file`` parts; everything else, and n8n always,
+gets signed download URLs (``/im_livechat_ai/attachment/<id>/<expires>.<hmac>``,
+valid 1 hour). See discuss_channel.py for the limits.
 """
 
-import base64
-import hashlib
-import hmac
+import bisect
 import json
 import logging
 import re
 import time
-from datetime import timedelta, timezone
+from datetime import timedelta
 from urllib.parse import urlsplit
 
 import requests
-from urllib3.exceptions import MaxRetryError, NewConnectionError
 
-from odoo import api, fields, models, tools, _
+from odoo import api, fields, models, SUPERUSER_ID
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tools import SQL
+from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
+from odoo.tools import SQL, clean_context
 
+from ..tools.backend import (  # noqa: F401 - endpoint_url_allowed and n8n_signature_headers are re-exported
+    BACKEND_N8N,
+    BACKEND_OPENAI,
+    endpoint_url_allowed,
+    exception_frames,
+    json_dumps,
+    one_line_name,
+    n8n_signature_headers,
+    request_not_sent,
+)
 from ..tools.markdown import markdown_to_html
-from .discuss_channel import DOCUMENT_MODE_FILE, DOCUMENT_MODE_LINK, redact_base64, strip_handoff_marker
+from .ai_assistant import DEFAULT_BOT_XMLID, bot_avatar
+from .ai_connection import (
+    CONNECT_TIMEOUT,
+    LITELLM_DEFAULT_TIMEOUT,
+    MAX_MAX_RETRIES,
+    MAX_TIMEOUT,
+    N8N_DEFAULT_TIMEOUT,
+    TEST_TIMEOUT,
+)
+from .discuss_channel import redact_base64, strip_handoff_marker
 
 _logger = logging.getLogger(__name__)
 
-# --- Backend connection (per channel, system administrators only) ---
-BACKEND_OPENAI = 'openai'
-BACKEND_N8N = 'n8n'
-# The access token lives in this SQL-only column (not an ORM field), so no
-# read of the channel ever returns it; ai_api_token is write-only.
-TOKEN_COLUMN = 'ai_api_token_secret'
 SYSTEM_GROUP = 'base.group_system'
-# Fields only system administrators may set (read access: field groups).
-AI_SYSTEM_FIELDS = frozenset({'ai_backend_type', 'ai_endpoint_url', 'ai_api_token', 'ai_log_payload'})
-# Plain http:// is accepted only for these hosts (same rule as woow_ai_contact).
-HTTP_ALLOWED_HOSTS = ('localhost', '127.0.0.1', '::1')
-HTTP_ALLOWED_SUFFIX = '.svc.cluster.local'
+# Kept for one version on upgraded databases (rollback copy of the 18.0.1.x key): the column
+# is not an ORM field any more; neutralize.sql and the uninstall hook clear / drop it.
+TOKEN_COLUMN = 'ai_api_token_secret'
 
-DEFAULT_LOG_RETENTION_DAYS = 14
-
-# Seconds to wait for the backend's answer, per call: the channel's
-# ai_request_timeout (10-300), or these defaults when it is 0. The n8n smart
-# home advisor took 112 s on a long whole-house question (live test
-# 2026-11-01; Cloudflare did not cut it at 100 s), so n8n waits 120 s.
-LLM_REQUEST_TIMEOUT = 45  # OpenAI compatible default
-N8N_REQUEST_TIMEOUT = 120  # n8n default
-MIN_REQUEST_TIMEOUT = 10
-MAX_REQUEST_TIMEOUT = 300
-LLM_MAX_RETRIES = 2  # retries after the first call
+# Timeouts (seconds, one answer, retries included): see ai_connection.py.
+LLM_REQUEST_TIMEOUT = LITELLM_DEFAULT_TIMEOUT
+N8N_REQUEST_TIMEOUT = N8N_DEFAULT_TIMEOUT
+MAX_REQUEST_TIMEOUT = MAX_TIMEOUT
+N8N_TEST_TIMEOUT = TEST_TIMEOUT
+LLM_MAX_RETRIES = MAX_MAX_RETRIES  # retries after the first call
 LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
-N8N_RETRY_STATUSES = (429, 503)  # n8n: the only HTTP answers that are retried
-N8N_TEST_TIMEOUT = 15  # seconds, ping of the connection test
+RETRY_STATUSES = (429, 503)  # the only HTTP answers that are retried (both backends)
+N8N_RETRY_STATUSES = RETRY_STATUSES
 MAX_N8N_REPLIES = 10
 MAX_HANDOFF_REASON_LENGTH = 300  # characters of n8n "handoff_reason" kept
+METADATA_MAX_KEYS = 16
 METADATA_MAX_VALUE = 512
 MAX_LOG_ERROR_LENGTH = 300
-CONNECTION_TEST_PROMPT = 'Connection test. Reply with "OK".'
+MAX_LOG_PAYLOAD = 200000  # characters
+# The server warning about a channel whose AI cannot answer: at most once per
+# channel and process in this many seconds (a flood of visitor messages must
+# not flood the log).
+BLOCKED_WARNING_SECONDS = 600
+# Operator alerts of a channel (cannot answer, too many unfinished replies, a
+# kind of failure): at most one per channel (and kind) in this window.
+ALERT_WINDOW_MINUTES = 10
+# The two cannot-answer alerts of a channel, each with its own period flag and
+# time (one does not hide the other): {kind: (flag field, time field)}
+ALERT_KINDS = {
+    'blocked': ('ai_blocked_alert_sent', 'ai_blocked_alert_at'),  # the AI is on but cannot answer
+    'full': ('ai_full_alert_sent', 'ai_full_alert_at'),  # the caps of unfinished replies refuse messages
+}
+# Technical fields of a channel that only system administrators may set
+ALERT_FIELDS = tuple(name for names in ALERT_KINDS.values() for name in names)
 
-# --- Visitor-facing defaults (Traditional Chinese, P2-7 / P1-2) ---
+# --- Visitor-facing defaults (English source, translated; stored values are kept) ---
 DEFAULT_ERROR_MESSAGE = (
-    '抱歉，AI 客服暫時無法回覆。請稍後再試，或留下您的聯絡方式，'
-    '我們的客服人員會盡快與您聯繫。'
+    'Sorry, the AI assistant cannot answer right now. Please try again later, or leave your contact details '
+    'and our team will get back to you as soon as possible.'
 )
-# The 18.0.1.0.x default; the 18.0.1.1.0 post-migration replaces it.
+# The 18.0.1.0.x default; the 18.0.1.1.0 post-migration replaced it.
 LEGACY_ERROR_MESSAGE = (
     'Sorry, the AI assistant is temporarily unavailable. '
     'Please try again later or leave your contact information.'
@@ -101,36 +125,32 @@ HANDOFF_KEYWORDS_1_1_0 = (
     '找真人,真人客服,轉真人,轉人工,人工客服,找客服,聯絡客服,我要客服,'
     'human agent,talk to a human,real person,live agent'
 )
-# The earlier default; the 18.0.1.1.0 post-migration replaces it.
+# The earlier default; the 18.0.1.1.0 post-migration replaced it.
 LEGACY_HANDOFF_KEYWORDS = '真人,客服,人工,真人客服,human,agent,operator'
-DEFAULT_HANDOFF_MESSAGE = '已幫您通知客服，請稍候。'
+DEFAULT_HANDOFF_MESSAGE = 'We have notified our team. Please wait a moment.'
 DEFAULT_HANDOFF_PAUSE_MINUTES = 30  # after an operator's reply
 DEFAULT_HANDOFF_WAIT_MINUTES = 10  # after a visitor's handoff request, then the AI resumes
 MAX_HANDOFF_PAUSE_MINUTES = 1440
 # One-time bot reply to the first visitor message during a handoff wait;
 # %(minutes)s is replaced with the wait minutes.
 DEFAULT_PAUSE_NOTICE = (
-    '已通知客服人員，請稍候。若客服暫時無法回覆，AI 助理會在 %(minutes)s 分鐘後繼續為您服務。'
+    'We have notified our team. Please wait a moment. If nobody can answer, the AI assistant will continue '
+    'in %(minutes)s minutes.'
 )
-# Welcome message of AI-enabled channels (AI disclosure, P1-7).
+# Welcome message of AI-enabled channels (AI disclosure).
 DEFAULT_WELCOME_MESSAGE = (
-    '您好，我是 AI 客服助理，有什麼可以幫您？需要真人客服請輸入「找真人」。'
+    'Hello, I am the AI customer service assistant. How can I help you? To talk to a person, type '
+    '"talk to a human".'
 )
-DEFAULT_BOT_NAME = 'AI 客服助理'
+DEFAULT_BOT_NAME = 'AI Customer Service Assistant'
 LEGACY_BOT_NAME = 'AI Assistant'  # the 18.0.1.0.x default, renamed by the 18.0.1.1.0 migration
-BOT_AVATAR_PATH = 'im_livechat_ai/static/img/ai_bot.png'
-MAX_AI_MAX_HISTORY = 200
-DEFAULT_AI_MAX_HISTORY = 50
-MIN_LOG_RETENTION_DAYS = 1
-MAX_LOG_RETENTION_DAYS = 3650
 # Only Live Chat managers configure the AI of a channel; the ai_* fields are
 # neither readable nor writable for operators, employees, portal or public.
 AI_CONFIG_GROUP = 'im_livechat.im_livechat_group_manager'
-BOT_CATEGORY_XMLID = 'im_livechat_ai.partner_category_ai_bot'
-# Reply job monitoring on the AI tab: a recovery cron that has not run for
-# this long, or unfinished jobs this old, are reported.
-MONITOR_STALE_MINUTES = 5
 
+STATE_OFF = 'off'
+STATE_OK = 'ok'
+STATE_BLOCKED = 'blocked'
 
 # Keywords made only of these characters (English words or phrases) must
 # match as whole words, case-insensitive, with any whitespace between the
@@ -139,15 +159,27 @@ MONITOR_STALE_MINUTES = 5
 _WORD_CHARS_RE = re.compile(r"^[0-9a-z_' \-]+$")
 _PAUSE_NOTICE_PLACEHOLDER_RE = re.compile(r'%\(minutes\)[sd]')
 
-# Reasoning blocks and special tokens some models leave in the answer.
+# Reasoning blocks and special tokens some models leave in the answer. _THINK_RE is the rule; it is applied by
+# _strip_think_pairs, in linear time (the pattern itself rescans to the end of the text for every opener that has
+# no closer, which a long answer could use to hold the worker for seconds).
 _THINK_RE = re.compile(r'<(think|thinking)>.*?</\1\s*>', re.DOTALL | re.IGNORECASE)
+_THINK_OPENER_RE = re.compile(r'<(think|thinking)>', re.IGNORECASE)
+_THINK_CLOSER_RE = re.compile(r'</(think|thinking)\s*>', re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r'<(?:think|thinking)>.*$', re.DOTALL | re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'^.*?</(?:think|thinking)\s*>', re.DOTALL | re.IGNORECASE)
 _SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
 
+# {livechat channel id: time.monotonic() of the last "cannot answer" warning} (this process)
+_BLOCKED_WARNED = {}
+_FULL_WARNED = {}  # the same for the cap of unfinished reply jobs
+
+
+class _NobodyAlerted(Exception):
+    """The alert reached nobody: its claim is undone."""
+
 
 class LLMNotConfigured(Exception):
-    """Endpoint URL or access token of the channel missing or not allowed."""
+    """The channel has no usable AI assistant or connection (URL, key or model missing, URL not allowed)."""
 
 
 class LLMInvalidResponse(ValueError):
@@ -158,34 +190,32 @@ class LLMEmptyResponse(ValueError):
     """The backend answered with no visible content."""
 
 
-# Short operator-facing explanation per HTTP status (Traditional Chinese).
-_HTTP_STATUS_MESSAGES = {
-    400: '請求格式或模型名稱有誤',
-    401: '金鑰或簽章無效',
-    403: '後端拒絕存取（權限不足）',
-    404: '網址或模型不存在',
-    408: '上游服務逾時',
-    413: '對話內容太長',
-    429: '呼叫太頻繁或額度已用完',
-}
+def _think_name(match):
+    """'think' or 'thinking' for a match of the tag name. By its length, not
+    by lower(): the pattern ignores case with Unicode folding, so it matches
+    'thınk' (dotless i) or 'thİnk', whose lower() is neither name."""
+    return 'thinking' if len(match.group(1)) == 8 else 'think'
 
 
-def endpoint_url_allowed(url):
-    """https://, or http:// to localhost, 127.0.0.1, ::1 or an in-cluster
-    host ending in .svc.cluster.local (a short service name is refused)."""
-    try:
-        parts = urlsplit((url or '').strip())
-        host = (parts.hostname or '').lower()
-    except ValueError:
-        return False
-    if not host:
-        return False
-    scheme = (parts.scheme or '').lower()
-    if scheme == 'https':
-        return True
-    if scheme == 'http':
-        return host in HTTP_ALLOWED_HOSTS or host.endswith(HTTP_ALLOWED_SUFFIX)
-    return False
+def _strip_think_pairs(text):
+    """``_THINK_RE.sub('', text)`` in linear time: each opener is paired with
+    the nearest closer of the same name after it, leftmost first."""
+    closers = {'think': [], 'thinking': []}
+    for match in _THINK_CLOSER_RE.finditer(text):
+        closers[_think_name(match)].append((match.start(), match.end()))
+    starts = {name: [start for start, _end in found] for name, found in closers.items()}
+    parts, position = [], 0
+    for match in _THINK_OPENER_RE.finditer(text):
+        if match.start() < position:
+            continue  # inside a block already removed
+        name = _think_name(match)
+        index = bisect.bisect_left(starts[name], match.end())
+        if index == len(starts[name]):
+            continue  # no closer of this name after it (an unclosed block is removed below)
+        parts.append(text[position:match.start()])
+        position = closers[name][index][1]
+    parts.append(text[position:])
+    return ''.join(parts)
 
 
 def strip_think(text):
@@ -193,40 +223,10 @@ def strip_think(text):
     if not text:
         return ''
     text = _SPECIAL_TOKEN_RE.sub('', text)
-    text = _THINK_RE.sub('', text)
+    text = _strip_think_pairs(text)
     text = _THINK_OPEN_RE.sub('', text)
     text = _THINK_CLOSE_RE.sub('', text)
     return text.strip()
-
-
-def json_dumps(payload):
-    """Compact UTF-8 JSON: the exact bytes that are signed and sent to n8n."""
-    return json.dumps(payload, ensure_ascii=False, separators=(',', ':'), default=str)
-
-
-def n8n_signature_headers(secret, body, timestamp=None):
-    """n8n request signature: ``sha256=`` + hex HMAC-SHA256(secret,
-    "<timestamp>.<body bytes>"). The secret itself is never sent."""
-    timestamp = str(int(timestamp if timestamp is not None else time.time()))
-    digest = hmac.new(secret.encode(), timestamp.encode() + b'.' + body, hashlib.sha256).hexdigest()
-    return {'X-Woow-Timestamp': timestamp, 'X-Woow-Signature': 'sha256=%s' % digest}
-
-
-def request_not_sent(error):
-    """True when a requests.ConnectionError happened before the request was
-    sent: a connect timeout or a connection that could not be opened
-    (refused, unknown host). A connection reset or closed after the request
-    was sent is not: the backend may already be working on it."""
-    if isinstance(error, requests.ConnectTimeout):
-        return True
-    if isinstance(error, (requests.exceptions.SSLError, requests.exceptions.ProxyError)):
-        return False
-    if not isinstance(error, requests.ConnectionError):
-        return False
-    reason = error.args[0] if getattr(error, 'args', None) else None
-    if isinstance(reason, MaxRetryError):
-        reason = reason.reason
-    return isinstance(reason, NewConnectionError)
 
 
 def openai_reply_text(data):
@@ -297,13 +297,14 @@ def n8n_replies(data):
 def n8n_handoff(data):
     """(handoff, reason) of an n8n answer: ``"handoff": true`` (the JSON
     boolean) at the top level or in the first item of an item list, and the
-    optional ``"handoff_reason"`` string (at most 300 characters kept)."""
+    optional ``"handoff_reason"`` string (white space collapsed, at most 300
+    characters kept)."""
     if isinstance(data, list) and data and isinstance(data[0], dict):
         data = data[0]
     if not isinstance(data, dict) or data.get('handoff') is not True:
         return False, None
     reason = data.get('handoff_reason')
-    reason = reason.strip()[:MAX_HANDOFF_REASON_LENGTH] if isinstance(reason, str) else ''
+    reason = ' '.join(reason.split())[:MAX_HANDOFF_REASON_LENGTH] if isinstance(reason, str) else ''
     return True, reason or None
 
 
@@ -332,120 +333,56 @@ def usage_tokens(usage):
     return prompt, completion, total
 
 
+def log_status(error):
+    """Call log status of a failed answer (the contract's keys)."""
+    if isinstance(error, requests.HTTPError):
+        return 'http_error'
+    if isinstance(error, requests.Timeout):
+        return 'timeout'
+    if isinstance(error, (LLMInvalidResponse, LLMEmptyResponse)):
+        return 'invalid_response'
+    return 'error'
+
+
 class ImLivechatChannel(models.Model):
-    """Live Chat channel with an optional AI backend (per channel)."""
+    """Live Chat channel answered by an AI assistant."""
     _inherit = 'im_livechat.channel'
 
-    # --- AI Integration Fields ---
+    def _default_ai_handoff_message(self):
+        return self.env._('We have notified our team. Please wait a moment.')
+
+    def _default_ai_pause_notice(self):
+        return self.env._('We have notified our team. Please wait a moment. If nobody can answer, the AI '
+                          'assistant will continue in %(minutes)s minutes.')
+
+    def _default_ai_welcome_message(self):
+        return self.env._('Hello, I am the AI customer service assistant. How can I help you? To talk to a '
+                          'person, type "talk to a human".')
+
+    # --- AI (Live Chat managers) ---
     ai_enabled = fields.Boolean(
-        string='Enable AI Integration',
+        string='Answer With AI',
         groups=AI_CONFIG_GROUP,
         default=False,
-        help='Answer visitors through the AI backend of this channel.',
+        help='Answer the visitors of this channel with its AI assistant.',
     )
-    # Readable by Live Chat managers, changed by system administrators only
-    # (see _check_ai_config_access).
-    ai_backend_type = fields.Selection(
-        selection=[
-            (BACKEND_OPENAI, 'OpenAI compatible (LiteLLM, Hermes…)'),
-            (BACKEND_N8N, 'n8n Webhook'),
-        ],
-        string='Backend Type',
-        groups=AI_CONFIG_GROUP,
-        default=BACKEND_OPENAI,
-        required=True,
-        help='OpenAI compatible: any server with /v1/chat/completions, for example '
-             'LiteLLM or Hermes. n8n Webhook: an n8n workflow that starts with a '
-             'Webhook node and answers with "Respond to Webhook".',
+    ai_assistant_id = fields.Many2one(
+        'im_livechat.ai.assistant', string='AI Assistant', groups=AI_CONFIG_GROUP,
+        ondelete='restrict', index='btree_not_null', domain=[('livechat_selectable', '=', True)],
+        help='The AI assistant that answers the visitors: one of the assistants a system administrator made '
+             'available in Live Chat (Live Chat > Configuration > AI Assistants).',
     )
-    ai_endpoint_url = fields.Char(
-        string='Endpoint URL',
-        groups=SYSTEM_GROUP,
-        copy=False,
-        help='OpenAI compatible: the base URL ending in /v1 (for example '
-             'https://litellm.example.com/v1); /chat/completions is added. '
-             'n8n: the full production webhook URL. Must start with https://; '
-             'http:// is only accepted for localhost, 127.0.0.1, ::1 and '
-             'in-cluster hosts ending in .svc.cluster.local.',
-    )
-    ai_api_token = fields.Char(
-        string='Access Token',
-        groups=SYSTEM_GROUP,
-        compute='_compute_ai_api_token',
-        inverse='_inverse_ai_api_token',
-        store=False,
-        copy=False,
-        help='OpenAI compatible (required): the API key, sent as "Authorization: Bearer '
-             '<token>". n8n (optional): the signing secret of the X-Woow-Signature header '
-             '(HMAC-SHA256); it is never sent. Without it requests are not signed (a public '
-             'Chat Trigger). The saved token is never shown again; leave the field empty '
-             'to keep it.',
-    )
-    ai_api_token_set = fields.Boolean(
-        string='Access Token Saved',
-        groups=SYSTEM_GROUP,
-        compute='_compute_ai_api_token',
-    )
-    ai_connection_ready = fields.Boolean(
-        string='Backend Connection Ready',
-        groups=AI_CONFIG_GROUP,
-        compute='_compute_ai_connection_ready',
-        help='The endpoint URL is set, and for OpenAI compatible backends the access '
-             'token and the model too.',
-    )
-    ai_model = fields.Char(
-        string='Model (optional)',
-        groups=AI_CONFIG_GROUP,
-        help='OpenAI compatible backends: the model name the backend expects (LiteLLM '
-             'needs it, for example chatgpt-pool/gpt-6-sol; Hermes ignores it). '
-             'Not sent when empty. Not used by n8n.',
-    )
-    ai_document_mode = fields.Selection(
-        selection=[
-            (DOCUMENT_MODE_FILE, 'Attach the file (LiteLLM / OpenAI)'),
-            (DOCUMENT_MODE_LINK, 'Download link only (Hermes…)'),
-        ],
-        string='Visitor Files',
-        groups=AI_CONFIG_GROUP,
-        default=DOCUMENT_MODE_FILE,
-        help='Attach the file: LiteLLM / OpenAI read PDF, Excel and Word files directly. '
-             'Download link only: for Hermes and other backends that do not take file '
-             'content; the backend downloads the file itself. Images are attached in both '
-             'modes; n8n always gets download links.',
-    )
-    ai_system_prompt = fields.Text(
-        string='System Prompt',
-        groups=AI_CONFIG_GROUP,
-        help='Optional instructions sent to the backend with every request. Leave '
-             'empty to let the backend decide the persona.',
-    )
-    ai_max_history = fields.Integer(
-        string='Max History Messages',
-        groups=AI_CONFIG_GROUP,
-        default=50,
-        help='Maximum number of recent messages to include as conversation context (1-200)',
-    )
-    ai_max_retries = fields.Integer(
-        string='Max Retries',
-        groups=AI_CONFIG_GROUP,
-        default=2,
-        help='Retries after a failed backend call (0-2), after 3 seconds and then 10 '
-             'seconds; each call waits "Backend Reply Timeout" seconds. n8n calls are only '
-             'retried when the connection could not be opened or n8n answered HTTP 429 or 503.',
-    )
-    ai_request_timeout = fields.Integer(
-        string='Backend Reply Timeout (seconds)',
-        groups=AI_CONFIG_GROUP,
-        default=0,
-        help='0 = default (OpenAI compatible 45 seconds, n8n 120 seconds). Otherwise 10-300 '
-             'seconds per call. n8n calls are never retried after a timeout.',
-    )
-    ai_error_message = fields.Text(
-        string='Error Message',
-        groups=AI_CONFIG_GROUP,
-        default=DEFAULT_ERROR_MESSAGE,
-        help='Message sent to visitor when the AI API call fails after all retries',
-    )
+    ai_assistant_description = fields.Text(
+        string='AI Assistant Description', related='ai_assistant_id.description', readonly=True,
+        groups=AI_CONFIG_GROUP)
+    ai_state = fields.Selection(
+        [(STATE_OFF, 'Off'), (STATE_OK, 'Ready'), (STATE_BLOCKED, 'Blocked')],
+        string='AI Status', compute='_compute_ai_state', groups=AI_CONFIG_GROUP,
+        help='Off: the AI does not answer this channel. Ready: the AI answers the visitors. Blocked: the AI '
+             'is on but cannot answer; see why below.')
+    ai_state_reason = fields.Text(string='AI Status Details', compute='_compute_ai_state', groups=AI_CONFIG_GROUP)
+    ai_customer_safe_warning = fields.Boolean(string='Connection Not Safe for Customers', compute='_compute_ai_state',
+                                              groups=AI_CONFIG_GROUP)
     ai_handoff_pause_minutes = fields.Integer(
         string='Pause After Human Reply (minutes)',
         groups=AI_CONFIG_GROUP,
@@ -477,7 +414,7 @@ class ImLivechatChannel(models.Model):
     ai_pause_notice = fields.Text(
         string='Waiting Notice',
         groups=AI_CONFIG_GROUP,
-        default=DEFAULT_PAUSE_NOTICE,
+        default=_default_ai_pause_notice,
         help='Sent once to the first visitor message written while the AI waits for '
              'an operator after a handoff request. %(minutes)s is replaced with the '
              'wait minutes.',
@@ -485,7 +422,7 @@ class ImLivechatChannel(models.Model):
     ai_welcome_message = fields.Text(
         string='AI Welcome Message',
         groups=AI_CONFIG_GROUP,
-        default=DEFAULT_WELCOME_MESSAGE,
+        default=_default_ai_welcome_message,
         help='Shown as the welcome message of the chat window while AI is enabled '
              '(instead of the channel welcome message), so visitors know they are '
              'talking to an AI.',
@@ -493,232 +430,117 @@ class ImLivechatChannel(models.Model):
     ai_handoff_message = fields.Text(
         string='Handoff Message',
         groups=AI_CONFIG_GROUP,
-        default=DEFAULT_HANDOFF_MESSAGE,
+        default=_default_ai_handoff_message,
         help='Sent to the visitor when they ask for a human operator',
     )
-    ai_bot_partner_id = fields.Many2one(
-        comodel_name='res.partner',
-        string='Bot Partner',
-        groups=AI_CONFIG_GROUP,
-        ondelete='set null',
-        copy=False,
-        help='The partner record used as the author for AI-generated messages '
-             '(created by the module; it cannot be chosen)',
-    )
-    ai_bot_name = fields.Char(
-        string='Bot Name',
-        groups=AI_CONFIG_GROUP,
-        default=DEFAULT_BOT_NAME,
-        help='Display name for the AI bot in chat',
-    )
-    ai_log_payload = fields.Boolean(
-        string='Log Conversation Content',
-        groups=SYSTEM_GROUP,
-        default=False,
-        copy=False,
-        help='Keep the requests sent to and the answers received from the backend in '
-             'the AI API logs of this channel. Turn on only while debugging; turning it '
-             'off erases the stored content.',
-    )
-    ai_log_retention_days = fields.Integer(
-        string='Log Retention (days)',
-        groups=AI_CONFIG_GROUP,
-        default=DEFAULT_LOG_RETENTION_DAYS,
-        help='AI API logs and finished reply jobs of this channel older than this are '
-             'deleted by the daily cleanup job.',
-    )
+    # Technical: operators were told once that the AI of this channel cannot
+    # answer; cleared when the AI answers again (one alert per blocked period).
+    ai_blocked_alert_sent = fields.Boolean(
+        string='Operators Told the AI Cannot Answer', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='The operators were alerted once that the AI of this channel cannot answer; cleared when it answers '
+             'again.')
+    ai_blocked_alert_at = fields.Datetime(
+        string='Last Cannot-Answer Alert', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='When the operators were last alerted that the AI of this channel cannot answer: at most one such '
+             'alert in 10 minutes.')
+    ai_full_alert_sent = fields.Boolean(
+        string='Operators Told the Reply Queue Is Full', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='The operators were alerted once that the caps of unfinished replies refuse visitor messages of this '
+             'channel; cleared when a reply is queued again.')
+    ai_full_alert_at = fields.Datetime(
+        string='Last Reply-Queue-Full Alert', copy=False, readonly=True, groups=SYSTEM_GROUP,
+        help='When the operators were last alerted that the caps of unfinished replies refuse visitor messages of '
+             'this channel: at most one such alert in 10 minutes.')
 
-    # --- Reply job monitoring (P1-6), shown on the AI tab ---
-    ai_cron_lastcall = fields.Datetime(
-        string='Recovery Cron Last Run',
-        groups=AI_CONFIG_GROUP,
-        compute='_compute_ai_monitoring',
-    )
-    ai_stale_job_count = fields.Integer(
-        string='Unfinished Jobs Older Than 5 Minutes',
-        groups=AI_CONFIG_GROUP,
-        compute='_compute_ai_monitoring',
-    )
-    ai_job_warning = fields.Text(
-        string='Reply Job Warning',
-        groups=AI_CONFIG_GROUP,
-        compute='_compute_ai_monitoring',
-    )
+    # --- Status (read with administrator rights; fixed sentences only) ---
 
-    # --- Access token storage (SQL-only column) ---
+    @api.depends('ai_enabled', 'ai_assistant_id')
+    @api.depends_context('uid')
+    def _compute_ai_state(self):
+        for channel in self:
+            record = channel.sudo()
+            assistant = record.ai_assistant_id
+            problems = channel._ai_problems()
+            if not record.ai_enabled:
+                channel.ai_state = STATE_OFF
+            else:
+                channel.ai_state = STATE_BLOCKED if problems else STATE_OK
+            channel.ai_state_reason = '\n'.join(problems) if problems else False
+            channel.ai_customer_safe_warning = bool(assistant) and not assistant.connection_id.customer_safe
 
-    def _auto_init(self):
-        res = super()._auto_init()
-        self.env.cr.execute(SQL(
-            "ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s VARCHAR",
-            SQL.identifier(self._table), SQL.identifier(TOKEN_COLUMN),
-        ))
-        return res
-
-    def _ai_get_tokens(self):
-        """{channel id: token} read with SQL; never expose the values."""
-        ids = tuple({record._origin.id or record.id for record in self} - {False})
-        ids = tuple(i for i in ids if isinstance(i, int))
-        if not ids:
-            return {}
-        self.env.cr.execute(SQL(
-            "SELECT id, %s FROM %s WHERE id IN %s",
-            SQL.identifier(TOKEN_COLUMN), SQL.identifier(self._table), ids,
-        ))
-        return {row[0]: row[1] or '' for row in self.env.cr.fetchall()}
-
-    def _ai_get_token(self):
+    def _ai_assistant(self):
+        """The channel's AI assistant (sudo), or an empty recordset."""
         self.ensure_one()
-        return (self._ai_get_tokens().get(self._origin.id or self.id) or '').strip()
+        return self.sudo().ai_assistant_id
 
-    def _ai_set_token(self, token):
-        ids = tuple(i for i in self.ids if isinstance(i, int))
-        if not ids:
-            return
-        self.env.cr.execute(SQL(
-            "UPDATE %s SET %s = %s WHERE id IN %s",
-            SQL.identifier(self._table), SQL.identifier(TOKEN_COLUMN), token or None, ids,
-        ))
+    def _ai_connection_record(self):
+        """The AI connection of the channel's assistant (sudo), or an empty recordset."""
+        self.ensure_one()
+        return self._ai_assistant().connection_id
 
-    def _compute_ai_api_token(self):
-        tokens = self.sudo()._ai_get_tokens()
-        for channel in self:
-            # Write-only: the stored token is never sent back to the browser.
-            channel.ai_api_token = False
-            channel.ai_api_token_set = bool(tokens.get(channel._origin.id or channel.id))
+    def _ai_problems(self):
+        """Fixed sentences why the AI of this channel cannot answer now (empty:
+        it can). Never a URL, a key or a connection name."""
+        self.ensure_one()
+        assistant = self._ai_assistant()
+        if not assistant:
+            return [self.env._('No AI assistant is chosen yet.')]
+        return assistant._problems()
 
-    def _inverse_ai_api_token(self):
-        for channel in self:
-            token = (channel.ai_api_token or '').strip()
-            if token:
-                channel._check_system_admin()
-                channel._ai_set_token(token)
-                _logger.info("Live chat channel %s: AI access token updated by user %s",
-                             channel.id, self.env.uid)
-        # The typed token must not be echoed back by web_save's read.
-        self.invalidate_recordset(['ai_api_token', 'ai_api_token_set', 'ai_connection_ready'])
-
-    @api.depends('ai_backend_type', 'ai_endpoint_url', 'ai_model')
-    def _compute_ai_connection_ready(self):
-        for channel in self:
-            channel.ai_connection_ready = channel._ai_connection_is_ready()
-
-    @api.depends('ai_enabled')
-    def _compute_ai_monitoring(self):
-        Job = self.env['im_livechat.ai.job']
-        cron = self.env.ref('im_livechat_ai.ir_cron_recover_ai_jobs', raise_if_not_found=False)
-        cron = cron.sudo() if cron else cron
-        lastcall = cron.lastcall if cron else False
-        stale = Job._stale_job_count(MONITOR_STALE_MINUTES)
-        warnings = []
-        if not cron or not cron.active:
-            warnings.append(_('排程「Live Chat AI: Recover Reply Jobs」已停用，重啟或部署後遺留的 AI 回覆不會補送。'))
-        elif not lastcall or lastcall < fields.Datetime.now() - timedelta(minutes=MONITOR_STALE_MINUTES):
-            warnings.append(_(
-                '排程「Live Chat AI: Recover Reply Jobs」超過 %(minutes)s 分鐘沒有執行。'
-                '請確認 Odoo 的排程程序（cron worker，max_cron_threads ≥ 1）正在執行；'
-                '重啟或部署後的回覆與等候真人後的自動回覆都要靠它送出。',
-                minutes=MONITOR_STALE_MINUTES,
-            ))
-        if stale:
-            warnings.append(_(
-                '有 %(count)s 個 AI 回覆工作超過 %(minutes)s 分鐘仍未完成，請到「AI 回覆工作」查看。',
-                count=stale, minutes=MONITOR_STALE_MINUTES,
-            ))
-        text = '\n'.join(warnings) or False
-        for channel in self:
-            channel.ai_cron_lastcall = lastcall
-            channel.ai_stale_job_count = stale
-            channel.ai_job_warning = text
-
-    # --- Connection (read through sudo; callers never expose the token) ---
+    # --- Connection (read through sudo; callers never expose the key) ---
 
     def _ai_connection(self):
-        """(backend type, endpoint URL, token) of this channel.
+        """(backend type, endpoint URL, key) of the channel's AI assistant.
 
-        openai URLs are normalized: no trailing slash, no /chat/completions.
-        """
+        LiteLLM URLs are normalized: no trailing slash, no /chat/completions.
+        Without an assistant or a connection: ('openai', '', '')."""
         self.ensure_one()
-        channel = self.sudo()
-        backend = channel.ai_backend_type or BACKEND_OPENAI
-        url = (channel.ai_endpoint_url or '').strip()
-        if backend == BACKEND_OPENAI:
-            url = url.rstrip('/')
-            if url.endswith('/chat/completions'):
-                url = url[:-len('/chat/completions')].rstrip('/')
-        return backend, url, channel._ai_get_token()
+        connection = self._ai_connection_record()
+        if not connection:
+            return BACKEND_OPENAI, '', ''
+        return connection.backend_type or BACKEND_OPENAI, connection._runtime_url(), connection._get_api_key()
 
     def _ai_connection_is_ready(self):
-        """URL set (allowed scheme/host); for openai also the token and the
-        model. The n8n token is optional (no signature without it)."""
+        """True when the channel's AI assistant can answer: the assistant is
+        active and available in Live Chat, its connection is active and ready,
+        and the URL is allowed."""
         self.ensure_one()
-        backend, url, token = self._ai_connection()
-        if not url or not endpoint_url_allowed(url):
-            return False
-        if backend == BACKEND_N8N:
-            return True
-        return bool(token and (self.sudo().ai_model or '').strip())
+        return not self._ai_problems()
 
-    # --- Constraints (P1-1: checked on every create/write, AI on or off) ---
-
-    @api.constrains('ai_endpoint_url')
-    def _check_ai_endpoint_url(self):
-        for channel in self.sudo():
-            url = (channel.ai_endpoint_url or '').strip()
-            if url and not endpoint_url_allowed(url):
-                raise ValidationError(_(
-                    '端點網址必須以 https:// 開頭（只有 localhost、127.0.0.1、::1 與 '
-                    '*.svc.cluster.local 的主機可以用 http://）。'
-                ))
-
-    @api.constrains('ai_max_history')
-    def _check_ai_max_history(self):
-        """Validate max history range."""
-        for record in self:
-            if record.ai_max_history < 1 or record.ai_max_history > MAX_AI_MAX_HISTORY:
-                raise ValidationError(_('Max History Messages must be between 1 and 200.'))
-
-    @api.constrains('ai_max_retries')
-    def _check_ai_max_retries(self):
-        """Validate max retries range."""
-        for record in self:
-            if record.ai_max_retries < 0 or record.ai_max_retries > LLM_MAX_RETRIES:
-                raise ValidationError(_('Max Retries must be between 0 and 2.'))
-
-    @api.constrains('ai_request_timeout')
-    def _check_ai_request_timeout(self):
-        for record in self:
-            seconds = record.ai_request_timeout or 0
-            if seconds and not MIN_REQUEST_TIMEOUT <= seconds <= MAX_REQUEST_TIMEOUT:
-                raise ValidationError(_('等待後端回覆的秒數必須是 0（預設）或介於 10 到 300 之間。'))
+    # --- Constraints ---
 
     @api.constrains('ai_handoff_pause_minutes')
     def _check_ai_handoff_pause_minutes(self):
         for record in self:
             minutes = record.ai_handoff_pause_minutes
             if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
-                raise ValidationError(_('暫停分鐘數必須介於 1 到 1440 之間。'))
+                raise ValidationError(self.env._('The pause after a human reply must be between 1 and 1440 '
+                                                 'minutes.'))
 
     @api.constrains('ai_handoff_wait_minutes')
     def _check_ai_handoff_wait_minutes(self):
         for record in self:
             minutes = record.ai_handoff_wait_minutes
             if minutes < 1 or minutes > MAX_HANDOFF_PAUSE_MINUTES:
-                raise ValidationError(_('等候真人客服的分鐘數必須介於 1 到 1440 之間。'))
+                raise ValidationError(self.env._('The wait for a human must be between 1 and 1440 minutes.'))
 
-    @api.constrains('ai_log_retention_days')
-    def _check_ai_log_retention_days(self):
-        for record in self:
-            days = record.ai_log_retention_days
-            if days < MIN_LOG_RETENTION_DAYS or days > MAX_LOG_RETENTION_DAYS:
-                raise ValidationError(_('日誌保留天數必須介於 1 到 3650 之間。'))
+    @api.constrains('ai_assistant_id')
+    def _check_ai_assistant(self):
+        # sudo: managers cannot read whether an assistant is available in Live Chat
+        for channel in self.sudo():
+            assistant = channel.ai_assistant_id
+            if assistant and not assistant.active:
+                raise ValidationError(self.env._(
+                    'This AI assistant is archived. Ask a system administrator to restore it, or choose '
+                    'another AI assistant.'))
+            if assistant and not assistant.livechat_available:
+                raise ValidationError(self.env._(
+                    'This AI assistant is not available in Live Chat. Ask a system administrator to tick '
+                    '"Available in Live Chat" on it, or choose another AI assistant.'))
 
     # Re-checked when AI is enabled (values stored before these checks
     # existed, e.g. by an earlier version, must not reach the backend).
     _AI_RANGE_CHECKS = (
-        '_check_ai_max_history',
-        '_check_ai_max_retries',
-        '_check_ai_request_timeout',
         '_check_ai_handoff_pause_minutes',
         '_check_ai_handoff_wait_minutes',
     )
@@ -728,119 +550,108 @@ class ImLivechatChannel(models.Model):
             getattr(self, method)()
 
     def _ai_check_enable_requirements(self):
-        """An AI-enabled channel needs a complete backend connection.
+        """An AI-enabled channel needs an AI assistant that can answer.
 
-        Runs as the saving user (e.g. a Live Chat manager); the connection is
-        only probed through sudo and only for presence: no value reaches the
-        error message.
-        """
+        Runs as the saving user (e.g. a Live Chat manager); the assistant and
+        its connection are only probed through sudo: no value reaches the
+        error message."""
         for channel in self.sudo():
-            if not channel.ai_enabled:
-                continue
-            backend, url, token = channel._ai_connection()
-            if not url or (backend == BACKEND_OPENAI and not token) or not endpoint_url_allowed(url):
-                raise UserError(_(
-                    '頻道「%(name)s」尚未設定後端連線。請系統管理員在頻道的「AI」分頁填寫'
-                    '端點網址與存取金鑰（Token）後，再啟用 AI。',
-                    name=channel.name,
-                ))
-            if backend == BACKEND_OPENAI and not (channel.ai_model or '').strip():
-                raise UserError(_('OpenAI 相容後端啟用 AI 時必須填寫模型。'))
+            if channel.ai_enabled and channel._ai_problems():
+                raise UserError(self.env._(
+                    'The Live Chat channel "%(name)s" has no AI assistant that can answer yet. A system '
+                    'administrator creates the AI assistant and its AI connection in Live Chat > Configuration '
+                    '> AI Assistants; then choose it here.', name=channel.name))
 
-    # --- CRUD: the bot partner exists as soon as AI is on (P2-6) ---
+    # --- CRUD ---
 
     @api.model
-    def _check_ai_config_access(self, vals, records=None):
-        """Only Live Chat managers configure the AI, only system
-        administrators set the backend connection (type, URL, token,
-        content logging), and nobody but the module itself chooses the bot
-        partner (clearing it is allowed: a new bot is created when needed).
-
-        Field groups already stop reads and writes of the ai_* fields, but
-        Odoo does not check field groups on create, so create checks here.
-        A manager may send the backend type unchanged (or with a new
-        channel, which has no URL or token yet).
-        """
+    def _check_ai_config_access(self, vals):
+        """Only Live Chat managers configure the AI of a channel. Field groups
+        already stop reads and writes of the ai_* fields, but Odoo does not
+        check field groups on create, so create (and write) check here."""
         if self.env.su:
             return
         names = {name for name in vals if name.startswith('ai_') and name in self._fields}
-        if not names:
-            return
-        if vals.get('ai_bot_partner_id'):
-            raise AccessError(_('AI 機器人的聯絡人由系統自動建立，不能指定。'))
-        if not self.env.user.has_group(AI_CONFIG_GROUP):
-            raise AccessError(_('只有 Live Chat 管理員可以設定 AI。'))
-        restricted = names & AI_SYSTEM_FIELDS
-        if not restricted or self.env.user.has_group(SYSTEM_GROUP):
-            return
-        if 'ai_backend_type' in restricted:
-            current = records.sudo().mapped('ai_backend_type') if records is not None else []
-            if all(value == vals['ai_backend_type'] for value in current):
-                restricted.discard('ai_backend_type')
-        if restricted:
-            raise AccessError(_('只有系統管理員可以設定 AI 後端連線（類型、網址、金鑰、記錄對話內容）。'))
+        if names and not self.env.user.has_group(AI_CONFIG_GROUP):
+            raise AccessError(self.env._('Only Live Chat managers can set up the AI of a channel.'))
+        if names & set(ALERT_FIELDS) and not self.env.user.has_group(SYSTEM_GROUP):
+            raise AccessError(self.env._('Only Live Chat managers can set up the AI of a channel.'))
+
+    @api.model
+    def _ai_explicit_values(self):
+        """Every stored ai_* field of a channel with its own default (or
+        empty): create() is given them explicitly for a caller who may not set
+        up the AI, so neither default_* context keys nor the caller's own
+        ir.default rows can set one."""
+        values = {}
+        for name, field in self._fields.items():
+            if name.startswith('ai_') and field.store and not field.compute and not field.related:
+                values[name] = field.default(self) if field.default else False
+        return values
 
     @api.model
     def _check_ai_manager(self):
         if not self.env.is_superuser() and not self.env.user.has_group(AI_CONFIG_GROUP):
-            raise AccessError(_('只有 Live Chat 管理員可以使用此功能。'))
+            raise AccessError(self.env._('Only Live Chat managers can use this feature.'))
 
     @api.model
     def _check_system_admin(self):
-        if not self.env.su and not self.env.user.has_group(SYSTEM_GROUP):
-            raise AccessError(_('只有系統管理員可以管理 AI 後端連線。'))
-
-    @staticmethod
-    def _ai_clean_url_vals(vals):
-        if 'ai_endpoint_url' in vals:
-            vals['ai_endpoint_url'] = (vals['ai_endpoint_url'] or '').strip() or False
-        return vals
+        if not self.env.su and not (self.env.uid and self.env.user.has_group(SYSTEM_GROUP)):
+            raise AccessError(self.env._('Only system administrators can manage AI connections and AI '
+                                         'assistants.'))
 
     @api.model_create_multi
     def create(self, vals_list):
-        vals_list = [self._ai_clean_url_vals(dict(vals)) for vals in vals_list]
+        # The default_<field> keys of the context become values inside super().create() (default_get),
+        # where Odoo checks no field group: they count as values here.
+        defaults = {key[len('default_'):]: value for key, value in self.env.context.items()
+                    if key.startswith('default_ai_')}
         for vals in vals_list:
-            self._check_ai_config_access(vals)
+            self._check_ai_config_access({**defaults, **vals})
+        if self.env.uid != SUPERUSER_ID and not self.env.user.has_group(AI_CONFIG_GROUP):
+            # default_get also reads the caller's own ir.default rows (any employee may write them): a caller
+            # who may not set up the AI gets every ai_* field explicitly (sudo() keeps the uid, so also there)
+            explicit = self._ai_explicit_values()
+            vals_list = [{**explicit, **vals} for vals in vals_list]
         channels = super().create(vals_list)
-        # sudo: an operator may create a channel (AI off); the ai_* fields
-        # are manager-only.
-        enabled = channels.sudo().filtered('ai_enabled')
-        enabled._ai_check_enable_requirements()
-        enabled._get_or_create_bot_partner()
+        # sudo: an operator may create a channel (AI off); the ai_* fields are manager-only.
+        channels.sudo().filtered('ai_enabled')._ai_check_enable_requirements()
         return channels
 
     def write(self, vals):
-        self._check_ai_config_access(vals, records=self)
-        vals = self._ai_clean_url_vals(dict(vals))
+        self._check_ai_config_access(vals)
         current = self.sudo()
         enabling = current.filtered(lambda c: not c.ai_enabled) if vals.get('ai_enabled') else current.browse()
-        erase = current.browse()
-        if 'ai_log_payload' in vals and not vals['ai_log_payload']:
-            erase = current.filtered('ai_log_payload')
+        changed_assistant = current.browse()
+        if 'ai_assistant_id' in vals:
+            new = self.env['im_livechat.ai.assistant'].sudo().browse(vals['ai_assistant_id'] or [])
+            changed_assistant = current.filtered(
+                lambda c: c.ai_assistant_id.connection_id != new.connection_id)
         res = super().write(vals)
         if enabling:
-            # P1-1: enabling AI re-validates every AI setting.
+            # Enabling AI re-validates every AI setting.
             enabling._ai_check_all_ranges()
-        if {'ai_enabled', 'ai_model', 'ai_backend_type', 'ai_endpoint_url'} & set(vals):
+        if {'ai_enabled', 'ai_assistant_id'} & set(vals):
             current._ai_check_enable_requirements()
-        if erase:
-            # Turning content logging off also erases what was captured.
-            self.env['llm.api.log'].sudo()._erase_payloads(erase.ids)
-        if 'ai_enabled' in vals or 'ai_bot_name' in vals:
-            current.filtered('ai_enabled')._get_or_create_bot_partner()
+        if changed_assistant:
+            # the 18.0.1.x key copy of a channel belongs to its old connection (rollback)
+            self.env['im_livechat.ai.connection']._drop_legacy_channel_keys(channel_ids=changed_assistant.ids)
         return res
 
     def copy_data(self, default=None):
-        """A copy starts with AI off and without the endpoint URL and the
-        access token (never duplicated; a system administrator sets them on
-        the copy)."""
+        """A copy starts with AI off; it keeps an AI assistant that is still
+        selectable and drops an archived one."""
         vals_list = super().copy_data(default=default)
-        for vals in vals_list:
+        for channel, vals in zip(self, vals_list):
             if not (default or {}).get('ai_enabled'):
                 vals['ai_enabled'] = False
+            assistant = channel.sudo().ai_assistant_id
+            if 'ai_assistant_id' not in (default or {}) and assistant and not (
+                    assistant.active and assistant.livechat_available):
+                vals['ai_assistant_id'] = False
         return vals_list
 
-    # --- Live chat window (AI disclosure, P1-7) ---
+    # --- Live chat window (AI disclosure) ---
 
     def _get_channel_infos(self):
         """Visitors of an AI-enabled channel see the AI welcome message
@@ -848,115 +659,48 @@ class ImLivechatChannel(models.Model):
         infos = super()._get_channel_infos()
         channel = self.sudo()
         if channel.ai_enabled:
-            infos['default_message'] = channel.ai_welcome_message or DEFAULT_WELCOME_MESSAGE
+            infos['default_message'] = channel.ai_welcome_message or self.env._(DEFAULT_WELCOME_MESSAGE)
         return infos
 
-    # --- Bot Partner Management ---
-
-    @api.model
-    def _ai_bot_category(self):
-        return self.env.ref(BOT_CATEGORY_XMLID, raise_if_not_found=False)
-
-    def _ai_is_own_bot_partner(self, partner):
-        """True when `partner` is this channel's own AI bot: tagged "AI 機器人",
-        without any user, and not the bot of another channel. Only such a
-        partner is ever renamed or tagged through sudo."""
-        self.ensure_one()
-        partner = partner.sudo().with_context(active_test=False)
-        category = self._ai_bot_category()
-        if not category or category not in partner.category_id or partner.user_ids:
-            return False
-        if partner == self.env.ref('im_livechat_ai.partner_ai_bot', raise_if_not_found=False):
-            return False  # the module's shared fallback bot
-        others = self.sudo().with_context(active_test=False).search_count([
-            ('ai_bot_partner_id', '=', partner.id), ('id', '!=', self.id),
-        ], limit=1)
-        return not others
-
-    def _get_or_create_bot_partner(self):
-        """
-        Ensure each channel has its bot partner (called when AI is enabled or
-        the bot name changes, never while a reply is processed: P2-6).
-
-        The partner is archived, like Odoo's chatbot partners, so it does not
-        appear in the contact list, and tagged "AI 機器人" so it can be
-        recognised. An existing partner is renamed when the bot name changed;
-        a linked partner that is not this channel's own bot (a real person,
-        a user, another channel's bot) is never touched: the channel gets a
-        new bot partner instead.
-
-        Returns:
-            res.partner: The bot partner record(s)
-        """
-        partners = self.env['res.partner']
-        category = self._ai_bot_category()
-        for channel in self:
-            bot_name = channel.ai_bot_name or DEFAULT_BOT_NAME
-            partner = channel.ai_bot_partner_id
-            if partner and not channel._ai_is_own_bot_partner(partner):
-                _logger.warning(
-                    "Live chat channel %s: partner %s is not its own AI bot; creating a new bot partner",
-                    channel.id, partner.id,
-                )
-                partner = self.env['res.partner']
-            if partner:
-                vals = {}
-                if partner.name != bot_name:
-                    vals['name'] = bot_name
-                if category and category not in partner.sudo().category_id:
-                    vals['category_id'] = [(4, category.id)]
-                if not partner.sudo().image_1920:
-                    vals['image_1920'] = self._ai_bot_avatar()
-                if vals:
-                    partner.sudo().write(vals)
-            else:
-                partner = self.env['res.partner'].sudo().create({
-                    'name': bot_name,
-                    'active': False,
-                    'is_company': False,
-                    'type': 'contact',
-                    'category_id': [(4, category.id)] if category else [],
-                    'image_1920': self._ai_bot_avatar(),
-                })
-                channel.sudo().write({'ai_bot_partner_id': partner.id})
-            partners |= partner
-        return partners
-
-    @api.model
-    def _ai_bot_avatar(self):
-        """Base64 avatar of the AI bot partners (shipped with the module)."""
-        with tools.file_open(BOT_AVATAR_PATH, 'rb') as avatar:
-            return base64.b64encode(avatar.read())
+    # --- Bot partners ---
 
     def _get_bot_partner(self):
-        """Author of AI messages, read-only (no write during reply processing).
-
-        Falls back to the module's default bot partner when the channel has
-        none (e.g. it was deleted after AI was enabled).
-        """
+        """Author of AI messages, read-only: the assistant's bot partner, or the
+        module's default bot partner when the channel has none."""
         self.ensure_one()
-        if self.ai_bot_partner_id:
-            return self.ai_bot_partner_id
-        _logger.warning("Live chat channel %s has no AI bot partner; using the default one", self.id)
-        return self.env.ref('im_livechat_ai.partner_ai_bot')
+        partner = self._ai_assistant().partner_id
+        if partner:
+            return partner
+        return self.env.ref(DEFAULT_BOT_XMLID)
 
     @api.model
     def _ai_bot_partner_ids(self, channel=None):
-        """Partners that are the AI itself: the channel bot and the default bot."""
-        ids = set()
-        if channel and channel.ai_bot_partner_id:
-            ids.add(channel.ai_bot_partner_id.id)
-        default_bot = self.env.ref('im_livechat_ai.partner_ai_bot', raise_if_not_found=False)
+        """Partners that are the AI itself: the bot partner of every AI
+        assistant (archived ones included), every partner tagged 「AI
+        機器人」 without a user (former 18.0.1.x channel bots), and the
+        module's default bot. ``channel`` is kept for compatibility."""
+        ids = set(self.env['im_livechat.ai.assistant'].sudo().with_context(active_test=False).search(
+            [('partner_id', '!=', False)]).partner_id.ids)
+        category = self.env.ref('im_livechat_ai.partner_category_ai_bot', raise_if_not_found=False)
+        if category:
+            ids.update(self.env['res.partner'].sudo().with_context(active_test=False).search(
+                [('category_id', 'in', category.ids), ('user_ids', '=', False)]).ids)
+        default_bot = self.env.ref(DEFAULT_BOT_XMLID, raise_if_not_found=False)
         if default_bot:
             ids.add(default_bot.id)
         return ids
 
-    # --- Human handoff (P1-2) ---
+    @api.model
+    def _ai_bot_avatar(self):
+        """Base64 avatar of the AI bot partners (shipped with the module)."""
+        return bot_avatar()
+
+    # --- Human handoff ---
 
     def _ai_handoff_keyword_list(self):
         """Keywords, lower case, inner whitespace collapsed to one space."""
         self.ensure_one()
-        raw = self.ai_handoff_keywords or ''
+        raw = self.sudo().ai_handoff_keywords or ''
         return [' '.join(k.lower().split()) for k in re.split(r'[,，、\n]', raw) if k.strip()]
 
     def _ai_is_handoff_request(self, text):
@@ -981,16 +725,24 @@ class ImLivechatChannel(models.Model):
     def _ai_pause_minutes(self):
         """Pause after an operator's message (minutes)."""
         self.ensure_one()
-        minutes = self.ai_handoff_pause_minutes or DEFAULT_HANDOFF_PAUSE_MINUTES
+        minutes = self.sudo().ai_handoff_pause_minutes or DEFAULT_HANDOFF_PAUSE_MINUTES
         return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
 
     def _ai_wait_minutes(self):
         """Wait for an operator after a visitor's handoff request (minutes)."""
         self.ensure_one()
-        minutes = self.ai_handoff_wait_minutes or DEFAULT_HANDOFF_WAIT_MINUTES
+        minutes = self.sudo().ai_handoff_wait_minutes or DEFAULT_HANDOFF_WAIT_MINUTES
         return max(1, min(minutes, MAX_HANDOFF_PAUSE_MINUTES))
 
-    def _ai_pause_notice_text(self):
+    def _ai_lang_env(self, lang=None):
+        """Environment translating into `lang` (an installed language, else the current one)."""
+        return self.with_context(lang=self.env['im_livechat.ai.assistant']._installed_lang(lang)).env
+
+    def _ai_handoff_message_text(self, lang=None):
+        self.ensure_one()
+        return self.sudo().ai_handoff_message or self._ai_lang_env(lang)._(DEFAULT_HANDOFF_MESSAGE)
+
+    def _ai_pause_notice_text(self, lang=None):
         """The waiting notice with %(minutes)s replaced by the wait minutes.
 
         Plain replacement, not %-formatting: an administrator's text with
@@ -998,24 +750,33 @@ class ImLivechatChannel(models.Model):
         The bot message escapes the text when it is posted.
         """
         self.ensure_one()
-        text = self.ai_pause_notice or DEFAULT_PAUSE_NOTICE
+        text = self.sudo().ai_pause_notice or self._ai_lang_env(lang)._(DEFAULT_PAUSE_NOTICE)
         return _PAUSE_NOTICE_PLACEHOLDER_RE.sub(str(self._ai_wait_minutes()), text)
 
-    # --- Runtime bounds (P1-1: legacy or hand-edited values never reach the LLM) ---
+    def _ai_error_text(self, lang=None):
+        """The text the visitor gets when the AI cannot answer (the assistant's error message)."""
+        self.ensure_one()
+        return self._ai_assistant()._error_text(lang)
+
+    # --- Runtime bounds (legacy or hand-edited values never reach the backend) ---
 
     def _ai_max_history_value(self):
         self.ensure_one()
-        return max(1, min(self.ai_max_history or DEFAULT_AI_MAX_HISTORY, MAX_AI_MAX_HISTORY))
+        assistant = self._ai_assistant()
+        return max(1, min(assistant.max_history or 50, 200))
+
+    def _ai_document_mode(self):
+        self.ensure_one()
+        return self._ai_connection_record().document_mode or 'file'
 
     def _ai_request_timeout_value(self):
-        """Seconds a chat call waits: ai_request_timeout (10-300), or 45 s
-        (OpenAI compatible) / 120 s (n8n) when it is 0 or empty."""
+        """Seconds one answer may take (the connection's timeout, 10-300),
+        retries included."""
         self.ensure_one()
-        channel = self.sudo()
-        seconds = channel.ai_request_timeout or 0
-        if seconds <= 0:
-            return N8N_REQUEST_TIMEOUT if channel.ai_backend_type == BACKEND_N8N else LLM_REQUEST_TIMEOUT
-        return max(MIN_REQUEST_TIMEOUT, min(seconds, MAX_REQUEST_TIMEOUT))
+        connection = self._ai_connection_record()
+        if not connection:
+            return LLM_REQUEST_TIMEOUT
+        return connection._timeout_value()
 
     # --- Response Processing ---
 
@@ -1033,7 +794,10 @@ class ImLivechatChannel(models.Model):
 
         Creates an im_livechat.ai.job in the current (visitor) transaction;
         the job is processed after commit by a background thread, or by the
-        recovery cron if that thread is lost.
+        recovery cron if that thread is lost. When the channel's AI cannot
+        answer (no usable assistant), no reply job is created: the
+        conversation gets one fixed notice per blocked period and the
+        operators one alert per blocked period of the channel.
 
         Args:
             discuss_channel (discuss.channel): The livechat session
@@ -1049,38 +813,146 @@ class ImLivechatChannel(models.Model):
         """
         self.ensure_one()
         Job = self.env['im_livechat.ai.job']
+        channel = self.sudo()
 
-        if not self.ai_enabled:
+        if not channel.ai_enabled:
             return Job
 
         if kind in ('handoff', 'notice'):
             return Job._create_for_message(discuss_channel, message, kind=kind)
 
         if not self._ai_connection_is_ready():
-            _logger.warning(
-                "AI integration incomplete for live chat channel %s: backend connection "
-                "(endpoint URL, access token or model) missing", self.id,
-            )
+            self._ai_handle_blocked(discuss_channel, message)
             return Job
 
-        return Job._create_for_message(discuss_channel, message, run_after=run_after)
+        job = Job._create_for_message(discuss_channel, message, run_after=run_after)
+        if job:
+            # answering again: a later blocked period gets its notice and its alert
+            session = discuss_channel.sudo()
+            if session.ai_blocked_notice_sent:
+                session.ai_blocked_notice_sent = False
+            for flag, _at in ALERT_KINDS.values():
+                if channel[flag]:
+                    channel[flag] = False
+        elif not run_after:
+            # the cap of unfinished reply jobs refused it (channel or database)
+            self._ai_handle_full(discuss_channel, message)
+        return job
+
+    def _ai_handle_blocked(self, discuss_channel, message):
+        """The channel's AI is on but cannot answer: no job, no backend call.
+        The server log gets a warning (at most once per channel and process in
+        BLOCKED_WARNING_SECONDS), the conversation one notification per
+        blocked period (never read as history, never answered) and the
+        operators one alert per blocked period of the channel, at most one in
+        ALERT_WINDOW_MINUTES (see _ai_alert_once)."""
+        self.ensure_one()
+        now = time.monotonic()
+        last = _BLOCKED_WARNED.get(self.id)
+        if last is None or now - last >= BLOCKED_WARNING_SECONDS:
+            _BLOCKED_WARNED[self.id] = now
+            _logger.warning("Live chat channel %s: the AI is on but cannot answer (no usable AI assistant or "
+                            "AI connection); no reply job queued", self.id)
+        session = discuss_channel.sudo()
+        if not session.ai_blocked_notice_sent:
+            session._ai_post_blocked_notice(self)
+        self._ai_alert_once('blocked', lambda: self.env['im_livechat.ai.job']._notify_blocked(self, session))
+
+    def _ai_handle_full(self, discuss_channel, message):
+        """The cap of unfinished reply jobs (of the channel, or of the
+        database) refused the job: as for a blocked channel, the conversation
+        gets one notice per period, the operators one alert per period of the
+        channel and at most one in ALERT_WINDOW_MINUTES (a cap that refills at
+        every freed slot ends a period with each queued reply), the server log
+        a warning at most once per channel and process in
+        BLOCKED_WARNING_SECONDS. The next queued reply ends the period."""
+        self.ensure_one()
+        now = time.monotonic()
+        last = _FULL_WARNED.get(self.id)
+        if last is None or now - last >= BLOCKED_WARNING_SECONDS:
+            _FULL_WARNED[self.id] = now
+            _logger.warning("Live chat channel %s: too many unfinished AI reply jobs; no reply job queued", self.id)
+        session = discuss_channel.sudo()
+        if not session.ai_blocked_notice_sent:
+            session._ai_post_blocked_notice(self)
+        self._ai_alert_once('full', lambda: self.env['im_livechat.ai.job']._notify_full(self, session))
+
+    def _ai_alert_once(self, kind, notify):
+        """Run ``notify`` (the operator alert of a blocked or a full channel,
+        ``kind`` 'blocked' or 'full') once per period of the channel (its flag,
+        cleared when a reply is queued again) and at most once in
+        ALERT_WINDOW_MINUTES (its time): see _ai_claim_alert. ``notify``
+        returns whether anybody was told; when nobody was, the claim is undone
+        and the next refused message tries again."""
+        self.ensure_one()
+        try:
+            with self.env.cr.savepoint():
+                if self._ai_claim_alert(kind) and not notify():
+                    raise _NobodyAlerted()
+        except _NobodyAlerted:
+            pass
+        except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+            raise
+        except Exception as e:  # noqa: BLE001 - the visitor's message stays; the next one tries again
+            _logger.error("Live chat channel %s: could not alert the operators that the AI cannot answer: %s",
+                          self.id, exception_frames(e))
+
+    def _ai_claim_alert(self, kind):
+        """Claim the cannot-answer alert ``kind`` of the channel with one UPDATE
+        of its row: a visitor request (REPEATABLE READ) and the job threads
+        (READ COMMITTED) never both alert. The row is taken FOR NO KEY UPDATE
+        SKIP LOCKED: another claim or a write of the channel skips this one
+        (the alert is that one's, or the next refused message's), while the
+        KEY SHARE locks of inserts that reference the channel (sessions, jobs,
+        call logs, usage) neither wait for it nor make it skip. Returns whether
+        this caller alerts."""
+        self.ensure_one()
+        flag, at = ALERT_KINDS[kind]
+        channel = self.sudo()
+        channel.flush_recordset(list(ALERT_FIELDS))
+        now = fields.Datetime.now()
+        self.env.cr.execute(SQL(
+            """UPDATE im_livechat_channel SET %(flag)s = TRUE, %(at)s = %(now)s
+                WHERE id = (SELECT id FROM im_livechat_channel
+                             WHERE id = %(id)s AND %(flag)s IS NOT TRUE AND (%(at)s IS NULL OR %(at)s <= %(since)s)
+                             FOR NO KEY UPDATE SKIP LOCKED)""",
+            flag=SQL.identifier(flag), at=SQL.identifier(at), now=now, id=self.id,
+            since=now - timedelta(minutes=ALERT_WINDOW_MINUTES)))
+        claimed = bool(self.env.cr.rowcount)
+        channel.invalidate_recordset(list(ALERT_FIELDS))
+        return claimed
 
     # --- Backend requests ---
 
     @api.model
     def _ai_session_id(self, discuss_channel):
         """Stable id of one conversation: ``woow-ai-<db uuid 8 hex>-<discuss.channel id>``
-        (the same form as woow_ai_contact)."""
+        (aligned with Discuss AI, so n8n memory keyed on it continues)."""
         uuid = self.env['ir.config_parameter'].sudo().get_param('database.uuid') or ''
         return 'woow-ai-%s-%s' % (uuid.replace('-', '')[:8], discuss_channel.id)
 
+    def _ai_surface_info(self):
+        """``surface`` of the n8n body (and ``surface_*`` LiteLLM metadata)."""
+        self.ensure_one()
+        return {'type': 'livechat', 'livechat_channel_id': self.id}
+
     @api.model
-    def _ai_openai_metadata(self, session_id, identity, livechat_channel_name):
-        """OpenAI ``metadata``: string values only (informational; LiteLLM and
-        Hermes do not pass it to the model). No email."""
+    def _ai_openai_metadata(self, session_id, identity, livechat_channel_name, surface=None):
+        """LiteLLM ``metadata``: string keys and values (at most 16 keys of at
+        most 512 characters; informational, LiteLLM does not pass it to the
+        model): ``session_id``, the surface as ``surface_<key>``, the visitor
+        as ``odoo_<key>`` (never the email), then ``livechat_channel``."""
         metadata = {'session_id': session_id}
+        for key, value in (surface or {}).items():
+            if value in (None, '') or isinstance(value, (dict, list, tuple)):
+                continue
+            if isinstance(value, bool):
+                value = 'true' if value else 'false'
+            metadata['surface_%s' % key] = str(value)[:METADATA_MAX_VALUE]
         for key in ('partner_id', 'guest_id', 'name', 'lang', 'is_portal', 'is_guest'):
             value = identity.get(key)
+            if key == 'name':
+                value = one_line_name(value)  # one line; a name with an '@' counts as no name (contract 3.14)
             if value in (None, '', False) and not isinstance(value, bool):
                 continue
             if isinstance(value, bool):
@@ -1088,54 +960,61 @@ class ImLivechatChannel(models.Model):
             metadata['odoo_%s' % key] = str(value)[:METADATA_MAX_VALUE]
         if livechat_channel_name:
             metadata['livechat_channel'] = livechat_channel_name[:METADATA_MAX_VALUE]
-        return metadata
+        return dict(list(metadata.items())[:METADATA_MAX_KEYS])
 
     def _ai_build_request(self, discuss_channel, conversation, trigger_message=None):
         """The HTTP request of one reply (reads the database; no HTTP).
 
         Returns:
             dict: backend, url, headers, payload (the JSON body as a dict),
-                body (bytes, n8n), token (n8n signing secret, in memory only)
+                body (bytes, n8n), token (n8n signing secret, in memory only),
+                timeout (seconds of the whole answer)
         Raises:
-            LLMNotConfigured: URL or token missing, or the URL not allowed
+            LLMNotConfigured: no usable assistant / connection, or the URL not allowed
         """
         self.ensure_one()
         channel = self.sudo()
+        assistant = channel.ai_assistant_id
+        connection = assistant.connection_id
+        if not assistant or not connection:
+            raise LLMNotConfigured('no AI assistant or AI connection')
         backend, url, token = channel._ai_connection()
         if not url or (backend == BACKEND_OPENAI and not token):
-            raise LLMNotConfigured('endpoint URL or access token missing')
+            raise LLMNotConfigured('endpoint URL or API key missing')
         if not endpoint_url_allowed(url):
             raise LLMNotConfigured('endpoint URL not allowed (https only, http for local hosts)')
         session = discuss_channel.sudo()
         session_id = self._ai_session_id(session)
         identity = session._ai_visitor_identity()
         headers = {'Content-Type': 'application/json'}
+        timeout = connection._timeout_value()
         if backend == BACKEND_N8N:
             payload = channel._ai_n8n_payload(session, conversation, session_id, identity, trigger_message)
             return {
                 'backend': backend, 'url': url, 'headers': headers, 'payload': payload,
-                'body': json_dumps(payload).encode(), 'token': token,
-                'timeout': channel._ai_request_timeout_value(),
+                'body': json_dumps(payload).encode(), 'token': token, 'timeout': timeout,
             }
         payload = {}
-        model = (channel.ai_model or '').strip()
+        model = (connection.model or '').strip()
         if model:
             payload['model'] = model
         payload['messages'] = session._ai_openai_messages(conversation, livechat_channel=channel)
         payload['user'] = session_id
-        payload['metadata'] = self._ai_openai_metadata(session_id, identity, channel.name or '')
+        payload['metadata'] = self._ai_openai_metadata(session_id, identity, channel.name or '',
+                                                       surface=channel._ai_surface_info())
         headers['Authorization'] = 'Bearer %s' % token
         return {
             'backend': backend, 'url': url + '/chat/completions', 'headers': headers,
-            'payload': payload, 'body': None, 'token': None,
-            'timeout': channel._ai_request_timeout_value(),
+            'payload': payload, 'body': json_dumps(payload).encode(), 'token': None, 'timeout': timeout,
         }
 
     def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None):
-        """n8n webhook body (woow_ai_contact docs/PROTOCOL.md "n8n backend"),
-        plus the fields an n8n Chat Trigger reads (``action``, ``sessionId``,
-        ``chatInput``); a Webhook-node workflow ignores them."""
+        """n8n webhook body (docs/PROTOCOL.md): the contract keys, plus the
+        fields an n8n Chat Trigger reads (``action``, ``sessionId``,
+        ``chatInput``) and ``contact`` = this Live Chat channel (kept for the
+        workflows written for 18.0.1.x; new workflows read ``assistant``)."""
         self.ensure_one()
+        assistant = self.sudo().ai_assistant_id
         history = conversation['history']
         current = None
         if trigger_message:
@@ -1161,36 +1040,37 @@ class ImLivechatChannel(models.Model):
             'action': 'sendMessage',
             'sessionId': session_id,
             'chatInput': message['text'],
+            'assistant': {'id': assistant.id, 'name': assistant.name or ''},
             'contact': {'id': self.id, 'name': self.name or ''},
             'user': identity,
             'channel': session._ai_channel_info(),
+            'surface': self._ai_surface_info(),
             'system_prompt': conversation['system_prompt'] or '',
             'message': message,
             'history': [{'role': e['role'], 'text': e['text'], 'attachments': attachments(e)}
                         for e in history if e is not current],
             'events': [{
-                'time': event['time'].replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                'time': event['time'].strftime('%Y-%m-%dT%H:%M:%SZ'),  # contract 3.6: UTC, no fractions
                 'kind': event['kind'],
                 'text': event['text'],
             } for event in conversation['events']],
         }
 
     @staticmethod
-    def _ai_post(request):
-        """One HTTP POST (no database access). n8n bodies are signed per call
-        (fresh timestamp) when a signing secret is set; redirects are never
-        followed. Waits request['timeout'] seconds (the channel's setting)."""
+    def _ai_post(request, timeout=None):
+        """One HTTP POST (no database access) of the request's compact UTF-8
+        JSON bytes (both backends). n8n bodies are signed per call (fresh
+        timestamp) when a signing secret is set; redirects are never followed.
+        ``timeout``: (connect, read) seconds."""
         headers = dict(request['headers'])
         n8n = request['backend'] == BACKEND_N8N
-        timeout = request.get('timeout') or (N8N_REQUEST_TIMEOUT if n8n else LLM_REQUEST_TIMEOUT)
-        kwargs = {'headers': headers, 'timeout': timeout, 'allow_redirects': False}
-        if n8n:
-            if request['token']:
-                headers.update(n8n_signature_headers(request['token'], request['body']))
-            kwargs['data'] = request['body']
-        else:
-            kwargs['json'] = request['payload']
-        return requests.post(request['url'], **kwargs)
+        if timeout is None:
+            seconds = request.get('timeout') or (N8N_REQUEST_TIMEOUT if n8n else LLM_REQUEST_TIMEOUT)
+            timeout = (min(CONNECT_TIMEOUT, seconds), seconds)
+        body = request['body'] if request.get('body') is not None else json_dumps(request['payload']).encode()
+        if n8n and request['token']:
+            headers.update(n8n_signature_headers(request['token'], body))
+        return requests.post(request['url'], data=body, headers=headers, timeout=timeout, allow_redirects=False)
 
     @staticmethod
     def _ai_parse_response(backend, response):
@@ -1212,28 +1092,24 @@ class ImLivechatChannel(models.Model):
 
     @staticmethod
     def _ai_should_retry(backend, error):
-        """openai: every failure is retried (within ai_max_retries). n8n:
-        only a connection that could not be opened and HTTP 429 / 503 (the
-        workflow did not start); never a read timeout, a reset after the
-        request was sent or any other answer (decision 26 of woow_ai_contact)."""
-        if backend != BACKEND_N8N:
-            return True
+        """Both backends: only a request that was not sent (the connection could
+        not be opened) and HTTP 429 / 503 (the backend refused before working);
+        never a read timeout, a reset after the request was sent or any other
+        answer, because the backend may already be working on it."""
         if isinstance(error, requests.HTTPError):
             response = error.response
-            return response is not None and response.status_code in N8N_RETRY_STATUSES
+            return response is not None and response.status_code in RETRY_STATUSES
         return request_not_sent(error)
 
-    def _generate_ai_reply(self, discuss_channel, conversation, before_call=None, trigger_message=None):
+    def _generate_ai_reply(self, discuss_channel, conversation, before_call=None, trigger_message=None, job=None):
         """
-        Produce one AI reply: one backend request, bounded retries, a log per call.
+        Produce one AI reply: one backend request, bounded retries, one call log.
 
-        Failed calls are retried at most ai_max_retries times (0-2), waiting
-        LLM_RETRY_BACKOFF seconds (3 s, then 10 s); each call times out after
-        the channel's ai_request_timeout (0: LLM_REQUEST_TIMEOUT 45 s, n8n
-        N8N_REQUEST_TIMEOUT 120 s; at most MAX_REQUEST_TIMEOUT). n8n calls
-        are retried only when they could not be delivered (see
-        _ai_should_retry): never after a read timeout, since the agent may
-        still be running.
+        The connection's timeout bounds the whole answer, retries included:
+        each call reads at most the time left, and a call is retried (at most
+        the connection's retries, after 3 s then 10 s) only when it could not
+        be sent or the backend answered HTTP 429 / 503, and only while the
+        time left allows the wait.
 
         Args:
             discuss_channel (discuss.channel): The chat session
@@ -1242,56 +1118,61 @@ class ImLivechatChannel(models.Model):
                 (the job commits there so no transaction stays open)
             trigger_message (mail.message|None): the visitor message being
                 answered (n8n ``message``)
+            job (im_livechat.ai.job|None): the job, for the call log
 
         Returns:
             dict: replies (list of str, [[handoff]] markers removed), reply
-                (first reply or None), skip (bool, n8n), error (short str or
+                (first reply or None), skip (bool, n8n), error (short text or
                 None), calls (int), handoff (bool: the backend asked for a
-                human, owner decision 40), handoff_reason (str or None, n8n)
+                human), handoff_reason (str or None, n8n), usage ((prompt,
+                completion) tokens), assistant / connection (the records the
+                answer was asked from)
         """
         self.ensure_one()
         channel = self.sudo()
+        assistant = channel.ai_assistant_id
+        connection = assistant.connection_id
         result = {'replies': [], 'reply': None, 'skip': False, 'error': None, 'calls': 0,
-                  'handoff': False, 'handoff_reason': None}
-        retries = max(0, min(channel.ai_max_retries, LLM_MAX_RETRIES))
-        backend = channel.ai_backend_type or BACKEND_OPENAI
-        log_model = (channel.ai_model or '').strip() if backend == BACKEND_OPENAI else False
+                  'handoff': False, 'handoff_reason': None, 'usage': (0, 0),
+                  'assistant': assistant, 'connection': connection}
+        backend = connection.backend_type or BACKEND_OPENAI
         log_base = {
-            'channel_id': channel.id,
-            'discuss_channel_id': discuss_channel.id,
-            'model_name': log_model or False,
+            'channel': channel, 'discuss_channel': discuss_channel, 'assistant': assistant,
+            'connection': connection, 'job': job,
+            'model_name': (connection.model or '').strip() if backend == BACKEND_OPENAI else False,
             'backend_type': backend,
         }
+        started = time.time()
         try:
             request = channel._ai_build_request(discuss_channel, conversation, trigger_message)
         except LLMNotConfigured as e:
             result['error'] = self._short_llm_error(e)
-            channel._create_api_log(self.env, status='error', request_payload=None, response_payload=None,
-                                    error_message=result['error'], **log_base)
+            result['error_exc'] = e
+            channel._create_api_log(status='error', error_message=type(e).__name__, duration=0, **log_base)
             return result
 
+        retries = connection._max_retries_value()
         attempts = 0
+        http_status = None
         while True:
-            if attempts:
-                if before_call:
-                    before_call()  # no transaction stays open during the wait
-                time.sleep(LLM_RETRY_BACKOFF[min(attempts - 1, len(LLM_RETRY_BACKOFF) - 1)])
-            attempts += 1
-            result['calls'] += 1
             if before_call:
                 before_call()  # after the last database read, right before the request
-            start_time = time.time()
+            if attempts == 0:
+                started = time.time()
+                deadline = started + request['timeout']
+            attempts += 1
+            result['calls'] += 1
+            left = max(1.0, deadline - time.time())
             http_status = None
             try:
-                response = self._ai_post(request)
+                response = self._ai_post(request, timeout=(min(CONNECT_TIMEOUT, left), left))
                 http_status = getattr(response, 'status_code', None)
                 texts, skip, data = self._ai_parse_response(backend, response)
                 prompt, completion, total = usage_tokens(data.get('usage') if isinstance(data, dict) else None)
                 channel._create_api_log(
-                    self.env, status='success',
-                    request_payload=request['payload'], response_payload=data,
+                    status='ok', request_payload=request['payload'], response_payload=data,
                     prompt_tokens=prompt, completion_tokens=completion, total_tokens=total,
-                    response_time=time.time() - start_time, retry_count=attempts - 1,
+                    duration=time.time() - started, retry_count=attempts - 1,
                     http_status=http_status, **log_base,
                 )
                 # Owner decision 40: the backend decides the handoff.
@@ -1300,83 +1181,88 @@ class ImLivechatChannel(models.Model):
                 if handoff:
                     skip = False  # with handoff, skip is ignored
                 result.update(replies=texts, reply=texts[0] if texts else None, skip=skip,
-                              handoff=handoff, handoff_reason=reason)
+                              handoff=handoff, handoff_reason=reason, usage=(prompt, completion))
                 return result
             except Exception as e:  # noqa: BLE001 - every failure is retried or reported
-                response_time = time.time() - start_time
-                # Full detail goes to the server log only; the stored log
-                # keeps a short message without the upstream response body.
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    http_status = e.response.status_code
+                # Full detail goes to the server log only (ids, status, type);
+                # the stored log keeps the exception type name, never the
+                # upstream body, a header or the key.
                 last_error = self._short_llm_error(e)
-                can_retry = attempts - 1 < retries and self._ai_should_retry(backend, e)
+                wait = LLM_RETRY_BACKOFF[min(attempts - 1, len(LLM_RETRY_BACKOFF) - 1)]
+                can_retry = (attempts - 1 < retries and self._ai_should_retry(backend, e)
+                             and time.time() + wait < deadline)
+                # An unexpected exception (a defect, a library change) also gets its code frames, never its
+                # text (contract 3.9); the expected failures are described by their short text.
+                expected = isinstance(e, (requests.HTTPError, requests.Timeout, requests.ConnectionError,
+                                          LLMNotConfigured, LLMInvalidResponse, LLMEmptyResponse))
                 _logger.warning(
-                    "AI backend call failed for channel %s (call %s, %s): %s",
+                    "AI backend call failed for channel %s (call %s, %s): %s%s",
                     channel.id, attempts, 'retrying' if can_retry else 'giving up', last_error,
+                    '' if expected else '\n' + exception_frames(e),
                 )
                 if can_retry:
-                    channel._create_api_log(
-                        self.env, status='retry', request_payload=request['payload'],
-                        response_payload=None, response_time=response_time,
-                        error_message=last_error, retry_count=attempts, http_status=http_status,
-                        **log_base,
-                    )
+                    if before_call:
+                        before_call()  # no transaction stays open during the wait
+                    time.sleep(wait)
                     continue
                 channel._create_api_log(
-                    self.env, status='error', request_payload=request['payload'],
-                    response_payload=None, response_time=response_time,
-                    error_message=f'All {attempts} calls failed. Last error: {last_error}',
-                    retry_count=attempts - 1, http_status=http_status, **log_base,
+                    status=log_status(e), request_payload=request['payload'], error_message=type(e).__name__,
+                    duration=time.time() - started, retry_count=attempts - 1, http_status=http_status,
+                    **log_base,
                 )
                 result['error'] = last_error
+                result['error_exc'] = e
                 return result
 
     @api.model
     def _describe_llm_error(self, error):
-        """Map an exception to (status_code or None, short Chinese message).
-
-        Never includes upstream response bodies, headers or the token.
-        """
+        """Map an exception to (status_code or None, short operator-facing
+        sentence). Never includes upstream response bodies, headers or the key."""
+        _ = self.env._
         if isinstance(error, requests.HTTPError):
             status = error.response.status_code if error.response is not None else None
-            if status in _HTTP_STATUS_MESSAGES:
-                return status, _HTTP_STATUS_MESSAGES[status]
+            messages = {
+                400: _('the request or the model name is wrong'),
+                401: _('the key or the signature is not valid'),
+                403: _('the backend refused access'),
+                404: _('the URL or the model does not exist'),
+                408: _('the upstream service timed out'),
+                413: _('the conversation is too long'),
+                429: _('too many calls, or the quota is used up'),
+            }
+            if status in messages:
+                return status, messages[status]
             if status and 300 <= status < 400:
-                return status, '後端要求轉址（請填最終網址，不會跟隨轉址）'
+                return status, _('the backend answered with a redirect (enter the final URL; redirects are '
+                                 'not followed)')
             if status and status >= 500:
-                return status, 'AI 後端或上游服務暫時故障'
-            return status, '後端回應錯誤'
+                return status, _('the AI backend or an upstream service is temporarily failing')
+            return status, _('the backend answered with an error')
         if isinstance(error, requests.Timeout):
-            return None, '連線逾時'
+            return None, _('the backend did not answer in time')
         if isinstance(error, requests.ConnectionError):
-            return None, '無法連線到 AI 後端'
+            return None, _('could not connect to the AI backend')
         if isinstance(error, LLMNotConfigured):
-            return None, '尚未設定 AI 後端連線（端點網址或存取金鑰）'
+            return None, _('the AI assistant or its AI connection is not set up')
         if isinstance(error, LLMInvalidResponse):
-            return None, '回應格式不正確'
+            return None, _('the answer has an invalid format')
         if isinstance(error, LLMEmptyResponse):
-            return None, 'AI 回覆是空的'
-        return None, '未預期的錯誤'
+            return None, _('the AI answer is empty')
+        return None, _('an unexpected error')
 
     @api.model
     def _short_llm_error(self, error):
-        """Short error text stored in llm.api.log (no upstream body)."""
+        """Short error text for the job and the operator alert: ``HTTP <status>:``
+        when there is one, a fixed sentence and the exception type name (no
+        upstream body)."""
         status, message = self._describe_llm_error(error)
         prefix = f'HTTP {status}: ' if status else ''
         text = f'{prefix}{message} ({type(error).__name__})'
         return text[:MAX_LOG_ERROR_LENGTH]
 
-    def _ai_test_notification(self, ok, message):
-        return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': _('AI 後端連線測試'),
-                'message': message,
-                'type': 'success' if ok else 'danger',
-                'sticky': not ok,
-            },
-        }
-
-    def _create_bot_message(self, env, discuss_channel, body):
+    def _create_bot_message(self, env, discuss_channel, body, assistant=None):
         """
         Post a message to the livechat session as the AI bot.
 
@@ -1389,13 +1275,19 @@ class ImLivechatChannel(models.Model):
             env (api.Environment): Environment with new cursor
             discuss_channel (discuss.channel): The chat session
             body (str): Message body text (markdown)
+            assistant (im_livechat.ai.assistant|None): the assistant that wrote
+                the answer (its bot partner is the author, also when a manager
+                switched the channel's assistant while the backend answered);
+                default: the channel's assistant
 
         Returns:
             mail.message: the posted message
         """
         self.ensure_one()
 
-        bot_partner = self._get_bot_partner()
+        bot_partner = assistant.sudo().partner_id if assistant and assistant.exists() else None
+        if not bot_partner:
+            bot_partner = self._get_bot_partner()
         safe_body = markdown_to_html(body, link_hosts=self._ai_link_hosts())
 
         return discuss_channel.with_context(mail_create_nosubscribe=True).message_post(
@@ -1432,133 +1324,75 @@ class ImLivechatChannel(models.Model):
                 hosts.add(host)
         return frozenset(hosts)
 
-    def _create_api_log(self, env, channel_id, discuss_channel_id, model_name,
-                        status, request_payload, response_payload,
-                        prompt_tokens=0, completion_tokens=0, total_tokens=0,
-                        response_time=None, error_message=None, retry_count=0,
-                        http_status=None, backend_type=None):
+    def _create_api_log(self, status, channel=None, discuss_channel=None, assistant=None, connection=None,
+                        job=None, model_name=None, backend_type=None, request_payload=None,
+                        response_payload=None, prompt_tokens=0, completion_tokens=0, total_tokens=0,
+                        duration=None, error_message=None, retry_count=0, http_status=None):
         """
-        Create an AI API log entry (never fails the caller).
+        Create the call log of one answer (never fails the caller).
 
-        Conversation content (request and response bodies) is only kept when
-        the channel's "Log Conversation Content" is on (default off, P2-1).
-        The access token is never part of a payload, and the base64 data of
-        inlined files is replaced by ``<N bytes base64 omitted>``.
+        Conversation content (request and response bodies) is only kept while
+        the connection's "Log Request Content" is on (off by default). The key
+        is never part of a payload, and the base64 data of inlined files is
+        replaced by ``<N bytes base64 omitted>``. ``error_message`` is the
+        exception type name only.
         """
+        env = self.env
         try:
             vals = {
-                'livechat_channel_id': channel_id,
+                'livechat_channel_id': (channel or self).id or False,
+                'assistant_id': assistant.id if assistant else False,
+                'connection_id': connection.id if connection else False,
+                'job_id': job.id if job else False,
+                'surface_type': 'livechat',
                 'model': model_name or False,
                 'backend_type': backend_type or False,
                 'status': status,
                 'http_status': http_status or False,
-                'response_time': response_time,
+                'response_time': duration,
+                'duration_ms': int((duration or 0) * 1000),
                 'error_message': (error_message or '')[:MAX_LOG_ERROR_LENGTH] or False,
                 'retry_count': retry_count,
                 'prompt_tokens': prompt_tokens or 0,
                 'completion_tokens': completion_tokens or 0,
                 'total_tokens': total_tokens or 0,
             }
-
-            # Validate FK references
-            if discuss_channel_id and env['discuss.channel'].browse(discuss_channel_id).exists():
-                vals['discuss_channel_id'] = discuss_channel_id
-
-            channel = env['im_livechat.channel'].sudo().browse(channel_id).exists() if channel_id else None
-            if channel and channel.ai_log_payload:
+            if discuss_channel and env['discuss.channel'].browse(discuss_channel.id).exists():
+                vals['discuss_channel_id'] = discuss_channel.id
+            if connection and connection.sudo().log_payload:
                 if request_payload:
-                    vals['request_payload'] = json.dumps(redact_base64(request_payload),
-                                                         ensure_ascii=False, default=str)
+                    vals['request_payload'] = json.dumps(redact_base64(request_payload), ensure_ascii=False,
+                                                         default=str)[:MAX_LOG_PAYLOAD]
                 if response_payload:
-                    vals['response_payload'] = json.dumps(redact_base64(response_payload),
-                                                          ensure_ascii=False, default=str)
-
-            env['llm.api.log'].sudo().create(vals)
-        except Exception as log_error:
-            _logger.error("Failed to create API log: %s", log_error, exc_info=True)
+                    vals['response_payload'] = json.dumps(redact_base64(response_payload), ensure_ascii=False,
+                                                          default=str)[:MAX_LOG_PAYLOAD]
+            with env.cr.savepoint():
+                # clean_context: no default_* key of a client context sets a field of the log
+                return env['llm.api.log'].sudo().with_context(clean_context(env.context)).create(vals)
+        except Exception as log_error:  # noqa: BLE001 - a log never breaks the reply
+            _logger.error("Failed to create the AI call log: %s", type(log_error).__name__)
+            return env['llm.api.log']
 
     # --- UI Action Methods ---
 
     def action_test_ai_connection(self):
-        """
-        Test this channel's backend connection (system administrators only).
-
-        openai: a small chat completion with the channel's model. n8n: a
-        ``{"event": "ping", ...}`` POST (signed when a secret is set, with
-        ``action: loadPreviousSession`` for Chat Triggers); any HTTP 200 is a
-        success.
-        Shows only the HTTP status and a short Chinese message; details go
-        to the server log, never the upstream answer or the token.
-        """
+        """Test the AI connection of this channel's assistant (system
+        administrators only). See im_livechat.ai.connection._test_connection."""
         self.ensure_one()
         self._check_system_admin()
-        channel = self.sudo()
-        backend, url, token = channel._ai_connection()
-        if not url or (backend == BACKEND_OPENAI and not token):
-            raise UserError(_('請先填寫端點網址與存取金鑰（Token）並儲存，再測試連線。'))
-        if not endpoint_url_allowed(url):
-            raise UserError(_('端點網址必須以 https:// 開頭（只有 localhost、127.0.0.1、::1 與 '
-                              '*.svc.cluster.local 的主機可以用 http://）。'))
-        model = (channel.ai_model or '').strip()
-        status = None
-        try:
-            if backend == BACKEND_N8N:
-                # A Chat Trigger answers "loadPreviousSession" without running
-                # the agent; a Webhook-node workflow answers the ping event.
-                body = json_dumps({
-                    'event': 'ping',
-                    'contact': {'id': channel.id, 'name': channel.name or ''},
-                    'action': 'loadPreviousSession',
-                    'sessionId': 'woow-ai-ping-%s' % channel.id,
-                }).encode()
-                headers = {'Content-Type': 'application/json'}
-                if token:
-                    headers.update(n8n_signature_headers(token, body))
-                response = requests.post(url, data=body, headers=headers,
-                                         timeout=N8N_TEST_TIMEOUT, allow_redirects=False)
-                status = response.status_code
-                if status != 200:
-                    raise requests.HTTPError('HTTP %s' % status, response=response)
-                message = _('連線成功（HTTP %(status)s），n8n 已回應 ping。', status=status)
-            else:
-                if not model:
-                    raise UserError(_('請先填寫模型，再測試連線。'))
-                payload = {'model': model, 'messages': [{'role': 'user', 'content': CONNECTION_TEST_PROMPT}]}
-                headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer %s' % token}
-                response = requests.post(url + '/chat/completions', json=payload, headers=headers,
-                                         timeout=LLM_REQUEST_TIMEOUT, allow_redirects=False)
-                status = response.status_code
-                self._ai_parse_response(backend, response)
-                message = _('連線成功（HTTP %(status)s），模型 %(model)s 有回應。', status=status, model=model)
-            ok = True
-        except UserError:
-            raise
-        except Exception as e:  # noqa: BLE001 - every failure becomes a short notice
-            _logger.warning("Live chat channel %s: AI backend connection test failed: %s",
-                            channel.id, self._short_llm_error(e))
-            ok = False
-            status, short = self._describe_llm_error(e)
-            if status:
-                message = _('連線失敗（HTTP %(status)s）：%(reason)s', status=status, reason=short)
-            else:
-                message = _('連線失敗：%(reason)s', reason=short)
-        _logger.info("Live chat channel %s: AI backend connection test by user %s: HTTP %s",
-                     channel.id, self.env.uid, status)
-        return self._ai_test_notification(ok, message)
+        assistant = self._ai_assistant()
+        if not assistant or not assistant.connection_id:
+            raise UserError(self.env._('Choose an AI assistant with an AI connection first.'))
+        return assistant.connection_id._test_connection(assistant=assistant, channel=self.sudo())
 
     def action_view_api_logs(self):
-        """Open the AI API logs of this channel."""
+        """Open the call logs of this channel (system administrators only)."""
         self.ensure_one()
-        self._check_ai_manager()
-
-        return {
-            'type': 'ir.actions.act_window',
-            'name': _('AI API 日誌 - %s') % self.name,
-            'res_model': 'llm.api.log',
-            'view_mode': 'list,form',
+        self._check_system_admin()
+        action = self.env['ir.actions.act_window']._for_xml_id('im_livechat_ai.llm_api_log_action')
+        action.update({
+            'name': self.env._('Call Logs - %s', self.name),
             'domain': [('livechat_channel_id', '=', self.id)],
-            'context': {
-                'default_livechat_channel_id': self.id,
-                'search_default_filter_last_7_days': 1,
-            },
-        }
+            'context': {'default_livechat_channel_id': self.id, 'search_default_filter_last_7_days': 1},
+        })
+        return action

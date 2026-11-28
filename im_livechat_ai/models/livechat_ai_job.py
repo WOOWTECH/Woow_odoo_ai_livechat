@@ -379,12 +379,12 @@ class LivechatAiJob(models.Model):
     # request that then succeeded). Written by the runner only (comma-separated ir.attachment ids); every later
     # request of the conversation reads the union of its jobs' values.
     file_fallback_ids = fields.Char(
-        string='Files Sent as Download Links',
+        string='Files Sent as Links Only',
         copy=False,
         readonly=True,
-        help='Files of this conversation that the model could not read (attachment ids): the backend refused the '
-             'request that carried them and answered the same turn without them, so every later request of the '
-             'conversation sends them as a download link with a note instead.',
+        help='Ids of the attachments of this conversation the model could not read: a request with them was '
+             'refused, and the same turn sent without them was answered. Every later request of the '
+             'conversation sends them as download links only, with a note for the model.',
     )
 
     @api.depends('discuss_channel_id')
@@ -995,6 +995,20 @@ class LivechatAiJob(models.Model):
             self._finish('done', False, reply_message=message)
         commit_step()
 
+    def action_forget_link_only_attachments(self):
+        """Forget the files the conversations of these jobs send as links only (contract 3.7: the memory lasts as
+        long as the conversation; changing the connection or the model does not clear it). After a switch to a
+        model that reads such files, a system administrator clears it here, for every job of each conversation:
+        the next request sends them as file parts again (and a fallback remembers them again when they are
+        refused). The jobs are written with sudo: system administrators may read and delete jobs, not write them."""
+        self.env['im_livechat.channel']._check_system_admin()
+        sessions = self.sudo().discuss_channel_id
+        jobs = self.sudo().search([('discuss_channel_id', 'in', sessions.ids), ('file_fallback_ids', '!=', False)])
+        jobs.write({'file_fallback_ids': False})
+        _logger.info("Live chat AI jobs %s: the files sent as links only of conversations %s are forgotten (user %s)",
+                     jobs.ids, sessions.ids, self.env.uid)
+        return True
+
     def _remember_file_fallback(self, attachment_ids):
         """Remember the attachments a successful request of the file fallback left out (contract 3.7): every later
         request of the conversation, a later run of this job included, sends them as links with the fallback note
@@ -1407,9 +1421,9 @@ class LivechatAiJob(models.Model):
 
         A job that remembers files the model could not read (file_fallback_ids)
         is kept: the memory lasts as long as the conversation (contract 3.7),
-        and the job is deleted with it. An administrator clears the memory of a
-        conversation by deleting those jobs (Reply Jobs, filter "Files Sent as
-        Download Links")."""
+        and the job is deleted with it. A system administrator clears the
+        memory of a conversation with "Forget Files Sent as Links" on one of its
+        reply jobs (action_forget_link_only_attachments)."""
         cutoff = fields.Datetime.now() - timedelta(days=days)
         domain = [
             ('state', 'in', ('done', 'failed', 'skipped')),

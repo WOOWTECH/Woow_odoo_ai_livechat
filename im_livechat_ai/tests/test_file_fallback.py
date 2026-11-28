@@ -19,7 +19,10 @@ import json
 from unittest.mock import MagicMock, patch
 
 import requests
+from lxml import etree
 
+from odoo.exceptions import AccessError
+from odoo.tests.common import new_test_user
 from odoo.tools import mute_logger
 
 from odoo.addons.im_livechat_ai.models import discuss_channel as dc
@@ -545,6 +548,42 @@ class TestFileFallbackMemory(FileFallbackCase):
         self.assertEqual(session._ai_file_fallback_ids(), {image.id})
         remembering.unlink()
         self.assertEqual(session._ai_file_fallback_ids(), set())
+
+    def test_forget_files_sent_as_links(self):
+        """The button of the reply-job form (system administrators only): the whole conversation forgets the
+        files it sends as links only, the next request sends them as file parts again; other conversations keep
+        their memory."""
+        session = self.session()
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(session, '看得到嗎？')
+        first, _sent, _sleep = self.turn(session, message, refusing(400))
+        self.post(session, '第二份', [('b.pdf', OTHER_PDF, 'application/pdf')])
+        message, _a = self.post(session, '這份呢？')
+        second, _sent, _sleep = self.turn(session, message, refusing(400))
+        other_session = self.session()
+        _m, (other_image,) = self.post(other_session, '別的對話', [('o.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(other_session, '然後呢？')
+        other, _sent, _sleep = self.turn(other_session, message, refusing(400))
+        self.assertTrue(first.file_fallback_ids and second.file_fallback_ids and other.file_fallback_ids)
+        manager = new_test_user(self.env, login='ff_manager',
+                                groups='base.group_user,im_livechat.im_livechat_group_manager')
+        with self.assertRaises(AccessError):
+            first.with_user(manager).action_forget_link_only_attachments()
+        admin = new_test_user(self.env, login='ff_admin', groups='base.group_user,base.group_system')
+        self.assertIs(first.with_user(admin).action_forget_link_only_attachments(), True)
+        self.env.invalidate_all()
+        self.assertEqual((first.file_fallback_ids, second.file_fallback_ids), (False, False))
+        self.assertEqual(session._ai_file_fallback_ids(), set())
+        self.assertEqual(other.file_fallback_ids, str(other_image.id), 'another conversation keeps its memory')
+        message, _a = self.post(session, '再看一次')
+        _third, sent, _sleep = self.turn(session, message, [ok_response('好的')])
+        self.assertEqual([part['type'] for part in file_parts(sent[0])], ['file'], 'the document is a file part again')
+
+    def test_forget_button_on_the_job_form(self):
+        form = etree.fromstring(self.env.ref('im_livechat_ai.im_livechat_ai_job_view_form').arch)
+        (button,) = form.xpath("//button[@name='action_forget_link_only_attachments']")
+        self.assertEqual((button.get('string'), button.get('invisible'), button.get('groups')),
+                         ('Forget Files Sent as Links', 'not file_fallback_ids', 'base.group_system'))
 
     def test_left_out_files_take_no_slot(self):
         """A remembered image is a link with the note and leaves its place in the count to another one."""

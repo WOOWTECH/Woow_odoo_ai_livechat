@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-28 04:40+0000\n"
-"PO-Revision-Date: 2026-11-28 04:40+0000\n"
+"POT-Creation-Date: 2026-11-28 05:03+0000\n"
+"PO-Revision-Date: 2026-11-28 05:03+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -591,21 +591,12 @@ msgstr ""
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
-msgid "Files Sent as Download Links"
+msgid "Files Sent as Links Only"
 msgstr ""
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
 msgid "Files Visitors Send"
-msgstr ""
-
-#. module: im_livechat_ai
-#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
-msgid ""
-"Files of this conversation that the model could not read (attachment ids): "
-"the backend refused the request that carried them and answered the same turn"
-" without them, so every later request of the conversation sends them as a "
-"download link with a note instead."
 msgstr ""
 
 #. module: im_livechat_ai
@@ -621,6 +612,11 @@ msgstr ""
 #. module: im_livechat_ai
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__description
 msgid "For administrators: what this backend is and who runs it."
+msgstr ""
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Forget Files Sent as Links"
 msgstr ""
 
 #. module: im_livechat_ai
@@ -720,6 +716,15 @@ msgstr ""
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_usage_month__id
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__id
 msgid "ID"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid ""
+"Ids of the attachments of this conversation the model could not read: a "
+"request with them was refused, and the same turn sent without them was "
+"answered. Every later request of the conversation sends them as download "
+"links only, with a note for the model."
 msgstr ""
 
 #. module: im_livechat_ai

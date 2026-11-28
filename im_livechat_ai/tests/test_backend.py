@@ -46,6 +46,7 @@ from .common import (
     TEST_N8N_URL,
     call_backend,
     ok_response,
+    split_time_line,
 )
 from .common import (add_legacy_channel_columns, legacy_channel_values, make_ai_channel, sent_json, set_ai,
                      set_legacy_channel_values)
@@ -268,10 +269,11 @@ class TestOpenAiRequest(BackendCase):
         self.assertEqual(list(payload), ['model', 'messages', 'user', 'metadata'])
         session_id = 'woow-ai-0edfec80-%s' % session.id
         self.assertEqual(payload['user'], session_id)
-        self.assertEqual(payload['messages'], [
-            {'role': 'system', 'content': '你是官網客服。'},
-            {'role': 'user', 'content': '請問營業時間？'},
-        ])
+        system = payload['messages'][0]
+        self.assertEqual(system['role'], 'system')
+        # the prompt, then the current time line (contract 3.7)
+        self.assertEqual(split_time_line(system['content'])[0], '你是官網客服。')
+        self.assertEqual(payload['messages'][1:], [{'role': 'user', 'content': '請問營業時間？'}])
         metadata = payload['metadata']
         self.assertEqual(metadata['session_id'], session_id)
         self.assertEqual(metadata['odoo_guest_id'], str(guest.id))
@@ -327,13 +329,14 @@ class TestOpenAiRequest(BackendCase):
         self._post_bot(session, self.channel, '抱歉，AI 暫時無法回覆。')
         call_backend(self.channel, session=session)
         messages = sent_json(mock_post.call_args)['messages']
-        # No prompt and no event: no system message at all.
-        self.assertEqual(messages, [
+        # No prompt and no event: the system message holds the current time line only (contract 3.7).
+        self.assertEqual(messages[0]['role'], 'system')
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '')
+        self.assertEqual(messages[1:], [
             {'role': 'user', 'content': '[Messages you (the assistant) sent before this user message]\n'
                                         '抱歉，AI 暫時無法回覆。'},
             {'role': 'user', 'content': '有現貨嗎？'},
         ])
-        self.assertEqual(messages[0]['role'], 'user')
         self.assertEqual(messages[-1], {'role': 'user', 'content': '有現貨嗎？'})
 
     @patch(SLEEP)

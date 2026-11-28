@@ -10,10 +10,30 @@ setup and assertions.
 """
 
 import json
+import re
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from odoo.addons.im_livechat_ai.models.ai_connection import LITELLM_DEFAULT_TIMEOUT, N8N_DEFAULT_TIMEOUT
 from odoo.addons.im_livechat_ai.models.im_livechat_channel import HANDOFF_KEYWORDS_1_1_0
+
+# The module's clock (tools/backend.py utc_now): the current time of a request is read from there only.
+CLOCK = 'odoo.addons.im_livechat_ai.tools.backend.utc_now'
+# Saturday 2026-11-28 10:20:33 in Taipei (the bench's "Saturday morning")
+SATURDAY_MORNING = datetime(2026, 11, 28, 2, 20, 33, tzinfo=timezone.utc)
+# Contract 3.7: Live Chat's system message ends with the current time line.
+TIME_LINE_RE = re.compile(
+    r'(?:\A|\n\n)(Current time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} '
+    r'\((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\), time zone \S+ \(UTC[+-]\d{2}:\d{2}\)\.)\Z')
+
+
+def split_time_line(content):
+    """(the system message without its time line, the time line): Live Chat's system message ends with the
+    current time line (contract 3.7). Raises AssertionError when it does not."""
+    match = TIME_LINE_RE.search(content or '')
+    if not match:
+        raise AssertionError('the system message does not end with the time line: %r' % (content or '')[-300:])
+    return content[:match.start()], match.group(1)
 
 TEST_BASE_URL = 'https://litellm.test/v1'
 TEST_API_KEY = 'dummy-test-token'

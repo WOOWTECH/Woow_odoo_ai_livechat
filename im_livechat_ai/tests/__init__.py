@@ -21,3 +21,6 @@ from . import test_migration_200
 from . import test_contract
 from . import test_client_context
 from . import test_hardening
+from . import test_current_time
+from . import test_answer_labels
+from . import test_file_fallback

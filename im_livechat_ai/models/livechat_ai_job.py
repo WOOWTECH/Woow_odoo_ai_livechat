@@ -56,7 +56,7 @@ from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context, config
 
 from ..tools.backend import exception_frames
-from .discuss_channel import PAUSE_HANDOFF
+from .discuss_channel import PAUSE_HANDOFF, attachment_ids_of, attachment_ids_text
 from .im_livechat_channel import (
     ALERT_WINDOW_MINUTES,
     LLM_MAX_RETRIES,
@@ -67,7 +67,9 @@ from .im_livechat_channel import (
 _logger = logging.getLogger(__name__)
 
 DEBOUNCE_SECONDS = 1.5  # rapid visitor messages within this window get one reply
-MAX_JOB_RUNS = 3  # processing runs per job (each run makes up to 3 backend calls)
+# Processing runs per job. Each run makes one backend request with its retries (at most 3 calls), plus at most two
+# requests of the file fallback (contract 3.7).
+MAX_JOB_RUNS = 3
 STALE_PENDING_SECONDS = 30  # pending this long past run_after: the thread was lost
 # Running and unlocked this long: the process died. A live run holds the
 # session's advisory lock for its whole duration, however long the backend
@@ -373,6 +375,17 @@ class LivechatAiJob(models.Model):
         help='This job\'s failure alerted the operators; the same kind of failure of the channel is not '
              'announced again for 10 minutes.',
     )
+    # Contract 3.7, the file fallback: the conversation remembers the files the model could not read (left out by a
+    # request that then succeeded). Written by the runner only (comma-separated ir.attachment ids); every later
+    # request of the conversation reads the union of its jobs' values.
+    file_fallback_ids = fields.Char(
+        string='Files Sent as Links Only',
+        copy=False,
+        readonly=True,
+        help='Ids of the attachments of this conversation the model could not read: a request with them was '
+             'refused, and the same turn sent without them was answered. Every later request of the '
+             'conversation sends them as download links only, with a note for the model.',
+    )
 
     @api.depends('discuss_channel_id')
     def _compute_display_name(self):
@@ -431,6 +444,7 @@ class LivechatAiJob(models.Model):
             'context_message_id': 0,
             'reply_message_id': False,
             'alert_sent': False,
+            'file_fallback_ids': False,
         })
         if deferred:
             self._trigger_recovery_cron(job.run_after + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
@@ -716,6 +730,11 @@ class LivechatAiJob(models.Model):
         result = channel._generate_ai_reply(session, conversation, before_call=commit_step,
                                             trigger_message=self.message_id, job=self)
         self.write({'llm_calls': result['calls']})
+        if result['left_out']:
+            # Contract 3.7: a request without these files succeeded. The conversation remembers them, committed
+            # now, before the post, so that a run of this job after a crash reads them too.
+            self._remember_file_fallback(result['left_out'])
+            commit_step()
 
         # Final checks and the post, with the session row locked (see
         # _lock_session_row): committed in one transaction.
@@ -975,6 +994,31 @@ class LivechatAiJob(models.Model):
                                                   channel._ai_pause_notice_text(self._visitor_lang()))
             self._finish('done', False, reply_message=message)
         commit_step()
+
+    def action_forget_link_only_attachments(self):
+        """Forget the files the conversations of these jobs send as links only (contract 3.7: the memory lasts as
+        long as the conversation; changing the connection or the model does not clear it). After a switch to a
+        model that reads such files, a system administrator clears it here, for every job of each conversation:
+        the next request sends them as file parts again (and a fallback remembers them again when they are
+        refused). The jobs are written with sudo: system administrators may read and delete jobs, not write them."""
+        self.env['im_livechat.channel']._check_system_admin()
+        sessions = self.sudo().discuss_channel_id
+        jobs = self.sudo().search([('discuss_channel_id', 'in', sessions.ids), ('file_fallback_ids', '!=', False)])
+        jobs.write({'file_fallback_ids': False})
+        _logger.info("Live chat AI jobs %s: the files sent as links only of conversations %s are forgotten (user %s)",
+                     jobs.ids, sessions.ids, self.env.uid)
+        return True
+
+    def _remember_file_fallback(self, attachment_ids):
+        """Remember the attachments a successful request of the file fallback left out (contract 3.7): every later
+        request of the conversation, a later run of this job included, sends them as links with the fallback note
+        where they would be file parts (see discuss.channel._ai_file_fallback_ids). The runner commits it before it
+        posts the answer."""
+        self.ensure_one()
+        known = attachment_ids_of(self.file_fallback_ids)
+        ids = known | set(attachment_ids)
+        if ids != known:
+            self.write({'file_fallback_ids': attachment_ids_text(ids)})
 
     def _finish(self, state, error, reply_message=None):
         vals = {
@@ -1373,11 +1417,18 @@ class LivechatAiJob(models.Model):
     @api.model
     def _cleanup_old_jobs(self, days, livechat_channel_ids=None):
         """Delete finished jobs older than `days` (all jobs, or those of the
-        given live chat channels; False in the list: jobs without channel)."""
+        given live chat channels; False in the list: jobs without channel).
+
+        A job that remembers files the model could not read (file_fallback_ids)
+        is kept: the memory lasts as long as the conversation (contract 3.7),
+        and the job is deleted with it. A system administrator clears the
+        memory of a conversation with "Forget Files Sent as Links" on one of its
+        reply jobs (action_forget_link_only_attachments)."""
         cutoff = fields.Datetime.now() - timedelta(days=days)
         domain = [
             ('state', 'in', ('done', 'failed', 'skipped')),
             ('create_date', '<', cutoff),
+            ('file_fallback_ids', '=', False),
         ]
         if livechat_channel_ids is not None:
             domain.append(('livechat_channel_id', 'in', list(livechat_channel_ids)))

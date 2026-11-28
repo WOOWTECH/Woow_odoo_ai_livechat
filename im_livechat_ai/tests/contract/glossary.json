@@ -1,5 +1,5 @@
 {
- "contract": "v1.2",
+ "contract": "v1.3",
  "about": "zh_TW glossary (CONTRACT.md 3.11): exact msgids and their msgstr, labels by field and selection key (checked through fields_get in zh_TW), banned variants (checked against every msgstr) and banned msgids.",
  "msgids": {
   "AI Connection": "AI 連線",

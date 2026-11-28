@@ -16,7 +16,8 @@ LOG_RETENTION_DAYS = 30
 
 class LLMApiLog(models.Model):
     """
-    Call logs of the Live Chat AI (「呼叫紀錄」): one row per answer.
+    Call logs of the Live Chat AI (「呼叫紀錄」): one row per request the module builds (its retries stay in that
+    row; each request of the file fallback is a new row).
 
     Readable by system administrators only. A row keeps the time, the AI
     assistant and connection, the backend, model, token usage, duration,
@@ -160,8 +161,9 @@ class LLMApiLog(models.Model):
         return len(logs)
 
     def _cleanup_old_logs(self, days=LOG_RETENTION_DAYS):
-        """Delete call logs and finished reply jobs older than ``days`` (30).
-        Called daily by a scheduled action. Returns the number of logs deleted."""
+        """Delete call logs and finished reply jobs older than ``days`` (30), except the jobs that remember
+        files the model could not read (see im_livechat.ai.job._cleanup_old_jobs). Called daily by a scheduled
+        action. Returns the number of logs deleted."""
         cutoff = fields.Datetime.now() - timedelta(days=days)
         old = self.sudo().search([('timestamp', '<', cutoff)])
         count = len(old)

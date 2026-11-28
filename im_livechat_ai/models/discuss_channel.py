@@ -19,7 +19,7 @@ from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context
 from odoo.tools.mimetypes import guess_mimetype
 
-from ..tools.backend import exception_frames, one_line_name, person_name
+from ..tools.backend import current_time, exception_frames, known_time_zone, one_line_name, person_name, time_line
 
 _logger = logging.getLogger(__name__)
 
@@ -29,6 +29,35 @@ _HTML_TAG_RE = re.compile(r'<[^>]+>')
 # Prefix of a human operator's message in the LLM history (P1-3).
 OPERATOR_PREFIX = '[真人客服 %s] '
 OPERATOR_PREFIX_NO_NAME = '[真人客服] '
+# Labels a model may copy from a history into its answer (contract 3.14, "Labels in answers"): the kind of speaker
+# of Live Chat's operator prefix and of Project AI's speaker labels, removed from the start of every answer.
+LABEL_KINDS = ('真人客服', '客戶', '負責同事')
+# White space around a label: what str.isspace() counts (\s of a str pattern: also U+3000 and the no-break
+# spaces), plus the zero-width U+200B and U+FEFF.
+_LABEL_SPACE = r'[\s\u200b\ufeff]'
+# One label at the start, with the white space before and after it: [<kind>] or [<kind> <text without ] or a line
+# break>], the kind followed by "]" or a space (ASCII or U+3000), so [客戶服務中心] is not a label; one directly
+# followed by "(" is the text of a Markdown link ([客戶](https://...)), not a label. Linear: the classes around the
+# brackets do not overlap.
+_LABEL_RE = re.compile(r'%s*\[(?:%s)(?:[ \u3000][^\]\r\n]*)?\](?!\()%s*'
+                       % (_LABEL_SPACE, '|'.join(LABEL_KINDS), _LABEL_SPACE))
+
+
+def strip_speaker_labels(text):
+    """The answer without the speaker labels at its start (contract 3.14, "Labels in answers"): every leading
+    ``[<kind>]`` or ``[<kind> <name>]`` (LABEL_KINDS), with the white space after it, as long as one is there;
+    white space before the first label counts as the start. Nothing else changes: a label after the start, a
+    leading bracket that is not such a label, or a label directly followed by "(" (the text of a Markdown link),
+    stays."""
+    if not text:
+        return text or ''
+    position = 0
+    while True:
+        match = _LABEL_RE.match(text, position)
+        if not match:
+            break
+        position = match.end()
+    return text[position:] if position else text
 # Added to the system prompt when the history contains operator messages
 # (operator messages are user turns, aligned with Discuss AI).
 OPERATOR_SYSTEM_NOTE = (
@@ -178,6 +207,8 @@ TEXT_LIKE_TYPES = ('application/json', 'application/csv', 'application/x-ndjson'
 ATTACHMENT_LINE = '[附件] %s（%s，%s）：%s'
 ATTACHED_TEXT = '檔案已附在這則訊息'
 ATTACHMENT_NOTE = '[附件說明] %s：%s'
+# The note of a file the model could not read (contract 3.7, the file fallback): literal protocol text.
+FILE_FALLBACK_NOTE = '模型無法讀取這個檔案，只附下載連結。'
 
 _DATA_URI_RE = re.compile(r'(data:[a-z0-9.+-]+/[a-z0-9.+-]+(?:;[a-z0-9.+=-]+)*;base64),([A-Za-z0-9+/]+=*)',
                           re.IGNORECASE)
@@ -325,6 +356,31 @@ def attachment_raw(attachment):
     """Content of one attachment. ``raw`` is computed: read through the
     history's shared prefetch set it would load every file at once."""
     return attachment.with_prefetch(attachment._ids).raw or b''
+
+
+def attachment_ids_of(value):
+    """The attachment ids of a comma-separated text (im_livechat.ai.job.file_fallback_ids)."""
+    return {int(part) for part in (value or '').split(',') if part.strip().isascii() and part.strip().isdigit()}
+
+
+def attachment_ids_text(ids):
+    """Comma-separated text of attachment ids, in ascending order ('' for none)."""
+    return ','.join(str(attachment_id) for attachment_id in sorted(ids))
+
+
+def file_fallback_entry(attachment):
+    """The plan entry of an attachment the model could not read: its link and the fallback note (contract 3.7)."""
+    return {'note': ATTACHMENT_NOTE % (attachment.name or 'file', FILE_FALLBACK_NOTE)}
+
+
+def plan_file_parts(plan):
+    """{history position: [attachment id, ...]} of the attachments an attachment plan sends as file parts
+    (inline images, documents in 'file' mode)."""
+    parts = {}
+    for (position, attachment_id), decided in plan.items():
+        if decided.get('image') or decided.get('file'):
+            parts.setdefault(position, []).append(attachment_id)
+    return parts
 
 
 def _clean_text(body):
@@ -819,6 +875,45 @@ class DiscussChannel(models.Model):
             identity['name'] = person_name(session.anonymous_name)
         return identity
 
+    def _ai_current_time(self, identity=None):
+        """The current time of one request (contract 3.6, 3.7): ``{utc, local, tz, weekday}``, computed once
+        when the request is built (n8n ``now``, the LiteLLM time line).
+
+        The time zone is the first one set of: the company's (_ai_company_time_zone), the visitor's own (the
+        identity's ``tz``: a guest's ``timezone``, else the user's ``tz``), UTC. A name that is not a known IANA
+        time zone counts as none. ``identity``: the result of _ai_visitor_identity(), when the caller has it."""
+        self.ensure_one()
+        if identity is None:
+            identity = self._ai_visitor_identity()
+        zone = self._ai_company_time_zone() or known_time_zone(identity.get('tz'))
+        return current_time(zone or 'UTC')
+
+    @api.model
+    def _ai_company_time_zone(self):
+        """The time zone of the current company (contract 3.7; ``env.company``: the database's main company for a
+        reply job, which runs as the superuser): the time zone of its working schedule where the Resource module is
+        installed (set on the working schedule form), else the ``tz`` of its partner; '' when neither is a known
+        IANA time zone. This module does not depend on the Resource module, hence the field test."""
+        company = self.env.company.sudo()
+        if 'resource_calendar_id' in company._fields:
+            zone = known_time_zone(company.resource_calendar_id.tz)
+            if zone:
+                return zone
+        return known_time_zone(company.partner_id.tz)
+
+    def _ai_file_fallback_ids(self):
+        """Ids of this conversation's attachments that the model could not read (contract 3.7, "the
+        conversation remembers"): a request of the file fallback that left them out succeeded, so every later
+        LiteLLM request sends each, where it would be a file part, as its ``[附件]`` line and the fallback note.
+        The union of what the reply jobs of the conversation keep (im_livechat.ai.job.file_fallback_ids)."""
+        self.ensure_one()
+        jobs = self.env['im_livechat.ai.job'].sudo().search([
+            ('discuss_channel_id', '=', self.id), ('file_fallback_ids', '!=', False)])
+        ids = set()
+        for job in jobs:
+            ids |= attachment_ids_of(job.file_fallback_ids)
+        return ids
+
     def _ai_handoff_available(self):
         """True when the visitor can be handed to a human: the Live Chat
         channel has an operator who is an internal user (the openai system
@@ -954,7 +1049,7 @@ class DiscussChannel(models.Model):
                                   target or info['url'])
 
     @staticmethod
-    def _ai_attachment_plan(history, document_mode):
+    def _ai_attachment_plan(history, document_mode, left_out=()):
         """What the openai request carries for each visitor attachment.
 
         Returns {(history position, attachment id): {'image': data URI} |
@@ -971,6 +1066,10 @@ class DiscussChannel(models.Model):
           INLINE_DOC_MAX_BYTES each (a larger one is a link).
         - Images first, then documents share INLINE_DATA_BUDGET data URI
           characters. A file skipped because of a limit gets a note.
+        - ``left_out``: ids of attachments the model could not read (the
+          conversation's file fallbacks, contract 3.7). Where one would be
+          inlined, it is a link with the fallback note instead and takes
+          nothing of the counts or the budget.
         """
         visitor_positions = [i for i, entry in enumerate(history) if entry['kind'] == AUTHOR_VISITOR]
         image_window = set(visitor_positions[-INLINE_IMAGE_MESSAGES:])
@@ -1015,6 +1114,9 @@ class DiscussChannel(models.Model):
                     continue
                 if link_only or sniffed not in INLINE_IMAGE_TYPES:
                     continue
+                if attachment.id in left_out:
+                    plan[key] = file_fallback_entry(attachment)
+                    continue
                 if images >= INLINE_IMAGE_MAX_COUNT:
                     plan[key] = note(attachment.name or 'file',
                                      '每次最多附上 %s 張圖片，這張只附下載連結。' % INLINE_IMAGE_MAX_COUNT)
@@ -1045,6 +1147,9 @@ class DiscussChannel(models.Model):
                 mimetype = document_mimetype(attachment.name, attachment.mimetype, raw)
                 if not mimetype:
                     continue  # not a document the backend reads (archive, media...): a link
+                if attachment.id in left_out:
+                    plan[key] = file_fallback_entry(attachment)
+                    continue
                 if len(raw) > INLINE_DOC_MAX_BYTES:
                     plan[key] = too_large(attachment, '檔案', INLINE_DOC_MAX_BYTES)
                     continue
@@ -1062,10 +1167,14 @@ class DiscussChannel(models.Model):
                                                                'file_data': uri}}}
         return plan
 
-    def _ai_openai_messages(self, conversation, livechat_channel=None):
-        """Chat completion messages: a system message only when there is a
-        prompt or an event note, then the turns, which start and end with a
-        user turn (see normalize_turns).
+    def _ai_openai_messages(self, conversation, livechat_channel=None, now=None, left_out=None):
+        """Chat completion messages: the system message, then the turns,
+        which start and end with a user turn (see normalize_turns).
+
+        The system message (contract 3.7): the assistant's prompt, the event
+        notes, the handoff line when the channel has operators (the model ends
+        its reply with [[handoff]] to hand over), then the current time line,
+        always (Live Chat has no identity block).
 
         A visitor turn with attachments (owner decision 39) carries them as
         they are: images as ``image_url`` data URIs, documents in the AI
@@ -1073,21 +1182,56 @@ class DiscussChannel(models.Model):
         mimetype (plus a
         ``[附件]`` line), every other attachment as a ``[附件]`` line with its
         signed download URL (and a ``[附件說明]`` note when a limit skipped
-        it). Such a turn's content becomes a list of parts.
+        it, or when the model could not read it before). Such a turn's content
+        becomes a list of parts.
 
-        When the channel has operators, HANDOFF_SYSTEM_LINE ends the system
-        message: the model ends its reply with [[handoff]] to hand over."""
+        ``now``: the request's current time (_ai_current_time(), default: now);
+        ``left_out``: ids of attachments sent as links with the fallback note
+        (default: the conversation's, _ai_file_fallback_ids())."""
+        return self._ai_openai_render(self._ai_openai_prepare(conversation, livechat_channel=livechat_channel,
+                                                              now=now, left_out=left_out))
+
+    def _ai_openai_prepare(self, conversation, livechat_channel=None, now=None, left_out=None, plan=None):
+        """What a LiteLLM request is made of: ``system`` (the system message),
+        ``history``, ``plan`` (_ai_attachment_plan: the files are read once per
+        answer), ``current`` (the history position of the newest visitor
+        message: the message being answered) and ``base_url``. A request of the
+        file fallback (contract 3.7) is prepared again with the first request's
+        ``plan`` (the same choice of files) and rendered without some file parts
+        (see _ai_openai_render). Other arguments: see _ai_openai_messages."""
         livechat_channel = livechat_channel or self.sudo().livechat_channel_id
         mode = (livechat_channel._ai_document_mode() if livechat_channel else None) or DOCUMENT_MODE_FILE
+        if now is None:
+            now = self._ai_current_time()
         parts = [conversation['system_prompt']] + [event['text'] for event in conversation['events']]
         if self._ai_handoff_available():
-            parts.append(HANDOFF_SYSTEM_LINE)  # always the last line (owner decision 40)
-        system = '\n\n'.join(p.strip() for p in parts if p and p.strip())
+            parts.append(HANDOFF_SYSTEM_LINE)  # the last line of the surface text (owner decision 40)
+        parts.append(time_line(now))  # contract 3.7: after the surface text, one line, always
         history = conversation['history']
         has_attachments = any(entry.get('attachments') for entry in history)
-        plan = self._ai_attachment_plan(history, mode) if has_attachments else {}
-        base_url = self._ai_attachment_base_url() if has_attachments else ''
-        now = time.time()
+        visitors = [position for position, entry in enumerate(history) if entry['kind'] == AUTHOR_VISITOR]
+        if plan is None and has_attachments:
+            if left_out is None:
+                left_out = self._ai_file_fallback_ids()
+            plan = self._ai_attachment_plan(history, mode, left_out=left_out)
+        return {
+            'system': '\n\n'.join(p.strip() for p in parts if p and p.strip()),
+            'history': history,
+            'plan': plan or {},
+            'current': visitors[-1] if visitors else None,
+            'base_url': self._ai_attachment_base_url() if has_attachments else '',
+        }
+
+    def _ai_openai_render(self, prepared, drop=()):
+        """The chat completion messages of ``prepared`` (_ai_openai_prepare).
+
+        ``drop``: history positions whose file parts (inline images, documents
+        in 'file' mode) are left out (the file fallback, contract 3.7): each
+        such file becomes its ``[附件]`` line with its signed link, followed by
+        ``[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。``."""
+        history, plan = prepared['history'], prepared['plan']
+        base_url = prepared['base_url']
+        signed_at = time.time()
         turns = []
         for position, entry in enumerate(history):
             attachments = entry.get('attachments')
@@ -1098,10 +1242,12 @@ class DiscussChannel(models.Model):
             images, files = [], []
             for attachment in attachments:
                 decided = plan.get((position, attachment.id)) or {}
+                if position in drop and (decided.get('image') or decided.get('file')):
+                    decided = file_fallback_entry(attachment)
                 if decided.get('image'):
                     images.append({'type': 'image_url', 'image_url': {'url': decided['image']}})
                     continue
-                info = self._ai_attachment_info(attachment, base_url=base_url, now=now)
+                info = self._ai_attachment_info(attachment, base_url=base_url, now=signed_at)
                 if decided.get('file'):
                     files.append(decided['file'])
                     lines.append(self._ai_attachment_line(info, ATTACHED_TEXT))
@@ -1116,6 +1262,7 @@ class DiscussChannel(models.Model):
                 content = text
             turns.append({'role': entry['role'], 'content': content})
         turns = normalize_turns(turns)
+        system = prepared['system']
         return ([{'role': 'system', 'content': system}] if system else []) + turns
 
     # --- When the AI cannot answer ---

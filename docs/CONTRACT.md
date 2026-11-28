@@ -1,8 +1,11 @@
-# AI products contract, version 1.2
+# AI products contract, version 1.3
 
-- **Version:** v1.2, 2026-11-25. It replaces v1.1, which replaced v1. The rules of v1 stay; v1.1 states rules
-  that v1's fixtures only implied, adds the speaker label (3.14) and the run-time gate (3.5), and its checks
-  prove more; v1.2 adds the rule that rows created for a post get explicit values only (3.5, check 14).
+- **Version:** v1.3, 2026-11-28. It replaces v1.2, which replaced v1.1 and v1. The rules of v1 stay; v1.1 states
+  rules that v1's fixtures only implied, adds the speaker label (3.14) and the run-time gate (3.5), and its checks
+  prove more; v1.2 adds the rule that rows created for a post get explicit values only (3.5, check 14); v1.3 adds
+  the current time (3.6, 3.7), removes a speaker label a model copies into its answer (3.14), lets a turn go on
+  when the model cannot read a file (3.7, check 15), and extends the explicit-values rule to `ir.default` rows
+  (3.5, check 14).
 - **Products:**
   - Discuss AI (`woow_ai_contact`);
   - Project AI (`woow_ai_task`);
@@ -33,7 +36,8 @@ The three products are separate. Each keeps its own runtime core and ships on it
 - **Connection:** a record of the 「AI 連線」 model: the backend type, URL, key and call settings.
 - **Assistant:** a record of the 「AI 助理」 model: the persona that answers, with its connection.
 - **Conversation:** the `discuss.channel` an answer is given in.
-- **Answer:** one backend call, retries included, and what it returns.
+- **Answer:** the backend requests of one turn: a request with its retries (3.3), plus any fallback request (3.7),
+  and what the first successful one returns.
 - **Blocked period:** the time from the first message the AI cannot answer until the AI answers again.
 
 ## 3. The contract
@@ -59,7 +63,7 @@ The three products are separate. Each keeps its own runtime core and ships on it
 | Identity block in the system message | yes (3.7) | yes (3.7) | none: visitors are mostly anonymous |
 | Clickable links in replies | any http(s) host | any http(s) host | the site's own hosts only |
 | Files in replies | attached from the download domains | attached from the download domains | text only |
-| Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] ` and `[負責同事 <name>] ` in the customer chat | no |
+| Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] `, `[負責同事 <name>] ` and `[其他 <name>] ` in the customer chat | no |
 | Conversation events in the n8n `events` | none | none | yes |
 | Job fields: state, runs, start, error | `state`, `run_count`, `started_at`, `error` | `state`, `run_count`, `started_at`, `error` | `state`, `attempts`, `started_at`, `error` |
 
@@ -208,6 +212,10 @@ Every product uses these field names. The zh_TW labels are in 3.11.
      `sudo()` drops them only when it switches into superuser mode; code already in that mode, or a context
      applied after `sudo()`, keeps them. A forged running state with a future start would pin the
      conversation, and a forged run count would make every message fail without a call.
+   - **`ir.default` rows fill a field the same way.** `create` also takes the value of a field it is not
+     given from `ir.default` (a global row, or the posting user's own: an internal user may write rows for
+     themselves). Cleaning the context is not enough: the job row is created with every field of the job
+     fields of 3.1, and every other field the runner reads, passed explicitly.
 4. **One job per conversation at a time.**
    - An advisory lock in the product's own namespace, `crc32('<module>.job')`.
    - The newest job supersedes older ones, unless the surface uses the per-author policy.
@@ -251,6 +259,7 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 | `message` | `{id, text, attachments}`: the message being answered; `text` as the person typed it, after the speaker label in a product that labels (3.14) |
 | `history` | `[{role, text, attachments}]`: the earlier messages, oldest first; `role` is `user` or `assistant`; an assistant's text as it was posted |
 | `events` | `[{time, kind, text}]`: always present, `[]` when there are none |
+| `now` | `{utc, local, tz, weekday}`: the current time when the request is built (3.7, "The current time") |
 
 **Allowed extra keys.** Discuss AI and Live Chat may also send the legacy `contact`. Live Chat may also send `channel.livechat`.
 
@@ -283,6 +292,7 @@ Every product uses these field names. The zh_TW labels are in 3.11.
 - `"handoff": true` (the JSON boolean) cancels `skip`.
 - `handoff_reason` counts only with `"handoff": true`. White space is collapsed first, then at most 300 characters are kept.
 - `<think>` blocks and special tokens are removed.
+- A speaker label the model copied to the start of a reply text is removed (3.14, "Labels in answers").
 - **Reply files.** A reply object may carry `attachments`: `{url, name}` or `{data_base64, name}`.
   - A file fetched by URL comes only from the download domains (3.3).
   - `data_base64` items, and `data:image` URIs in the text, are decoded without a download, with the same size
@@ -314,11 +324,36 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 - **Documents in `file` mode** go as `{"type": "file", "file": {"filename", "file_data"}}`: at most 5, from the last 5 user messages, each at most 4 MB. A larger document is a link.
 - **Budget:** images and documents share 7 MiB of data-URI characters, about 5.25 MiB of file bytes.
 - **Anything else** becomes the line `[附件] name（mimetype，size）：url`. A `[附件說明]` note is added when a document was left out.
-
+- **Fallback when the model cannot read a file.** A model, or the route LiteLLM picks, may refuse a file type,
+  and the files of the last messages are sent again with every turn: without a fallback, one such file would
+  make every turn fail until it leaves the window.
+  - When a request that carries file parts (inline images, or documents in `file` mode) gets HTTP 400, 413,
+    415, 422 or 500, the product sends the same turn again at once: first without the file parts of earlier
+    messages; then, when the answer is again one of these statuses and file parts are left, without any file
+    part.
+  - A file left out becomes its `[附件]` line, followed by the note
+    `[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。`
+  - These requests are not retries in the sense of 3.3: there is no wait, and `max_retries` does not count them.
+    The deadline of the answer bounds them all: a fallback request is not started with less than one second left.
+    Each request writes its own call log row. The answer is the
+    first one that succeeds; when none does, the turn fails as before.
+  - Only these statuses, and only a request with file parts: a request without files, and any other status,
+    are handled exactly as before.
+  - Before each fallback request the run-time gate of 3.5 is checked again, as before a retry: when it blocks, no
+    request is sent. Each fallback request is built again (its current time too), with the same choice of files
+    minus the ones it leaves out.
+  - **The conversation remembers.** When a later request of the same turn succeeds, the files that request left
+    out are never sent as a file part again in that conversation: where such a file would be a file part, later
+    requests carry its line and the same note instead, so a later turn does not fail first. When no request of the turn succeeds (the backend may be down for
+    every request), nothing is remembered. A job that runs again reads what the conversation remembers. The memory
+    lasts as long as the conversation: changing the connection or the model does not clear it, and each product's
+    README says how an administrator clears it.
 **Answer.**
 - The text is `choices[0].message.content`: a string, or its `text` and `output_text` parts joined with a line break. When streaming, it is the SSE deltas until `[DONE]` or a `finish_reason`.
 - An error object in a stream is `invalid_response`.
 - `<think>` blocks and special tokens are stripped.
+- A speaker label the model copied to the start of the answer is removed (3.14, "Labels in answers"), also when
+  the answer was streamed.
 - An empty answer is `invalid_response`. So is a stream that ends with neither `[DONE]` nor a `finish_reason`.
 - Usage: prompt, completion and total tokens.
   - The `input_tokens` and `output_tokens` aliases are accepted.
@@ -327,9 +362,13 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 
 **System message order:**
 1. the assistant's prompt;
-2. the surface text: Project AI's project text and task summary, or Live Chat's notes and handoff line;
+2. the surface text: Project AI's project text and task summary, or Live Chat's event notes (operator, resume)
+   and handoff line;
 3. Discuss AI and Project AI only: an identity block (below);
-4. an events block, only when there are events.
+4. the current time, always, as exactly one line (3.7, "The current time"):
+   `Current time: YYYY-MM-DD HH:MM (<weekday>), time zone <tz> (UTC±HH:MM).`
+   For example `Current time: 2026-11-28 10:20 (Saturday), time zone Asia/Taipei (UTC+08:00).`;
+5. Discuss AI and Project AI: an events block, only when there are events (Live Chat's events are its notes, item 2).
 
 **The identity block.**
 - It never contains the email, not even as a name.
@@ -343,6 +382,24 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 - Everybody may choose their own name, so the name can neither leave its line nor look like a history prefix.
 - A product may clean more before this rule. Project AI first applies its consultant's data-text cleaning.
 - Live Chat has no identity block.
+
+**The current time.** It is computed once per request, when the request is built:
+- `utc`: ISO 8601 UTC, `YYYY-MM-DDTHH:MM:SSZ`;
+- `local`: the same instant in the time zone below, `YYYY-MM-DDTHH:MM:SS±HH:MM`;
+- `tz`: the IANA name of that time zone;
+- `weekday`: the English name of the day of `local` (`Monday` … `Sunday`).
+
+The time zone, the first one set of:
+1. the company's: the time zone of the working schedule of the current company (`env.company.resource_calendar_id.tz`,
+   where the Resource module is installed; it is on the working schedule form), else the `tz` of the company's
+   partner (no standard form shows it);
+2. the person's own: the identity's `tz`; in Live Chat, the visitor's: a guest's `timezone`, else the user's `tz`;
+3. `UTC`.
+
+The current company is the one the job runs with (`env.company`; the database's main company for a job run by the
+superuser). A name that is not a known IANA time zone counts as none. n8n gets the four values as `now` (3.6);
+LiteLLM gets one line in the system message (the order above). Without it a model guesses the date, and may tell a
+customer that the shop is open on a day it is closed.
 
 ### 3.8 What people see
 
@@ -359,7 +416,8 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 
 ### 3.9 Logs, usage, secrets
 
-**Call log.** One row per answer, and one per push.
+**Call log.** One row per request the product builds (its 3.3 retries stay in that row; each fallback request of
+3.7 is a new row), and one per push.
 - `status`: `ok`, `http_error`, `timeout`, `invalid_response` or `error`.
 - Also: HTTP status, duration, error, tokens, assistant, connection, conversation, job, surface type and scope.
 - `error` is at most 300 characters: a fixed text or the exception type name. It is never the exception text or the upstream body.
@@ -472,6 +530,23 @@ The other sections stay as each repository has them. Protocol details live in `d
   - the same label is used in the n8n `message.text`, `chatInput` and `history[].text`, and in the LiteLLM user
     turn.
   Products that label say so in 3.1. The others send the text as the person typed it.
+- **Labels in answers.** A model sees labels in the history (3.14's speaker labels, and Live Chat's
+  `[真人客服 <name>] ` before an operator's text) and may start its own answer with one. Posted as it is, the
+  answer would look written by that person: a customer would read 「[負責同事 王小明] 好的，我們同意退款」.
+  - Before an answer is posted, every label at its start is removed, with the white space after it, as long as
+    one is there (white space: what Python's `str.isspace()` counts, so also U+3000 and no-break spaces, and the
+    zero-width U+200B and U+FEFF; white space before the first label counts as the start): `[<kind>]` or `[<kind> <text without ] or a line break>]`, where `<kind>` is 真人客服, 客戶 or
+    負責同事, in every product. A product that labels people with another kind also removes that kind on the
+    surface where it uses it (Project AI's customer chat: 其他).
+  - A product that puts name-only labels (`[<name>] `) on a surface also removes, on that surface, a leading
+    `[<name>]` that is the label of a person of that conversation, unless a later line of the answer also starts
+    with such a label: then the answer is a list of who does what, and it stays as it is.
+  - A label directly followed by `(` is the text of a Markdown link (`[客戶](https://…)`), not a label: it stays.
+  - Nothing else is removed: text in brackets after the start, or a leading bracket that is not such a label
+    (「[注意] 截止日改了」), stays.
+  - This applies to every text the AI posts: n8n replies, LiteLLM answers, streamed or not, and the texts of a
+    push API (Discuss AI, Project AI). An answer that held only labels is empty (`invalid_response`); a push text
+    that held only labels is refused like an empty one.
 - A new source of such text needs a reviewer's check (section 4, item 9).
 
 ## 4. Keeping the products aligned
@@ -499,15 +574,15 @@ The other sections stay as each repository has them. Protocol details live in `d
 ## 5. Contract tests
 
 **Where the tests live.**
-- The package's `harness.py` holds the fourteen checks.
+- The package's `harness.py` holds the fifteen checks.
 - Each product's own `tests/test_contract.py` provides the glue:
   - the class attributes and adapter hooks that the harness docstring describes;
-  - one wrapper per check, named `test_contract_01_answers` … `test_contract_14_job_rows`.
+  - one wrapper per check, named `test_contract_01_answers` … `test_contract_15_file_fallback`.
 - Odoo 18 collects only the test methods a class defines itself, which is why the wrappers are needed. Check 7 fails when one is missing, skipped, or does not call its check.
 - The class is tagged `post_install`, `-at_install`, `woow_ai_contract`, and imported in `tests/__init__.py`.
 - Run them at Odoo's default or info log level. Check 8 turns the `odoo` loggers to DEBUG while it runs.
 
-**The fourteen checks:**
+**The fifteen checks:**
 1. **Answers.** Every case of `answers.json` (n8n, LiteLLM, and SSE where the product streams) goes through the product's own backend call with `requests.post` mocked. The normalized result equals `expect`, or `expect_text_only` in text-only products.
 2. **Requests.** One canned conversation ("你是客服", "請問營業時間？") runs as a whole turn:
    - with n8n, signed and unsigned;
@@ -517,7 +592,10 @@ The other sections stay as each repository has them. Protocol details live in `d
    - with the speaker-label cases: a name that looks like a kind of speaker, a name with brackets, a name with an
      `@`, and a typed fake label.
 
-   The captured POST follows 3.6, 3.7 and 3.14, and its body bytes are checked as sent. Test Connection sends the
+   The captured POST follows 3.6, 3.7 and 3.14, and its body bytes are checked as sent. Every request carries the
+   current time: the n8n `now` has its four keys, its `utc` is within five minutes of the test's clock, and its
+   `local`, offset and `weekday` agree with `tz`; the LiteLLM system message has exactly one time line, after the
+   identity block where there is one, that agrees the same way. Test Connection sends the
    ping, or `GET /models`.
 3. **Vectors.** The signature vector and the session-id vector.
 4. **Render.**
@@ -534,7 +612,7 @@ The other sections stay as each repository has them. Protocol details live in `d
      is no dynamic SQL.
    - Run over seeded records, it leaves the state of 3.10.
 7. **Sums.** `SHA256SUMS` matches the files, and `READY` holds its SHA-256. In a repository checkout
-   `docs/CONTRACT.md` is there. The product glue defines the fourteen wrappers, none skipped, each calling its
+   `docs/CONTRACT.md` is there. The product glue defines the fifteen wrappers, none skipped, each calling its
    check, and its values equal the table of 3.1.
 8. **Secrets.** Four failures (HTTP 401, a read timeout, an unexpected exception and a header error) on a LiteLLM
    connection with a key, on a streamed one where the product streams (plus an error inside the stream), and on an
@@ -566,7 +644,16 @@ The other sections stay as each repository has them. Protocol details live in `d
     - A user who is not a system administrator cannot read connections.
 14. **Job rows.** A person posts through the product's real path, from a superuser environment, with a
     context that carries `default_<state>`, `default_<runs>`, `default_<start>` and `default_<error>` (the
-    job fields of 3.1): the job row is pending, with no run, no start and no error.
+    job fields of 3.1), and with global `ir.default` rows that set the same four fields: the job row is pending,
+    with no run, no start and no error.
+15. **File fallback.** A LiteLLM turn, not streamed, after an earlier message with an image, where the backend
+    answers HTTP 400 to every request that carries a file part (3.7, "Fallback when the model cannot read a
+    file"):
+    - the product sends the turn again at once without the earlier image: two requests, and no wait;
+    - the second request carries the image's `[附件]` line and the fallback note, and no file part;
+    - the answer is posted;
+    - the person then asks again in the same conversation: one request, without the image as a file part, with
+      its line and the note (the conversation remembers).
 
 **What the checks do not cover.** Each product's own suite covers these:
 - the roles of assistants, jobs, call logs and usage (3.2), beyond the connection rule of check 13;
@@ -577,12 +664,15 @@ The other sections stay as each repository has them. Protocol details live in `d
 - call-log rows, the daily cleanup and the usage rows (3.9);
 - Test Connection's wording (3.3);
 - the numeric limits of 3.7 (metadata values, the file budget, document sizes, the stream's idle time);
+- the file fallback beyond check 15: the other statuses, documents, the step without any file part, call log rows;
+- the time zone choice of the current time (company, person, `UTC`);
+- the name-only labels in answers (3.14), where a product uses them;
 - server log lines of handlers other than the backend call (3.9);
 - the README sections (3.12) and the upgrade rules (3.13).
 
 ## 6. Package files and digests
 
-**Copies.** The source is the `contract/v1.2/` folder of the release workspace, until a repository has merged this
+**Copies.** The source is the `contract/v1.3/` folder of the release workspace, until a repository has merged this
 version. A repository copies it byte for byte:
 - `docs/CONTRACT.md` (this file) to `docs/CONTRACT.md`;
 - `MODULE/tests/contract/` to `<module>/tests/contract/`.
@@ -595,8 +685,8 @@ in `tests/contract/`, holds the SHA-256 of `SHA256SUMS`; check 7 compares them.
 | File | SHA-256 |
 |---|---|
 | `__init__.py` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
-| `answers.json` | `6c9191bc203a383f228192c002374c254627b03de1254397e212593d7871bb6a` |
-| `glossary.json` | `3d6506ddb5060d1f3d80f3e049fe9a00bd036edfb828d316f9189a4d1d0384ed` |
-| `harness.py` | `14589b7698169b32d3007404aba8576aea22fb692af1dba26c58036164ac9ac3` |
-| `render.json` | `8c1a4a615c3b5533f137305cf4b20595659106129b90576f01be32a0062b90ce` |
-| `requests.json` | `2585e7b83e3514892b8c212fa23ac35526032896ab019aa44dbbe39b4fbdba89` |
+| `answers.json` | `050edf4f2803d39573bd52d8832ac3ebe7b114dd5c593284e9fd190b0cd9658d` |
+| `glossary.json` | `0348148c7d7e1206b9e387e84e6bd323ead3b098ca7599eef53cf5482b2049be` |
+| `harness.py` | `bfe0ae9ebc67312f6610ff9b45c78c323714dda407df22e0187df3ec9f0d72b4` |
+| `render.json` | `08992ad0d56588c46d6594688676ed5186b93837323e88ed98a2c04e1abbdee1` |
+| `requests.json` | `925f1a77bba78c77ecbe7117e21cd24d967f54622ce113de1705e336d0d56768` |

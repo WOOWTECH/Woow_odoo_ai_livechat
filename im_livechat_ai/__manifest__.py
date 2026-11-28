@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Live Chat AI Integration',
-    'version': '18.0.2.0.0',
+    'version': '18.0.2.1.0',
     'category': 'Website/Live Chat',
     'summary': 'Answer Live Chat visitors with an AI assistant (LiteLLM or n8n), configured in two layers: '
                'AI connections and AI assistants',
@@ -58,8 +58,12 @@ Features:
 * Human handoff: an operator's reply pauses the AI for the conversation;
   the backend decides when the visitor wants a human ([[handoff]] or n8n
   "handoff": true); Odoo waits for an operator, then the AI answers again
+* Every request carries the current time (company time zone, else the
+  visitor's, else UTC); a speaker label a model copies to the start of its
+  answer is removed; a file the model cannot read is sent again as a link
+  and the conversation remembers it (contract v1.3)
 * AI disclosure: robot avatar on the AI bot and an AI welcome message
-* Call logs (one per answer, kept 30 days) and monthly usage, system
+* Call logs (one per request, kept 30 days) and monthly usage, system
   administrators only; content is stored only while enabled on the
   connection
 * Rate limits live in the LiteLLM key; Odoo keeps only technical queue caps

@@ -11,13 +11,20 @@ import hmac
 import json
 import time
 import traceback
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+import pytz
 import requests
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 BACKEND_OPENAI = 'openai'  # technical value of LiteLLM (the OpenAI chat-completions protocol)
 BACKEND_N8N = 'n8n'
+
+# The current time of a request (contract 3.6, 3.7): English day names, and the one line of the LiteLLM system
+# message (literal protocol text, never translated).
+WEEKDAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+TIME_LINE = 'Current time: %s %s (%s), time zone %s (UTC%s).'
 
 # Plain http:// is accepted only for these hosts (aligned with Discuss AI).
 HTTP_ALLOWED_HOSTS = ('localhost', '127.0.0.1', '::1')
@@ -109,6 +116,57 @@ def one_line_name(name):
     characters; a name with an '@' counts as no name."""
     name = ' '.join((name or '').replace('[', '(').replace(']', ')').split())
     return '' if '@' in name else name[:80]
+
+
+def utc_now():
+    """The module's clock: the current instant, an aware datetime in UTC. The current time of a request is
+    read from here only, so a test can freeze it."""
+    return datetime.now(timezone.utc)
+
+
+def known_time_zone(name):
+    """The IANA name of the time zone ``name`` (pytz, as Odoo validates time zones), or '' when ``name`` is
+    empty or not a known IANA time zone (it counts as none, contract 3.7)."""
+    if not isinstance(name, str) or not name:
+        return ''
+    try:
+        return pytz.timezone(name).zone
+    except (pytz.UnknownTimeZoneError, ValueError):
+        return ''
+
+
+def utc_offset(moment):
+    """'+08:00' / '-05:30' / '+00:00': the UTC offset of an aware datetime."""
+    seconds = int(moment.utcoffset().total_seconds())
+    hours, minutes = divmod(abs(seconds) // 60, 60)
+    return '%s%02d:%02d' % ('-' if seconds < 0 else '+', hours, minutes)
+
+
+def current_time(zone, now=None):
+    """The current time of one request (contract 3.6, 3.7): ``{utc, local, tz, weekday}``.
+
+    - ``utc``: ``YYYY-MM-DDTHH:MM:SSZ``;
+    - ``local``: the same instant in ``zone``, ``YYYY-MM-DDTHH:MM:SS±HH:MM``;
+    - ``tz``: the IANA name of the zone (``UTC`` when ``zone`` is not a known time zone);
+    - ``weekday``: the English name of the day of ``local``.
+
+    ``now``: an aware datetime (default: utc_now())."""
+    tz = pytz.timezone(known_time_zone(zone) or 'UTC')
+    now = (now or utc_now()).astimezone(timezone.utc)
+    local = now.astimezone(tz)
+    return {
+        'utc': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'local': local.strftime('%Y-%m-%dT%H:%M:%S') + utc_offset(local),
+        'tz': tz.zone,
+        'weekday': WEEKDAYS[local.weekday()],
+    }
+
+
+def time_line(now):
+    """The LiteLLM system line of a current_time() value (contract 3.7):
+    ``Current time: YYYY-MM-DD HH:MM (<weekday>), time zone <tz> (UTC±HH:MM).``"""
+    local = now['local']
+    return TIME_LINE % (local[:10], local[11:16], now['weekday'], now['tz'], local[19:])
 
 
 def exception_frames(error):

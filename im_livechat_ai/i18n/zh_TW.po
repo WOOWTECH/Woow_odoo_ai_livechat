@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 12:12+0000\n"
-"PO-Revision-Date: 2026-11-25 12:12+0000\n"
+"POT-Creation-Date: 2026-11-28 05:03+0000\n"
+"PO-Revision-Date: 2026-11-28 05:03+0000\n"
 "Last-Translator: WOOWTECH\n"
 "Language-Team: Chinese (Traditional)\n"
 "Language: zh_TW\n"
@@ -595,6 +595,12 @@ msgid "Files"
 msgstr "檔案"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
+msgid "Files Sent as Links Only"
+msgstr "只給下載連結的檔案"
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
 msgid "Files Visitors Send"
 msgstr "訪客傳送的檔案"
@@ -613,6 +619,11 @@ msgstr "該月第一天（UTC）。"
 #: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_connection__description
 msgid "For administrators: what this backend is and who runs it."
 msgstr "給管理員看的說明：這個後端是什麼、由誰維運。"
+
+#. module: im_livechat_ai
+#: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_form
+msgid "Forget Files Sent as Links"
+msgstr "清除只給下載連結的檔案"
 
 #. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.im_livechat_ai_job_view_search
@@ -712,6 +723,17 @@ msgstr "轉真人關鍵字"
 #: model:ir.model.fields,field_description:im_livechat_ai.field_llm_api_log__id
 msgid "ID"
 msgstr "ID"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid ""
+"Ids of the attachments of this conversation the model could not read: a "
+"request with them was refused, and the same turn sent without them was "
+"answered. Every later request of the conversation sends them as download "
+"links only, with a note for the model."
+msgstr ""
+"這個對話中模型無法讀取的附件 "
+"ID：附上它們的請求被拒絕，不附它們再送一次同一輪則得到回答。這個對話之後的每次請求都只給它們的下載連結，並附上給模型的說明。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_assistant__image_1920

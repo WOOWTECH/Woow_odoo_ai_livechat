@@ -8,7 +8,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from .common import TEST_BACKEND, TEST_BASE_URL, call_backend, ok_response
-from .common import make_ai_channel, sent_json, set_ai
+from .common import make_ai_channel, sent_json, set_ai, split_time_line
 
 
 class TestImLivechatChannel(TransactionCase):
@@ -136,10 +136,10 @@ class TestImLivechatChannel(TransactionCase):
         call_backend(self.channel, 'Hi')
         sent_payload = sent_json(mock_post.call_args)
         self.assertEqual(sent_payload['model'], 'gpt-4o')
-        self.assertEqual(sent_payload['messages'], [
-            {'role': 'system', 'content': 'You are a helpful assistant.'},
-            {'role': 'user', 'content': 'Hi'},
-        ])
+        system = sent_payload['messages'][0]
+        self.assertEqual(system['role'], 'system')
+        self.assertEqual(split_time_line(system['content'])[0], 'You are a helpful assistant.')
+        self.assertEqual(sent_payload['messages'][1:], [{'role': 'user', 'content': 'Hi'}])
         for key in ('temperature', 'max_tokens', 'tools', 'tool_choice', 'stream'):
             self.assertNotIn(key, sent_payload)
 

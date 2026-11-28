@@ -1,5 +1,5 @@
 {
- "contract": "v1.2",
+ "contract": "v1.3",
  "about": "Reply rendering and the identity name (CONTRACT.md 3.6, 3.7, 3.14). links: rendered with the given host list; any_host_links: rendered without a host list, by products whose policy is 'any_host'; nesting: generated, must render without an exception; identity_names: the one-line name of the identity block (products with an identity block).",
  "links": [
   {

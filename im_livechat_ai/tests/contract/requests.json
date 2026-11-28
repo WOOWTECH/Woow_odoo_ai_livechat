@@ -1,6 +1,6 @@
 {
- "contract": "v1.2",
- "about": "Request rules (CONTRACT.md 3.3, 3.6, 3.7, 3.14): vectors, the canned conversation and its earlier turn, speaker labels, the keys and types of the n8n body and the LiteLLM body, the ping, and the fixed values of each product (3.1).",
+ "contract": "v1.3",
+ "about": "Request rules (CONTRACT.md 3.3, 3.6, 3.7, 3.14): vectors, the canned conversation and its earlier turn, speaker labels, the keys and types of the n8n body and the LiteLLM body, the ping, the current time, the file fallback, and the fixed values of each product (3.1).",
  "session": {
   "db_uuid": "0edfec80-6c1b-4f3e-9a52-7d1f00c0ffee",
   "channel_id": 42,
@@ -82,7 +82,8 @@
    "system_prompt": "str",
    "message": "object",
    "history": "list",
-   "events": "list"
+   "events": "list",
+   "now": "object"
   },
   "body_values": {
    "event": "message",
@@ -151,7 +152,28 @@
    "text": "str"
   },
   "time_pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
-  "default_timeout": 120
+  "default_timeout": 120,
+  "now": {
+   "about": "The current time (3.6, 3.7): utc within tolerance_seconds of the test clock; local the same instant in tz with its offset; weekday the English day of local.",
+   "keys": {
+    "utc": "str",
+    "local": "str",
+    "tz": "str",
+    "weekday": "str"
+   },
+   "utc_pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+   "local_pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}$",
+   "weekdays": [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday"
+   ],
+   "tolerance_seconds": 300
+  }
  },
  "litellm": {
   "path_suffix": "/chat/completions",
@@ -190,6 +212,21 @@
     ]
    },
    "forbidden_key_substring": "email"
+  },
+  "time_line": {
+   "about": "The current time line of the system message (3.7): exactly one, after the identity block where there is one.",
+   "prefix": "Current time: ",
+   "pattern": "^Current time: (\\d{4}-\\d{2}-\\d{2}) (\\d{2}):(\\d{2}) \\((Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\\), time zone (\\S+) \\(UTC([+-])(\\d{2}):(\\d{2})\\)\\.$",
+   "weekdays": [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday"
+   ],
+   "tolerance_seconds": 360
   }
  },
  "ping": {
@@ -267,6 +304,12 @@
     "clean_name": ""
    }
   ]
+ },
+ "file_fallback": {
+  "about": "Check 15 (3.7, fallback): the backend answers status to every LiteLLM request with a file part; the product sends the turn again without the earlier image (its [附件] line and the note instead), and the next turn in the same conversation sends it as its line and the note only.",
+  "status": 400,
+  "note": "模型無法讀取這個檔案，只附下載連結。",
+  "requests": 3
  },
  "products": {
   "woow_ai_contact": {

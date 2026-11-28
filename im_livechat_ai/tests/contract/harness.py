@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Contract v1.2 checks, shared by Discuss AI, Project AI and Live Chat AI (docs/CONTRACT.md).
+"""Contract v1.3 checks, shared by Discuss AI, Project AI and Live Chat AI (docs/CONTRACT.md).
 
 This file, ``__init__.py``, the four JSON fixtures, ``SHA256SUMS`` and ``READY`` are copied byte for byte into
 ``<module>/tests/contract/``; never edit them in a product repo (a change is a new contract version).
@@ -17,10 +17,10 @@ How a product uses it (its own ``tests/test_contract.py``, imported in ``tests/_
 
         def test_contract_01_answers(self):
             self.contract_check_01_answers()
-        ...                                                # one wrapper per check, 01 to 14
+        ...                                                # one wrapper per check, 01 to 15
 
 Odoo 18 collects only the ``test*`` methods a test class defines itself, so the product writes the
-fourteen one-line wrappers; check 07 fails when one is missing, skipped, or does not call its check.
+fifteen one-line wrappers; check 07 fails when one is missing, skipped, or does not call its check.
 Run them at the default or the info log level, never warn or error (check 08 reads every record).
 
 Class attributes (the product sets them; check 07 compares the product's values with CONTRACT.md 3.1,
@@ -50,9 +50,11 @@ Adapter hooks (the product implements them; ``spec`` is a dict, see ``contract_s
   product's reply job runs once in the test transaction. With ``spec['history']`` (requests.json
   "history"), first the person posts ``user_text`` with the attachment, the assistant's answer
   ``assistant_text`` is posted as the assistant, and a product with ``contract_events`` records one
-  conversation event of its own kind; still one backend call. Return a dict of lists of str: ``call_logs``
-  (every text field of the call logs written), ``job_errors``, ``messages`` (every message and staff alert
-  the turn created: bodies, notices, activity notes).
+  conversation event of its own kind; still one backend call. With ``spec['twice']`` (check 15), the person
+  then posts ``spec['text']`` once more in the same conversation and the product's reply job for that message
+  runs once too. Return a dict of lists of str: ``call_logs`` (every text field of the call logs written),
+  ``job_errors``, ``messages`` (every message and staff alert the turn, or both turns, created: bodies,
+  notices, activity notes).
 - ``contract_speaker_kind(spec)``: products with ``contract_speaker_label`` only: the kind of speaker the
   label of the canned person starts with (one word, e.g. 客戶), or '' on a surface where every speaker is
   an employee and labels carry the name only.
@@ -103,12 +105,12 @@ from odoo.exceptions import AccessError, ValidationError
 from odoo.tests.common import new_test_user
 from odoo.tools.misc import file_open
 
-CONTRACT_VERSION = 'v1.2'
+CONTRACT_VERSION = 'v1.3'
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = ('answers', 'requests', 'render', 'glossary')
 CHECKS = ('01_answers', '02_requests', '03_vectors', '04_render', '05_glossary', '06_neutralize', '07_sums',
           '08_secrets', '09_customer_safe', '10_retries', '11_gate', '12_identity_block', '13_connections',
-          '14_job_rows')
+          '14_job_rows', '15_file_fallback')
 PRODUCT_FLAGS = ('surface_type', 'session_prefix', 'text_only', 'streams', 'identity_block', 'link_policy',
                  'speaker_label', 'events')
 SECRET_KEY = 'sk-contract-secret-7f3a9c'
@@ -244,6 +246,15 @@ def _parse_time(value):
     return datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
 
 
+def _zone(name):
+    """The IANA time zone ``name`` (pytz, as Odoo uses it), or None when it is not one."""
+    import pytz
+    try:
+        return pytz.timezone(name) if isinstance(name, str) and name else None
+    except pytz.UnknownTimeZoneError:
+        return None
+
+
 def _lower_headers(kwargs):
     return {str(k).lower(): v for k, v in (kwargs.get('headers') or {}).items()}
 
@@ -283,7 +294,7 @@ def _type_ok(value, kind):
 
 
 class ContractChecks:
-    """Mixin with the twelve contract checks; see the module docstring."""
+    """Mixin with the fifteen contract checks; see the module docstring."""
 
     contract_module = None
     contract_surface_type = None
@@ -358,7 +369,8 @@ class ContractChecks:
         Keys: backend ('openai' or 'n8n'), stream, endpoint, key (LiteLLM API key, or n8n signing
         secret; None: unsigned), model, timeout (timeout_seconds, None: default), retries (max_retries,
         None: default), log_payload, prompt, text, person_name, person_email, from_assistant, history (None,
-        or requests.json "history": an earlier turn)."""
+        or requests.json "history": an earlier turn), twice (contract_turn only: the person asks a second time
+        in the same conversation, check 15)."""
         conv = contract_fixture('requests')['conversation']
         backend = values.get('backend', 'openai')
         spec = {
@@ -376,6 +388,7 @@ class ContractChecks:
             'person_email': conv['person_email'],
             'from_assistant': False,
             'history': None,
+            'twice': False,
         }
         spec.update(values)
         if not self.contract_streams:
@@ -618,7 +631,26 @@ class ContractChecks:
         for event in payload['events']:
             self._contract_check_keys('event', event, n8n['event_keys'])
             self.assertRegex(event['time'], n8n['time_pattern'], 'events[].time is ISO 8601 UTC')
+        self._contract_check_now(payload['now'], n8n)
         return payload
+
+    def _contract_check_now(self, now, n8n):
+        """The n8n ``now`` (3.6, 3.7 "The current time"): four keys; ``utc`` within the tolerance of the test's
+        clock; ``local`` the same instant in ``tz``, with that zone's offset; ``weekday`` the day of ``local``."""
+        rules = n8n['now']
+        self._contract_check_keys('now', now, rules['keys'])
+        self.assertRegex(now['utc'], rules['utc_pattern'], 'now.utc is ISO 8601 UTC')
+        self.assertRegex(now['local'], rules['local_pattern'], 'now.local has its UTC offset')
+        utc = _parse_time(now['utc'])
+        drift = abs((utc - datetime.now(timezone.utc)).total_seconds())
+        self.assertLessEqual(drift, rules['tolerance_seconds'], 'now.utc is the current time (%s s off)' % drift)
+        local = datetime.fromisoformat(now['local'])
+        self.assertEqual(local.astimezone(timezone.utc).replace(microsecond=0), utc.replace(microsecond=0),
+                         'now.local is the same instant as now.utc')
+        zone = _zone(now['tz'])
+        self.assertIsNotNone(zone, 'now.tz is a known IANA time zone: %r' % now['tz'])
+        self.assertEqual(local.utcoffset(), utc.astimezone(zone).utcoffset(), 'now.local has the offset of now.tz')
+        self.assertEqual(now['weekday'], rules['weekdays'][local.weekday()], 'now.weekday is the day of now.local')
 
     def _contract_check_n8n_history(self, rules, spec, payload):
         history, n8n = rules['history'], rules['n8n']
@@ -683,6 +715,7 @@ class ContractChecks:
         messages = payload['messages']
         self.assertEqual(messages[0]['role'], 'system')
         self.assertTrue(messages[0]['content'].startswith(spec['prompt']), messages[0]['content'][:80])
+        self._contract_check_time_line(messages[0]['content'], rule['time_line'])
         turns = messages[1:]
         self.assertTrue(turns and turns[0]['role'] == 'user' and turns[-1]['role'] == 'user', 'user turns first and last')
         self.assertTrue(all(turn['role'] in ('user', 'assistant') for turn in turns))
@@ -703,6 +736,30 @@ class ContractChecks:
         if '@' in spec['person_name']:
             self.assertNotIn(spec['person_name'].encode('utf-8'), body, 'a name with an @ never reaches LiteLLM')
         return payload
+
+    def _contract_check_time_line(self, system, rule):
+        """The LiteLLM system message (3.7): exactly one time line, after the identity block where there is one;
+        its local time, offset and weekday agree with its time zone and with the test's clock."""
+        pattern = re.compile(rule['pattern'])
+        lines = system.splitlines()
+        found = [(i, pattern.fullmatch(line)) for i, line in enumerate(lines) if line.startswith(rule['prefix'])]
+        self.assertEqual(len(found), 1, 'one time line in the system message: %r' % [lines[i] for i, _m in found])
+        index, match = found[0]
+        self.assertTrue(match, 'the time line follows 3.7: %r' % lines[index])
+        day, hour, minute, weekday, name, sign, off_h, off_m = match.groups()
+        offset = timedelta(hours=int(off_h), minutes=int(off_m)) * (1 if sign == '+' else -1)
+        local = datetime.fromisoformat('%sT%s:%s:00' % (day, hour, minute)).replace(tzinfo=timezone(offset))
+        drift = abs((local - datetime.now(timezone.utc)).total_seconds())
+        self.assertLessEqual(drift, rule['tolerance_seconds'], 'the time line is the current time (%s s off)' % drift)
+        zone = _zone(name)
+        self.assertIsNotNone(zone, 'the time line names a known IANA time zone: %r' % name)
+        self.assertEqual(local.astimezone(zone).utcoffset(), offset, 'the offset of the time line is the one of its zone')
+        self.assertEqual(weekday, rule['weekdays'][local.weekday()], 'the weekday of the time line')
+        if self.contract_identity_block:
+            start = contract_fixture('render')['identity_order']['account_line_start']
+            account = next((i for i, line in enumerate(lines) if line.lstrip().startswith(start)), None)
+            self.assertIsNotNone(account, 'an identity block')
+            self.assertLess(account, index, 'the time line comes after the identity block (3.7)')
 
     # --- 03: vectors ---
 
@@ -1060,9 +1117,10 @@ class ContractChecks:
     # --- 14: job rows from explicit values only ---
 
     def contract_check_14_job_rows(self):
-        """3.5 step 3: a context's ``default_<field>`` keys never set a field of the job row a post creates:
-        the product drops them before the trusted create, also when the caller already runs in superuser
-        mode (Odoo's sudo() cleans the context only when it switches into that mode)."""
+        """3.5 step 3: a context's ``default_<field>`` keys, and ``ir.default`` rows, never set a field of the job
+        row a post creates: the product drops the keys before the trusted create, also when the caller already
+        runs in superuser mode (Odoo's sudo() cleans the context only when it switches into that mode), and
+        passes every job field explicitly, so that no ``ir.default`` row (global, or the poster's own) fills one."""
         names = contract_fixture('requests')['products'][self.contract_module]['job_fields']
         forged = {
             'default_%s' % names['state']: 'running',
@@ -1070,6 +1128,9 @@ class ContractChecks:
             'default_%s' % names['started']: '2099-01-01 00:00:00',
             'default_%s' % names['error']: 'forged',
         }
+        defaults = self.env['ir.default'].sudo()
+        for key, value in forged.items():
+            defaults.set(self.contract_models['job'], key[len('default_'):], value)
         with self._contract_patch_post() as post, self._contract_patch_sleep():
             jobs = self.contract_post_with_context(self.contract_spec(backend='openai'), forged)
         self.assertFalse(post.called, 'the post only queues a job')
@@ -1079,6 +1140,50 @@ class ContractChecks:
         self.assertEqual(jobs[names['runs']], 0, 'a forged default_%s' % names['runs'])
         self.assertFalse(jobs[names['started']], 'a forged default_%s' % names['started'])
         self.assertFalse(jobs[names['error']], 'a forged default_%s' % names['error'])
+
+    # --- 15: the model cannot read a file ---
+
+    def contract_check_15_file_fallback(self):
+        """3.7 Files, fallback: a LiteLLM turn after an earlier message with an image; the backend answers HTTP 400
+        to every request with a file part. The product sends the turn again at once without the image (its
+        ``[附件]`` line and the note instead), posts the answer, and the conversation remembers: the next turn
+        sends the image as its line and the note only, in one request."""
+        rules = contract_fixture('requests')
+        fallback = rules['file_fallback']
+        answer = rules['answers']['litellm']
+        sent = []
+
+        def file_parts(payload):
+            return [part for turn in payload.get('messages', [])[1:] if isinstance(turn.get('content'), list)
+                    for part in turn['content'] if isinstance(part, dict) and part.get('type') in ('image_url', 'file')]
+
+        def post(*args, **kwargs):
+            payload = json.loads(self._contract_body(kwargs, kwargs.get('data'), 'openai').decode('utf-8'))
+            sent.append(payload)
+            if file_parts(payload):
+                return FakeResponse(fallback['status'], body={'error': {'message': 'the model cannot read this file'}})
+            return FakeResponse(200, body=answer)
+
+        spec = self.contract_spec(backend='openai', stream=False, history=rules['history'], twice=True)
+        with self._contract_patch_post(side_effect=post), self._contract_patch_sleep() as sleep:
+            result = self.contract_turn(spec)
+        self.assertEqual(len(sent), fallback['requests'],
+                         'the first turn: with the image, then again without it; the next turn: one request')
+        self.assertTrue(file_parts(sent[0]), 'the first request carries the earlier image as a file part')
+        self.assertFalse(sleep.called, 'the fallback sends again at once, without a wait')
+        name = rules['history']['attachment']['name']
+        for index in (1, 2):
+            payload = sent[index]
+            self.assertFalse(file_parts(payload), 'request %s: no file part' % (index + 1))
+            texts = [_turn_text(turn) for turn in payload['messages'][1:] if turn['role'] == 'user']
+            earlier = [text for text in texts if rules['history']['user_text'] in text]
+            self.assertTrue(earlier, 'request %s: the earlier message is in the turns' % (index + 1))
+            self.assertIn('[附件] %s' % name, earlier[-1], 'request %s: the image\'s [附件] line' % (index + 1))
+            self.assertIn('[附件說明] %s：%s' % (name, fallback['note']), earlier[-1],
+                          'request %s: the fallback note' % (index + 1))
+        reply = _turn_text({'content': answer['choices'][0]['message']['content']})
+        posted = [message for message in result['messages'] if reply in message]
+        self.assertGreaterEqual(len(posted), 2, 'both turns posted the answer')
 
     # --- 13: connections ---
 

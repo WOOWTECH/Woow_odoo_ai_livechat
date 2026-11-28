@@ -67,7 +67,7 @@ from .ai_connection import (
     N8N_DEFAULT_TIMEOUT,
     TEST_TIMEOUT,
 )
-from .discuss_channel import redact_base64, strip_handoff_marker
+from .discuss_channel import plan_file_parts, redact_base64, strip_handoff_marker, strip_speaker_labels
 
 _logger = logging.getLogger(__name__)
 
@@ -85,6 +85,11 @@ LLM_MAX_RETRIES = MAX_MAX_RETRIES  # retries after the first call
 LLM_RETRY_BACKOFF = (3, 10)  # seconds before retry 1 and retry 2
 RETRY_STATUSES = (429, 503)  # the only HTTP answers that are retried (both backends)
 N8N_RETRY_STATUSES = RETRY_STATUSES
+# HTTP answers to a LiteLLM request with file parts that start the file fallback (contract 3.7): the model, or the
+# route LiteLLM picked, could not read a file.
+FILE_FALLBACK_STATUSES = (400, 413, 415, 422, 500)
+# A fallback request is not started with less time than this left before the answer's deadline (contract 3.7).
+FILE_FALLBACK_MIN_SECONDS = 1
 MAX_N8N_REPLIES = 10
 MAX_HANDOFF_REASON_LENGTH = 300  # characters of n8n "handoff_reason" kept
 METADATA_MAX_KEYS = 16
@@ -167,7 +172,11 @@ _THINK_OPENER_RE = re.compile(r'<(think|thinking)>', re.IGNORECASE)
 _THINK_CLOSER_RE = re.compile(r'</(think|thinking)\s*>', re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r'<(?:think|thinking)>.*$', re.DOTALL | re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'^.*?</(?:think|thinking)\s*>', re.DOTALL | re.IGNORECASE)
-_SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
+# The name of a special token such as <|im_end|>: 1 to 40 ASCII letters, digits or "_" (see _drop_special_tokens)
+_SPECIAL_TOKEN_NAME = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_')
+_SPECIAL_TOKEN_MAX_NAME = 40
+# strip_think passes of clean_answer: removing a reasoning block can join the halves of a special token
+MAX_CLEAN_PASSES = 8
 
 # {livechat channel id: time.monotonic() of the last "cannot answer" warning} (this process)
 _BLOCKED_WARNED = {}
@@ -218,15 +227,50 @@ def _strip_think_pairs(text):
     return ''.join(parts)
 
 
+def _drop_special_tokens(text):
+    """Remove special tokens such as ``<|im_end|>`` (``<|``, 1 to 40 ASCII letters, digits or ``_``, ``|>``),
+    also those that removing an inner one forms (``<|<|x|>x|>``): one pass, each ``|>`` is checked against what
+    was kept so far. Linear in the length of the text (the same rule as Discuss AI and Project AI)."""
+    if '|>' not in text:
+        return text
+    kept = []
+    for char in text:
+        kept.append(char)
+        if char != '>' or len(kept) < 5 or kept[-2] != '|':
+            continue
+        name_end = len(kept) - 3  # the last character of the name
+        start = name_end
+        while start >= 0 and name_end - start < _SPECIAL_TOKEN_MAX_NAME and kept[start] in _SPECIAL_TOKEN_NAME:
+            start -= 1
+        if 1 <= start < name_end and kept[start] == '|' and kept[start - 1] == '<':
+            del kept[start - 1:]
+    return ''.join(kept)
+
+
 def strip_think(text):
     """Remove reasoning blocks (<think>, <thinking>, also unclosed) and special tokens."""
     if not text:
         return ''
-    text = _SPECIAL_TOKEN_RE.sub('', text)
+    text = _drop_special_tokens(text)
     text = _strip_think_pairs(text)
     text = _THINK_OPEN_RE.sub('', text)
     text = _THINK_CLOSE_RE.sub('', text)
     return text.strip()
+
+
+def clean_answer(text):
+    """A text of the AI as it is posted (contract 3.14): strip_think until it changes nothing more (removing a
+    reasoning block can join the halves of a special token, ``<|im<think>x</think>_end|>``; at most
+    MAX_CLEAN_PASSES passes), then the speaker labels at its start (strip_speaker_labels). Applied to every reply
+    text: the LiteLLM answer, the n8n ``reply`` / ``replies`` / ``output``, and again after the [[handoff]]
+    marker is removed."""
+    text = strip_think(text)
+    for _pass in range(MAX_CLEAN_PASSES):
+        again = strip_think(text)
+        if again == text:
+            break
+        text = again
+    return strip_speaker_labels(text)
 
 
 def openai_reply_text(data):
@@ -241,7 +285,8 @@ def openai_reply_text(data):
             if isinstance(part, dict) and part.get('type') in ('text', 'output_text'))
     if content is not None and not isinstance(content, str):
         raise LLMInvalidResponse('Invalid API response: content is not text')
-    return strip_think(content or '')
+    # a label the model copied from the history is never posted (contract 3.14): an answer of labels only is empty
+    return clean_answer(content or '')
 
 
 def n8n_replies(data):
@@ -286,7 +331,7 @@ def n8n_replies(data):
         text = item.get('text') or ''
         if not isinstance(text, str):
             raise LLMInvalidResponse('invalid response: reply text is not a string')
-        text = strip_think(text)
+        text = clean_answer(text)  # contract 3.14: no copied label at the start
         if text:
             texts.append(text)
     if not texts and not handoff:
@@ -310,12 +355,15 @@ def n8n_handoff(data):
 
 def review_handoff(texts, handoff=False):
     """Remove [[handoff]] markers from the reply texts (the visitor never
-    sees them); a marker in any text hands over. Texts left empty are
-    dropped. Returns (texts, handoff)."""
+    sees them); a marker in any text hands over. A speaker label the marker
+    stood before is removed too (contract 3.14: an answer never starts with
+    one). Texts left empty are dropped. Returns (texts, handoff)."""
     kept = []
     for text in texts:
         text, found = strip_handoff_marker(text)
         handoff = handoff or found
+        if found:
+            text = clean_answer(text)  # what the marker stood between, or before, is the text now
         if text:
             kept.append(text)
     return kept, handoff
@@ -962,13 +1010,23 @@ class ImLivechatChannel(models.Model):
             metadata['livechat_channel'] = livechat_channel_name[:METADATA_MAX_VALUE]
         return dict(list(metadata.items())[:METADATA_MAX_KEYS])
 
-    def _ai_build_request(self, discuss_channel, conversation, trigger_message=None):
+    def _ai_build_request(self, discuss_channel, conversation, trigger_message=None, plan=None, drop=frozenset()):
         """The HTTP request of one reply (reads the database; no HTTP).
+
+        The current time (contract 3.6, 3.7) is computed once here: the n8n
+        ``now``, or the time line of the LiteLLM system message.
+
+        A request of the file fallback (contract 3.7) is built again the same
+        way, its current time too, with ``plan``: the attachment plan of the
+        turn's first request (the same choice of files), and ``drop``: the
+        history positions whose file parts it leaves out.
 
         Returns:
             dict: backend, url, headers, payload (the JSON body as a dict),
-                body (bytes, n8n), token (n8n signing secret, in memory only),
-                timeout (seconds of the whole answer)
+                body (bytes), token (n8n signing secret, in memory only),
+                timeout (seconds of the whole answer); LiteLLM also prepared
+                (see _ai_openai_prepare), dropped (``drop``) and left_out (the
+                ids of the attachments whose file parts it leaves out)
         Raises:
             LLMNotConfigured: no usable assistant / connection, or the URL not allowed
         """
@@ -986,10 +1044,11 @@ class ImLivechatChannel(models.Model):
         session = discuss_channel.sudo()
         session_id = self._ai_session_id(session)
         identity = session._ai_visitor_identity()
+        now = session._ai_current_time(identity)
         headers = {'Content-Type': 'application/json'}
         timeout = connection._timeout_value()
         if backend == BACKEND_N8N:
-            payload = channel._ai_n8n_payload(session, conversation, session_id, identity, trigger_message)
+            payload = channel._ai_n8n_payload(session, conversation, session_id, identity, trigger_message, now=now)
             return {
                 'backend': backend, 'url': url, 'headers': headers, 'payload': payload,
                 'body': json_dumps(payload).encode(), 'token': token, 'timeout': timeout,
@@ -998,22 +1057,72 @@ class ImLivechatChannel(models.Model):
         model = (connection.model or '').strip()
         if model:
             payload['model'] = model
-        payload['messages'] = session._ai_openai_messages(conversation, livechat_channel=channel)
+        prepared = session._ai_openai_prepare(conversation, livechat_channel=channel, now=now, plan=plan)
+        payload['messages'] = session._ai_openai_render(prepared, drop=drop)
         payload['user'] = session_id
         payload['metadata'] = self._ai_openai_metadata(session_id, identity, channel.name or '',
                                                        surface=channel._ai_surface_info())
         headers['Authorization'] = 'Bearer %s' % token
+        parts = plan_file_parts(prepared['plan'])
         return {
             'backend': backend, 'url': url + '/chat/completions', 'headers': headers,
             'payload': payload, 'body': json_dumps(payload).encode(), 'token': None, 'timeout': timeout,
+            'prepared': prepared, 'dropped': frozenset(drop),
+            'left_out': sorted(attachment_id for position in drop for attachment_id in parts.get(position, ())),
         }
 
-    def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None):
+    @staticmethod
+    def _ai_file_fallback_drop(request, error, deadline):
+        """What the next request of the file fallback leaves out (contract 3.7), or None when there is none.
+
+        A LiteLLM request that carries file parts (inline images, or documents
+        in 'file' mode) and that the backend refused with HTTP 400, 413, 415,
+        422 or 500 is sent again at once, without a wait, not counted in the
+        connection's retries, and never with less than
+        FILE_FALLBACK_MIN_SECONDS left before the answer's deadline: first
+        without the file parts of the earlier visitor messages; then, when that
+        is refused the same way and file parts are left (the newest visitor
+        message's), without any file part. A file left out is its ``[附件]``
+        line and the note ``[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。``.
+        A request without file parts, any other answer or n8n: None.
+
+        Returns:
+            frozenset|None: the history positions whose file parts the next
+                request leaves out (those of the refused request included)
+        """
+        prepared = request.get('prepared')
+        if not prepared or request['backend'] != BACKEND_OPENAI:
+            return None
+        response = getattr(error, 'response', None) if isinstance(error, requests.HTTPError) else None
+        if response is None or response.status_code not in FILE_FALLBACK_STATUSES:
+            return None
+        if deadline - time.time() < FILE_FALLBACK_MIN_SECONDS:
+            return None
+        dropped = request.get('dropped') or frozenset()
+        remaining = {position for position in plan_file_parts(prepared['plan']) if position not in dropped}
+        if not remaining:
+            return None  # this request carried no file part
+        earlier = {position for position in remaining if position != prepared['current']}
+        return frozenset(dropped | (earlier or remaining))
+
+    def _ai_gate_open(self):
+        """Contract 3.5, the run-time gate read again before a retry and before a request of the file fallback:
+        an administrator may have changed the connection or the assistant, or a manager turned the AI off, while
+        the previous request ran. True when the channel's AI is on and its assistant can answer."""
+        self.ensure_one()
+        self.env.invalidate_all()  # another transaction may have changed them: read them again
+        channel = self.sudo()
+        return bool(channel.ai_enabled) and channel._ai_connection_is_ready()
+
+    def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None, now=None):
         """n8n webhook body (docs/PROTOCOL.md): the contract keys, plus the
         fields an n8n Chat Trigger reads (``action``, ``sessionId``,
         ``chatInput``) and ``contact`` = this Live Chat channel (kept for the
-        workflows written for 18.0.1.x; new workflows read ``assistant``)."""
+        workflows written for 18.0.1.x; new workflows read ``assistant``).
+        ``now``: the request's current time (default: session._ai_current_time)."""
         self.ensure_one()
+        if now is None:
+            now = session._ai_current_time(identity)
         assistant = self.sudo().ai_assistant_id
         history = conversation['history']
         current = None
@@ -1024,10 +1133,10 @@ class ImLivechatChannel(models.Model):
             current = next((e for e in reversed(history) if e['kind'] == 'visitor'), None)
         # Signed download URLs of the visitor attachments (nothing is inlined).
         base_url = session._ai_attachment_base_url()
-        now = time.time()
+        signed_at = time.time()
 
         def attachments(entry):
-            return [session._ai_attachment_info(a, base_url=base_url, now=now)
+            return [session._ai_attachment_info(a, base_url=base_url, now=signed_at)
                     for a in entry.get('attachments') or []]
 
         message = {'id': None, 'text': '', 'attachments': []}
@@ -1054,6 +1163,7 @@ class ImLivechatChannel(models.Model):
                 'kind': event['kind'],
                 'text': event['text'],
             } for event in conversation['events']],
+            'now': now,  # contract 3.6, 3.7: {utc, local, tz, weekday}
         }
 
     @staticmethod
@@ -1103,13 +1213,34 @@ class ImLivechatChannel(models.Model):
 
     def _generate_ai_reply(self, discuss_channel, conversation, before_call=None, trigger_message=None, job=None):
         """
-        Produce one AI reply: one backend request, bounded retries, one call log.
+        Produce one AI reply: one backend request with its bounded retries and
+        one call log, plus at most two requests of the file fallback, each with
+        its own call log.
 
         The connection's timeout bounds the whole answer, retries included:
         each call reads at most the time left, and a call is retried (at most
         the connection's retries, after 3 s then 10 s) only when it could not
         be sent or the backend answered HTTP 429 / 503, and only while the
         time left allows the wait.
+
+        File fallback (contract 3.7, LiteLLM): a request with file parts that
+        the backend refuses with HTTP 400, 413, 415, 422 or 500 (after those
+        retries) is sent again at once without the file parts of the earlier
+        visitor messages, then without any file part (see
+        _ai_file_fallback_drop): no wait, within the same deadline, never
+        started with less than a second left (checked again right before it is
+        sent). Each fallback request is built again (its current time too) with
+        the first request's choice of files, and has its own retries (the
+        connection's Retries, waits from 3 s again). Each request writes its own
+        call log; the answer is the first one that succeeds. When a fallback request succeeds, the
+        result's ``left_out`` lists the files it left out: the job remembers
+        them (im_livechat.ai.job.file_fallback_ids) before it posts, so later
+        requests of the conversation send them as links from the start. When
+        no request succeeds, ``left_out`` is empty: nothing is remembered.
+
+        The run-time gate (contract 3.5) is checked again before each retry
+        and each fallback request (_ai_gate_closed_before): when it blocks, no
+        request is sent and the result is marked ``blocked``.
 
         Args:
             discuss_channel (discuss.channel): The chat session
@@ -1126,7 +1257,8 @@ class ImLivechatChannel(models.Model):
                 None), calls (int), handoff (bool: the backend asked for a
                 human), handoff_reason (str or None, n8n), usage ((prompt,
                 completion) tokens), assistant / connection (the records the
-                answer was asked from)
+                answer was asked from), left_out (ids of the attachments the
+                successful request left out: the file fallback)
         """
         self.ensure_one()
         channel = self.sudo()
@@ -1134,7 +1266,7 @@ class ImLivechatChannel(models.Model):
         connection = assistant.connection_id
         result = {'replies': [], 'reply': None, 'skip': False, 'error': None, 'calls': 0,
                   'handoff': False, 'handoff_reason': None, 'usage': (0, 0),
-                  'assistant': assistant, 'connection': connection}
+                  'assistant': assistant, 'connection': connection, 'left_out': []}
         backend = connection.backend_type or BACKEND_OPENAI
         log_base = {
             'channel': channel, 'discuss_channel': discuss_channel, 'assistant': assistant,
@@ -1152,14 +1284,23 @@ class ImLivechatChannel(models.Model):
             return result
 
         retries = connection._max_retries_value()
-        attempts = 0
+        retried = 0  # retries of the current request (contract 3.3: the connection's Retries, per request)
+        attempts = 0  # calls of the current request: its first call and its retries
+        deadline = None
+        refused = None  # (short error, exception) of the request a fallback request follows
         http_status = None
         while True:
             if before_call:
                 before_call()  # after the last database read, right before the request
+            if deadline is None:
+                deadline = time.time() + request['timeout']
+            elif attempts == 0 and deadline - time.time() < FILE_FALLBACK_MIN_SECONDS:
+                # contract 3.7: a fallback request is not started with less than a second left, checked again after
+                # the refused request's call log, the gate and the build; not sent, it leaves no call log
+                result.update(error=refused[0], error_exc=refused[1])
+                return result
             if attempts == 0:
-                started = time.time()
-                deadline = started + request['timeout']
+                started = time.time()  # the call log of this request counts from here
             attempts += 1
             result['calls'] += 1
             left = max(1.0, deadline - time.time())
@@ -1181,7 +1322,8 @@ class ImLivechatChannel(models.Model):
                 if handoff:
                     skip = False  # with handoff, skip is ignored
                 result.update(replies=texts, reply=texts[0] if texts else None, skip=skip,
-                              handoff=handoff, handoff_reason=reason, usage=(prompt, completion))
+                              handoff=handoff, handoff_reason=reason, usage=(prompt, completion),
+                              left_out=list(request.get('left_out') or ()))
                 return result
             except Exception as e:  # noqa: BLE001 - every failure is retried or reported
                 if isinstance(e, requests.HTTPError) and e.response is not None:
@@ -1190,31 +1332,67 @@ class ImLivechatChannel(models.Model):
                 # the stored log keeps the exception type name, never the
                 # upstream body, a header or the key.
                 last_error = self._short_llm_error(e)
-                wait = LLM_RETRY_BACKOFF[min(attempts - 1, len(LLM_RETRY_BACKOFF) - 1)]
-                can_retry = (attempts - 1 < retries and self._ai_should_retry(backend, e)
+                wait = LLM_RETRY_BACKOFF[min(retried, len(LLM_RETRY_BACKOFF) - 1)]
+                can_retry = (retried < retries and self._ai_should_retry(backend, e)
                              and time.time() + wait < deadline)
+                drop = None if can_retry else self._ai_file_fallback_drop(request, e, deadline)
                 # An unexpected exception (a defect, a library change) also gets its code frames, never its
                 # text (contract 3.9); the expected failures are described by their short text.
                 expected = isinstance(e, (requests.HTTPError, requests.Timeout, requests.ConnectionError,
                                           LLMNotConfigured, LLMInvalidResponse, LLMEmptyResponse))
                 _logger.warning(
                     "AI backend call failed for channel %s (call %s, %s): %s%s",
-                    channel.id, attempts, 'retrying' if can_retry else 'giving up', last_error,
-                    '' if expected else '\n' + exception_frames(e),
+                    channel.id, result['calls'],
+                    'retrying' if can_retry else ('sending it again without file parts' if drop else 'giving up'),
+                    last_error, '' if expected else '\n' + exception_frames(e),
                 )
                 if can_retry:
+                    retried += 1
                     if before_call:
                         before_call()  # no transaction stays open during the wait
                     time.sleep(wait)
-                    continue
+                    if not channel._ai_gate_closed_before(result):
+                        continue
                 channel._create_api_log(
                     status=log_status(e), request_payload=request['payload'], error_message=type(e).__name__,
                     duration=time.time() - started, retry_count=attempts - 1, http_status=http_status,
                     **log_base,
                 )
-                result['error'] = last_error
-                result['error_exc'] = e
+                if drop and not channel._ai_gate_closed_before(result):
+                    fallback = channel._ai_file_fallback_request(discuss_channel, conversation, trigger_message,
+                                                                request, drop)
+                    if fallback:
+                        # a new request: its own retries, the waits start again at 3 s
+                        request, attempts, retried, refused = fallback, 0, 0, (last_error, e)
+                        continue
+                result.update(error=last_error, error_exc=e)
                 return result
+
+    def _ai_gate_closed_before(self, result):
+        """Before a retry or a request of the file fallback: whether the run-time gate (contract 3.5, see
+        _ai_gate_open) blocks it. Then no request is sent: ``result`` is marked ``blocked`` and keeps the error of
+        the last request; the job finds the block in its checks before posting (skipped, with the notice)."""
+        if self._ai_gate_open():
+            return False
+        _logger.info("Live chat channel %s: the AI cannot answer any more (checked before another request); no "
+                     "request sent", self.id)
+        result['blocked'] = True
+        return True
+
+    def _ai_file_fallback_request(self, discuss_channel, conversation, trigger_message, request, drop):
+        """The request of the file fallback (contract 3.7) that leaves out the file parts of the history
+        positions ``drop``: built again like the first one (its current time too), with the first request's
+        choice of files (see _ai_build_request). None when it cannot be built: the turn then fails as before,
+        and the server log gets the type name and code frames (contract 3.9)."""
+        try:
+            return self._ai_build_request(discuss_channel, conversation, trigger_message,
+                                          plan=request['prepared']['plan'], drop=drop)
+        except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+            raise
+        except Exception as fallback_error:  # noqa: BLE001 - the answer fails as before
+            _logger.warning("Live chat channel %s: the file fallback request could not be built: %s",
+                            self.id, exception_frames(fallback_error))
+            return None
 
     @api.model
     def _describe_llm_error(self, error):
@@ -1329,7 +1507,8 @@ class ImLivechatChannel(models.Model):
                         response_payload=None, prompt_tokens=0, completion_tokens=0, total_tokens=0,
                         duration=None, error_message=None, retry_count=0, http_status=None):
         """
-        Create the call log of one answer (never fails the caller).
+        Create the call log of one request: the request with its retries, or a
+        request of the file fallback (never fails the caller).
 
         Conversation content (request and response bodies) is only kept while
         the connection's "Log Request Content" is on (off by default). The key

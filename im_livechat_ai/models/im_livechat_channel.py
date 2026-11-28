@@ -88,6 +88,8 @@ N8N_RETRY_STATUSES = RETRY_STATUSES
 # HTTP answers to a LiteLLM request with file parts that start the file fallback (contract 3.7): the model, or the
 # route LiteLLM picked, could not read a file.
 FILE_FALLBACK_STATUSES = (400, 413, 415, 422, 500)
+# A fallback request is not started with less time than this left before the answer's deadline (contract 3.7).
+FILE_FALLBACK_MIN_SECONDS = 1
 MAX_N8N_REPLIES = 10
 MAX_HANDOFF_REASON_LENGTH = 300  # characters of n8n "handoff_reason" kept
 METADATA_MAX_KEYS = 16
@@ -968,19 +970,23 @@ class ImLivechatChannel(models.Model):
             metadata['livechat_channel'] = livechat_channel_name[:METADATA_MAX_VALUE]
         return dict(list(metadata.items())[:METADATA_MAX_KEYS])
 
-    def _ai_build_request(self, discuss_channel, conversation, trigger_message=None):
+    def _ai_build_request(self, discuss_channel, conversation, trigger_message=None, plan=None, drop=frozenset()):
         """The HTTP request of one reply (reads the database; no HTTP).
 
         The current time (contract 3.6, 3.7) is computed once here: the n8n
         ``now``, or the time line of the LiteLLM system message.
 
+        A request of the file fallback (contract 3.7) is built again the same
+        way, its current time too, with ``plan``: the attachment plan of the
+        turn's first request (the same choice of files), and ``drop``: the
+        history positions whose file parts it leaves out.
+
         Returns:
             dict: backend, url, headers, payload (the JSON body as a dict),
                 body (bytes), token (n8n signing secret, in memory only),
                 timeout (seconds of the whole answer); LiteLLM also prepared
-                (what the file fallback renders again, see
-                _ai_file_fallback_request) and dropped (the history positions
-                whose file parts this request leaves out)
+                (see _ai_openai_prepare), dropped (``drop``) and left_out (the
+                ids of the attachments whose file parts it leaves out)
         Raises:
             LLMNotConfigured: no usable assistant / connection, or the URL not allowed
         """
@@ -1011,25 +1017,29 @@ class ImLivechatChannel(models.Model):
         model = (connection.model or '').strip()
         if model:
             payload['model'] = model
-        prepared = session._ai_openai_prepare(conversation, livechat_channel=channel, now=now)
-        payload['messages'] = session._ai_openai_render(prepared)
+        prepared = session._ai_openai_prepare(conversation, livechat_channel=channel, now=now, plan=plan)
+        payload['messages'] = session._ai_openai_render(prepared, drop=drop)
         payload['user'] = session_id
         payload['metadata'] = self._ai_openai_metadata(session_id, identity, channel.name or '',
                                                        surface=channel._ai_surface_info())
         headers['Authorization'] = 'Bearer %s' % token
+        parts = plan_file_parts(prepared['plan'])
         return {
             'backend': backend, 'url': url + '/chat/completions', 'headers': headers,
             'payload': payload, 'body': json_dumps(payload).encode(), 'token': None, 'timeout': timeout,
-            'prepared': prepared, 'dropped': frozenset(),
+            'prepared': prepared, 'dropped': frozenset(drop),
+            'left_out': sorted(attachment_id for position in drop for attachment_id in parts.get(position, ())),
         }
 
-    def _ai_file_fallback_request(self, session, request, error, deadline):
-        """The next request of the file fallback (contract 3.7), or None.
+    @staticmethod
+    def _ai_file_fallback_drop(request, error, deadline):
+        """What the next request of the file fallback leaves out (contract 3.7), or None when there is none.
 
         A LiteLLM request that carries file parts (inline images, or documents
         in 'file' mode) and that the backend refused with HTTP 400, 413, 415,
         422 or 500 is sent again at once, without a wait, not counted in the
-        connection's retries, and only before the answer's deadline: first
+        connection's retries, and never with less than
+        FILE_FALLBACK_MIN_SECONDS left before the answer's deadline: first
         without the file parts of the earlier visitor messages; then, when that
         is refused the same way and file parts are left (the newest visitor
         message's), without any file part. A file left out is its ``[附件]``
@@ -1037,27 +1047,32 @@ class ImLivechatChannel(models.Model):
         A request without file parts, any other answer or n8n: None.
 
         Returns:
-            dict|None: the request to send, with ``left_out``: the ids of the
-                attachments this step leaves out (the conversation remembers
-                them, im_livechat.ai.job.file_fallback_ids)
+            frozenset|None: the history positions whose file parts the next
+                request leaves out (those of the refused request included)
         """
         prepared = request.get('prepared')
         if not prepared or request['backend'] != BACKEND_OPENAI:
             return None
         response = getattr(error, 'response', None) if isinstance(error, requests.HTTPError) else None
-        if response is None or response.status_code not in FILE_FALLBACK_STATUSES or time.time() >= deadline:
+        if response is None or response.status_code not in FILE_FALLBACK_STATUSES:
             return None
-        parts = plan_file_parts(prepared['plan'])
+        if deadline - time.time() < FILE_FALLBACK_MIN_SECONDS:
+            return None
         dropped = request.get('dropped') or frozenset()
-        remaining = {position for position in parts if position not in dropped}
+        remaining = {position for position in plan_file_parts(prepared['plan']) if position not in dropped}
         if not remaining:
             return None  # this request carried no file part
         earlier = {position for position in remaining if position != prepared['current']}
-        step = earlier or remaining
-        dropped = frozenset(dropped | step)
-        payload = dict(request['payload'], messages=session._ai_openai_render(prepared, drop=dropped))
-        return dict(request, payload=payload, body=json_dumps(payload).encode(), dropped=dropped,
-                    left_out=sorted(attachment_id for position in step for attachment_id in parts[position]))
+        return frozenset(dropped | (earlier or remaining))
+
+    def _ai_gate_open(self):
+        """Contract 3.5, the run-time gate read again before a retry and before a request of the file fallback:
+        an administrator may have changed the connection or the assistant, or a manager turned the AI off, while
+        the previous request ran. True when the channel's AI is on and its assistant can answer."""
+        self.ensure_one()
+        self.env.invalidate_all()  # another transaction may have changed them: read them again
+        channel = self.sudo()
+        return bool(channel.ai_enabled) and channel._ai_connection_is_ready()
 
     def _ai_n8n_payload(self, session, conversation, session_id, identity, trigger_message=None, now=None):
         """n8n webhook body (docs/PROTOCOL.md): the contract keys, plus the
@@ -1158,7 +1173,9 @@ class ImLivechatChannel(models.Model):
 
     def _generate_ai_reply(self, discuss_channel, conversation, before_call=None, trigger_message=None, job=None):
         """
-        Produce one AI reply: one backend request, bounded retries, one call log.
+        Produce one AI reply: one backend request with its bounded retries and
+        one call log, plus at most two requests of the file fallback, each with
+        its own call log.
 
         The connection's timeout bounds the whole answer, retries included:
         each call reads at most the time left, and a call is retried (at most
@@ -1170,11 +1187,19 @@ class ImLivechatChannel(models.Model):
         the backend refuses with HTTP 400, 413, 415, 422 or 500 (after those
         retries) is sent again at once without the file parts of the earlier
         visitor messages, then without any file part (see
-        _ai_file_fallback_request): no wait, not counted in the retries, within
-        the same deadline. Each request writes its own call log; the answer is
-        the first one that succeeds. The job remembers the files left out
-        (im_livechat.ai.job.file_fallback_ids), so later requests of the
-        conversation send them as links from the start.
+        _ai_file_fallback_drop): no wait, not counted in the retries, within
+        the same deadline, never with less than a second left. Each fallback
+        request is built again (its current time too) with the first request's
+        choice of files. Each request writes its own call log; the answer is
+        the first one that succeeds. When a fallback request succeeds, the
+        result's ``left_out`` lists the files it left out: the job remembers
+        them (im_livechat.ai.job.file_fallback_ids) before it posts, so later
+        requests of the conversation send them as links from the start. When
+        no request succeeds, ``left_out`` is empty: nothing is remembered.
+
+        The run-time gate (contract 3.5) is checked again before each retry
+        and each fallback request (_ai_gate_closed_before): when it blocks, no
+        request is sent and the result is marked ``blocked``.
 
         Args:
             discuss_channel (discuss.channel): The chat session
@@ -1191,7 +1216,8 @@ class ImLivechatChannel(models.Model):
                 None), calls (int), handoff (bool: the backend asked for a
                 human), handoff_reason (str or None, n8n), usage ((prompt,
                 completion) tokens), assistant / connection (the records the
-                answer was asked from)
+                answer was asked from), left_out (ids of the attachments the
+                successful request left out: the file fallback)
         """
         self.ensure_one()
         channel = self.sudo()
@@ -1199,7 +1225,7 @@ class ImLivechatChannel(models.Model):
         connection = assistant.connection_id
         result = {'replies': [], 'reply': None, 'skip': False, 'error': None, 'calls': 0,
                   'handoff': False, 'handoff_reason': None, 'usage': (0, 0),
-                  'assistant': assistant, 'connection': connection}
+                  'assistant': assistant, 'connection': connection, 'left_out': []}
         backend = connection.backend_type or BACKEND_OPENAI
         log_base = {
             'channel': channel, 'discuss_channel': discuss_channel, 'assistant': assistant,
@@ -1249,7 +1275,8 @@ class ImLivechatChannel(models.Model):
                 if handoff:
                     skip = False  # with handoff, skip is ignored
                 result.update(replies=texts, reply=texts[0] if texts else None, skip=skip,
-                              handoff=handoff, handoff_reason=reason, usage=(prompt, completion))
+                              handoff=handoff, handoff_reason=reason, usage=(prompt, completion),
+                              left_out=list(request.get('left_out') or ()))
                 return result
             except Exception as e:  # noqa: BLE001 - every failure is retried or reported
                 if isinstance(e, requests.HTTPError) and e.response is not None:
@@ -1261,9 +1288,7 @@ class ImLivechatChannel(models.Model):
                 wait = LLM_RETRY_BACKOFF[min(retried, len(LLM_RETRY_BACKOFF) - 1)]
                 can_retry = (retried < retries and self._ai_should_retry(backend, e)
                              and time.time() + wait < deadline)
-                fallback = None
-                if not can_retry:
-                    fallback = channel._ai_safe_file_fallback_request(discuss_channel, request, e, deadline)
+                drop = None if can_retry else self._ai_file_fallback_drop(request, e, deadline)
                 # An unexpected exception (a defect, a library change) also gets its code frames, never its
                 # text (contract 3.9); the expected failures are described by their short text.
                 expected = isinstance(e, (requests.HTTPError, requests.Timeout, requests.ConnectionError,
@@ -1271,7 +1296,7 @@ class ImLivechatChannel(models.Model):
                 _logger.warning(
                     "AI backend call failed for channel %s (call %s, %s): %s%s",
                     channel.id, result['calls'],
-                    'retrying' if can_retry else ('sending it again without file parts' if fallback else 'giving up'),
+                    'retrying' if can_retry else ('sending it again without file parts' if drop else 'giving up'),
                     last_error, '' if expected else '\n' + exception_frames(e),
                 )
                 if can_retry:
@@ -1279,27 +1304,41 @@ class ImLivechatChannel(models.Model):
                     if before_call:
                         before_call()  # no transaction stays open during the wait
                     time.sleep(wait)
-                    continue
+                    if not channel._ai_gate_closed_before(result):
+                        continue
                 channel._create_api_log(
                     status=log_status(e), request_payload=request['payload'], error_message=type(e).__name__,
                     duration=time.time() - started, retry_count=attempts - 1, http_status=http_status,
                     **log_base,
                 )
-                if fallback:
-                    # The conversation remembers the files left out; before_call commits it before the request.
-                    if job:
-                        job._remember_file_fallback(fallback['left_out'])
-                    request, attempts = fallback, 0
-                    continue
-                result['error'] = last_error
-                result['error_exc'] = e
+                if drop and not channel._ai_gate_closed_before(result):
+                    fallback = channel._ai_file_fallback_request(discuss_channel, conversation, trigger_message,
+                                                                request, drop)
+                    if fallback:
+                        request, attempts = fallback, 0
+                        continue
+                result.update(error=last_error, error_exc=e)
                 return result
 
-    def _ai_safe_file_fallback_request(self, discuss_channel, request, error, deadline):
-        """_ai_file_fallback_request, or None when it cannot be built (the turn then fails as before; the
-        server log gets the type name and code frames, contract 3.9)."""
+    def _ai_gate_closed_before(self, result):
+        """Before a retry or a request of the file fallback: whether the run-time gate (contract 3.5, see
+        _ai_gate_open) blocks it. Then no request is sent: ``result`` is marked ``blocked`` and keeps the error of
+        the last request; the job finds the block in its checks before posting (skipped, with the notice)."""
+        if self._ai_gate_open():
+            return False
+        _logger.info("Live chat channel %s: the AI cannot answer any more (checked before another request); no "
+                     "request sent", self.id)
+        result['blocked'] = True
+        return True
+
+    def _ai_file_fallback_request(self, discuss_channel, conversation, trigger_message, request, drop):
+        """The request of the file fallback (contract 3.7) that leaves out the file parts of the history
+        positions ``drop``: built again like the first one (its current time too), with the first request's
+        choice of files (see _ai_build_request). None when it cannot be built: the turn then fails as before,
+        and the server log gets the type name and code frames (contract 3.9)."""
         try:
-            return self._ai_file_fallback_request(discuss_channel.sudo(), request, error, deadline)
+            return self._ai_build_request(discuss_channel, conversation, trigger_message,
+                                          plan=request['prepared']['plan'], drop=drop)
         except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
             raise
         except Exception as fallback_error:  # noqa: BLE001 - the answer fails as before
@@ -1420,7 +1459,8 @@ class ImLivechatChannel(models.Model):
                         response_payload=None, prompt_tokens=0, completion_tokens=0, total_tokens=0,
                         duration=None, error_message=None, retry_count=0, http_status=None):
         """
-        Create the call log of one answer (never fails the caller).
+        Create the call log of one request: the request with its retries, or a
+        request of the file fallback (never fails the caller).
 
         Conversation content (request and response bodies) is only kept while
         the connection's "Log Request Content" is on (off by default). The key

@@ -79,6 +79,8 @@
                 <filter name="filter_skipped" string="Skipped" domain="[('state', '=', 'skipped')]"/>
                 <separator/>
                 <filter name="filter_handoff" string="Human Handoff" domain="['|', ('kind', '=', 'handoff'), ('handoff_source', '!=', False)]"/>
+                <filter name="filter_file_fallback" string="Files Sent as Download Links"
+                        domain="[('file_fallback_ids', '!=', False)]"/>
                 <group expand="0" string="Group By">
                     <filter name="group_by_state" string="Status" context="{'group_by': 'state'}"/>
                     <filter name="group_by_channel" string="Channel" context="{'group_by': 'livechat_channel_id'}"/>

@@ -31,6 +31,17 @@ class TestStripSpeakerLabels(TransactionCase):
             ('[客戶 陳先生]\n收到', '收到'),
             ('[真人客服] 請稍等', '請稍等'),
             ('  [客戶　陳先生]　\t\n\n好的', '好的'),  # white space before, U+3000 after the kind and after the label
+            # white space: what str.isspace() counts (no-break spaces too), plus U+200B and U+FEFF
+            ('[真人客服 A]\xa0好的', '好的'),
+            ('\u200b[真人客服 A] 好的', '好的'),
+            ('\ufeff[客戶] 好', '好'),
+            ('[客戶]\u200b\ufeff\u202f好', '好'),
+            ('\u200b不是標籤', '\u200b不是標籤'),
+            # a label directly followed by "(" is the text of a Markdown link: it stays
+            ('[真人客服](https://shop.example.com/help) 請看說明', '[真人客服](https://shop.example.com/help) 請看說明'),
+            ('[客戶 陳先生](https://shop.example.com/order) 的訂單', '[客戶 陳先生](https://shop.example.com/order) 的訂單'),
+            ('[客戶] [真人客服](https://shop.example.com/help)', '[真人客服](https://shop.example.com/help)'),
+            ('[客戶] (補充) 好', '(補充) 好'),
             ('[客戶 ]好', '好'),
             ('[負責同事 王小明]', ''),
             ('[客戶 陳先生] ', ''),
@@ -55,12 +66,15 @@ class TestStripSpeakerLabels(TransactionCase):
         self.assertEqual(openai_reply_text({'choices': [{'message': {
             'content': '<think>推理</think>\n\n<|im_start|>[負責同事 王小明] 好的'}}]}), '好的')
         self.assertEqual(n8n_replies({'reply': '<think>先想一想</think>[負責同事 王小明] 好的'}), (['好的'], False))
+        self.assertEqual(openai_reply_text({'choices': [{'message': {'content': '\ufeff[真人客服 小美]\xa0好的'}}]}),
+                         '好的')
 
     def test_linear_time(self):
         start = time.time()
         strip_speaker_labels('[客戶 ' + 'a' * 2000000)
         strip_speaker_labels('[客戶] ' * 200000 + '好')
         strip_speaker_labels(' ' * 2000000 + '好')
+        strip_speaker_labels('\u200b' * 2000000 + '好')
         self.assertLess(time.time() - start, 2)
 
 

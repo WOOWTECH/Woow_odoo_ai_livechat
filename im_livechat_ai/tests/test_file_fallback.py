@@ -7,28 +7,41 @@ LiteLLM request with file parts (inline images, documents in 'file' mode) that i
 415, 422 or 500 is sent again at once: without the file parts of the earlier visitor messages, then without any
 file part. A file left out is its ``[附件]`` line and the note
 ``[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。``; no wait, not counted in the retries, within the
-answer's deadline; each request writes its own call log; the answer is the first success. The conversation
-remembers the files left out (im_livechat.ai.job.file_fallback_ids), also across a re-run of the job. Other
-statuses, requests without files and n8n are handled as before. All HTTP is mocked.
+answer's deadline (none starts with less than one second left); each request writes its own call log; the answer
+is the first success. When a fallback request succeeds, the conversation remembers the files it left out
+(im_livechat.ai.job.file_fallback_ids, committed before the reply is posted, read by every later request and by a
+re-run of the job); when no request succeeds, nothing is remembered. Other statuses, requests without files and
+n8n are handled as before. All HTTP is mocked.
 """
 
 import base64
 import json
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from odoo.tools import mute_logger
 
 from odoo.addons.im_livechat_ai.models import discuss_channel as dc
+from odoo.addons.im_livechat_ai.models.ai_connection import NO_IN_USE_CHECK
+from odoo.addons.im_livechat_ai.models.livechat_ai_job import BLOCKED_AT_RUN_NOTE
 
-from .common import call_backend, ok_response, set_ai
+from odoo.addons.im_livechat_ai.tools.backend import time_line
+
+from .common import CLOCK, SATURDAY_MORNING, call_backend, ok_response, set_ai, split_time_line
 from .test_attachments import PDF, POST, TINY_PNG, AttachmentCase
 
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
 CHANNEL_LOGGER = 'odoo.addons.im_livechat_ai.models.im_livechat_channel'
 NOTE = '模型無法讀取這個檔案，只附下載連結。'
-# a second 1x1 PNG with other bytes than TINY_PNG (another color)
+# a second 1x1 PNG with other bytes than TINY_PNG (another color), and a second PDF
 OTHER_PNG = base64.b64decode(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+OTHER_PDF = PDF + b'% another document\n'
+CLOCK_TIME = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.time'
+# The text of an unexpected exception: never logged (contract 3.9). Raised through this name, so that no code frame
+# of the test shows it as a literal.
+EXCEPTION_TEXT = 'SECRET-' + '7f3a'
 
 
 class _WorkerKilled(BaseException):
@@ -83,6 +96,34 @@ class FileFallbackCase(AttachmentCase):
         self.assert_signed_link(text, attachment)
         self.assertIn('[附件] %s（' % attachment.name, text)
         self.assertIn('[附件說明] %s：%s' % (attachment.name, NOTE), text)
+
+    def kill(self, job, side_effect, *patches):
+        """Run ``job`` once; the process dies (_WorkerKilled) at the point ``side_effect`` or ``patches`` set up.
+        Not self.assertRaises: Odoo's rolls back a savepoint, while the runner commits before each request and
+        before the post (here: flushes), so the run leaves what a real process death leaves."""
+        try:
+            with patch(POST, side_effect=side_effect), patch(SLEEP), mute_logger(CHANNEL_LOGGER):
+                for started in patches:
+                    started.start()
+                try:
+                    job._run_job(commit=False)
+                finally:
+                    for started in patches:
+                        started.stop()
+        except _WorkerKilled:
+            pass
+        else:
+            self.fail('the run was not killed')
+        self.env.invalidate_all()
+
+    def call_with_clock(self, session, side_effect, timeout):
+        """One answer (no job) with ``timeout`` seconds and a clock the backend moves (``side_effect(clock)``)."""
+        set_ai(self.channel, {'ai_request_timeout': timeout})
+        clock = [1000.0]
+        with patch(POST, side_effect=lambda *args, **kwargs: side_effect(clock, kwargs)) as post, \
+                mute_logger(CHANNEL_LOGGER), patch(CLOCK_TIME, side_effect=lambda: clock[0]):
+            result = call_backend(self.channel, session=session)
+        return result, [json.loads(call.kwargs['data']) for call in post.call_args_list]
 
 
 class TestFileFallback(FileFallbackCase):
@@ -144,6 +185,12 @@ class TestFileFallback(FileFallbackCase):
         self.assert_link_and_note(text, pdf)
         self.assertEqual(job.state, 'done', job.error)
         self.assertEqual(job.file_fallback_ids, str(pdf.id))
+        # the next turn sends the document as its link and the note, in one request
+        message, _a = self.post(session, '那運費呢？')
+        _second, sent, _sleep = self.turn(session, message, refusing(500))
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(file_parts(sent[0]))
+        self.assert_link_and_note(self.turn_text(sent[0], '請看報價單'), pdf)
 
     def test_then_without_the_current_message_file(self):
         """Step 2: the request without the earlier files is refused too while the newest visitor message still
@@ -213,10 +260,10 @@ class TestFileFallback(FileFallbackCase):
         self.assertEqual(job.state, 'done', job.error)
 
     def test_every_step_refused_fails_as_before(self):
-        """No request succeeds: the visitor gets the error message, as before. The file a step left out stays
-        remembered (contract 3.7: a file left out is never sent as a file part again in the conversation)."""
+        """No request succeeds (the backend may be down for every request): the visitor gets the error message,
+        as before, and nothing is remembered."""
         session = self.session()
-        _m, (image,) = self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
         message, _a = self.post(session, '然後呢？')
         job, sent, _sleep = self.turn(session, message, [status_response(500), status_response(500)])
         self.assertEqual(len(sent), 2)
@@ -224,23 +271,168 @@ class TestFileFallback(FileFallbackCase):
         self.assertIn('HTTP 500', job.error)
         self.assertEqual(self.logs(job), [('http_error', 500), ('http_error', 500)])
         self.assertEqual(len(self.bot_bodies(session)), 1, 'the error message')
-        self.assertEqual(job.file_fallback_ids, str(image.id))
+        self.assertFalse(job.file_fallback_ids)
+        self.assertEqual(session._ai_file_fallback_ids(), set())
+
+    def test_a_fallback_request_failing_otherwise_stores_nothing(self):
+        """The request without the file fails another way (401, a read timeout): the turn fails as before and
+        nothing is remembered."""
+        for label, failure in (('401', status_response(401)), ('timeout', requests.ReadTimeout('slow'))):
+            with self.subTest(failure=label):
+                session = self.session()
+                self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+                message, _a = self.post(session, '然後呢？')
+                job, sent, _sleep = self.turn(session, message, [status_response(400), failure])
+                self.assertEqual([bool(file_parts(payload)) for payload in sent], [True, False])
+                self.assertEqual(job.state, 'failed')
+                self.assertFalse(job.file_fallback_ids)
+                self.assertEqual(session._ai_file_fallback_ids(), set())
 
     def test_the_deadline_stops_it(self):
-        set_ai(self.channel, {'ai_request_timeout': 12})
         session = self.session()
         self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
         self.post(session, '然後呢？')
-        clock = [1000.0]
 
-        def slow_refusal(*_args, **_kwargs):
-            clock[0] += 13  # the refusal came after the deadline of the answer
+        def refusal_after(seconds):
+            def post(clock, _kwargs):
+                clock[0] += seconds
+                return status_response(400)
+            return post
+        # the refusal came after the deadline, or with less than one second left: no fallback request
+        for seconds in (13, 11.5):
+            with self.subTest(seconds=seconds):
+                result, sent = self.call_with_clock(session, refusal_after(seconds), timeout=12)
+                self.assertEqual(len(sent), 1)
+                self.assertIn('HTTP 400', result['error'])
+                self.assertEqual(result['left_out'], [])
+
+        def refusal_then_answer(clock, kwargs):
+            clock[0] += 10.5  # 1.5 s left: the fallback request is sent
+            return status_response(400) if file_parts(json.loads(kwargs['data'])) else ok_response('好的')
+        result, sent = self.call_with_clock(session, refusal_then_answer, timeout=12)
+        self.assertEqual(len(sent), 2)
+        self.assertFalse(result['error'])
+
+    def test_the_deadline_stops_the_second_step(self):
+        session = self.session()
+        self.post(session, '請看報價單', [('報價單.pdf', PDF, 'application/pdf')])
+        self.post(session, '還有這張圖', [('photo.png', TINY_PNG, 'image/png')])
+
+        def refusals(clock, _kwargs):
+            clock[0] += 5.6  # the second refusal leaves 0.8 s of the 12
             return status_response(400)
-        with patch(POST, side_effect=slow_refusal) as post, mute_logger(CHANNEL_LOGGER), \
-                patch('odoo.addons.im_livechat_ai.models.im_livechat_channel.time.time', side_effect=lambda: clock[0]):
+        result, sent = self.call_with_clock(session, refusals, timeout=12)
+        self.assertEqual([sorted(part['type'] for part in file_parts(payload)) for payload in sent],
+                         [['file', 'image_url'], ['image_url']], 'no third request without any file')
+        self.assertIn('HTTP 400', result['error'])
+        self.assertEqual(result['left_out'], [], 'no request succeeded: nothing to remember')
+
+    def test_the_fallback_cannot_be_built(self):
+        """An unexpected error while building the fallback request: the turn fails as before; the server log
+        has the type name and the code frames, never the exception text (contract 3.9)."""
+        session = self.session()
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        self.post(session, '然後呢？')
+        Channel = type(self.env['im_livechat.channel'])
+        build = Channel._ai_build_request
+
+        def build_but_not_the_fallback(channel, *args, **kwargs):
+            if kwargs.get('drop'):
+                raise RuntimeError(EXCEPTION_TEXT)
+            return build(channel, *args, **kwargs)
+        with patch(POST, side_effect=refusing(400)) as post, \
+                patch.object(Channel, '_ai_build_request', build_but_not_the_fallback), \
+                self.assertLogs(CHANNEL_LOGGER, level='WARNING') as logs:
             result = call_backend(self.channel, session=session)
         self.assertEqual(post.call_count, 1)
         self.assertIn('HTTP 400', result['error'])
+        self.assertEqual(result['left_out'], [])
+        lines = '\n'.join(logs.output)
+        self.assertIn('the file fallback request could not be built: RuntimeError', lines)
+        self.assertNotIn(EXCEPTION_TEXT, lines)
+
+    def test_each_fallback_request_is_built_again(self):
+        """The fallback request is built again, with its own current time, the same choice of files minus the
+        ones it leaves out (contract 3.7)."""
+        session = self.session()
+        _m, (image,) = self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(session, '可以再說一次嗎？')
+        later = SATURDAY_MORNING.replace(minute=21)
+        expected = []
+        for moment in (SATURDAY_MORNING, later):
+            with patch(CLOCK, return_value=moment):
+                expected.append(time_line(session._ai_current_time()))
+        self.assertNotEqual(*expected)
+        with patch(CLOCK, side_effect=[SATURDAY_MORNING, later]) as clock:
+            job, sent, _sleep = self.turn(session, message, refusing(400))
+        self.assertEqual(clock.call_count, 2, 'the current time of each request')
+        self.assertEqual(job.state, 'done', job.error)
+        lines = [split_time_line(payload['messages'][0]['content']) for payload in sent]
+        self.assertEqual([line for _system, line in lines], expected)
+        self.assertEqual(lines[0][0], lines[1][0], 'the rest of the system message is the same')
+        first, second = sent[0]['messages'][1:], sent[1]['messages'][1:]
+        self.assertEqual(len(first), len(second))
+        for before, after in zip(first, second):
+            if '這是什麼？' in self.text_of(before['content']):
+                self.assertTrue(file_parts({'messages': [before]}))
+                self.assert_link_and_note(self.text_of(after['content']), image)
+            else:
+                self.assertEqual(before, after, 'the other turns are the same')
+        self.assertEqual({key: value for key, value in sent[0].items() if key != 'messages'},
+                         {key: value for key, value in sent[1].items() if key != 'messages'})
+
+    def block_on_first_request(self, how, code=400):
+        """A backend that answers HTTP ``code`` and, while it answers, makes the AI blocked (``how``: the
+        connection loses its model, or a manager turns the AI off); then it would answer 200."""
+        connection = self.channel.sudo().ai_assistant_id.connection_id
+        calls = []
+
+        def post(*_args, **_kwargs):
+            calls.append(1)
+            if len(calls) > 1:
+                return ok_response('不該送出')
+            if how == 'not ready':
+                connection.with_context(**{NO_IN_USE_CHECK: True}).model = False
+            else:
+                self.channel.sudo().ai_enabled = False
+            return status_response(code)
+        return post
+
+    def assert_blocked_turn(self, how, code=400, text='這是什麼？', files=(('photo.png', TINY_PNG, 'image/png'),)):
+        """A turn whose first request is answered with HTTP ``code`` while the AI becomes blocked (``how``):
+        no other request, the job skipped, no reply and no error message, nothing remembered."""
+        session = self.session()
+        self.post(session, text, list(files))
+        message, _a = self.post(session, '然後呢？')
+        job, sent, sleep = self.turn(session, message, self.block_on_first_request(how, code=code))
+        self.assertEqual(len(sent), 1, 'no other request while blocked')
+        self.assertEqual(job.state, 'skipped')
+        self.assertFalse(job.file_fallback_ids)
+        self.assertEqual(self.logs(job), [('http_error', code)], 'the request that was sent has its call log')
+        messages = self.env['mail.message'].search([('model', '=', 'discuss.channel'), ('res_id', '=', session.id),
+                                                    ('author_id', '=', self.channel._get_bot_partner().id)])
+        self.assertFalse(messages.filtered(lambda m: m.message_type == 'comment'), 'no reply, no error message')
+        return job, messages.filtered(lambda m: m.message_type == 'notification'), sleep
+
+    def test_the_gate_blocks_a_fallback_request(self):
+        """Contract 3.7: before each fallback request the run-time gate of 3.5 is checked again; when it blocks,
+        no request is sent: the job is skipped and the conversation gets the notice."""
+        job, notices, _sleep = self.assert_blocked_turn('not ready')
+        self.assertEqual(job.error, BLOCKED_AT_RUN_NOTE)
+        self.assertEqual(len(notices), 1, 'the notice of the blocked period')
+
+    def test_turning_the_ai_off_stops_a_fallback_request(self):
+        job, notices, _sleep = self.assert_blocked_turn('turned off')
+        self.assertEqual(job.error, 'the AI was turned off before the reply: nothing posted')
+        self.assertFalse(notices)
+
+    def test_the_gate_blocks_a_retry(self):
+        """The same check before a retry of contract 3.3 (HTTP 429 or 503), after the wait."""
+        set_ai(self.channel, {'ai_max_retries': 1})
+        job, notices, sleep = self.assert_blocked_turn('not ready', code=429, text='你好', files=())
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [3], 'the wait, then the check')
+        self.assertEqual(job.error, BLOCKED_AT_RUN_NOTE)
+        self.assertEqual(len(notices), 1)
 
     def test_n8n_is_unchanged(self):
         session = self.session(self.n8n)
@@ -277,25 +469,32 @@ class TestFileFallbackMemory(FileFallbackCase):
         _third, sent, _sleep = self.turn(session, message, [ok_response('好的')])
         self.assertEqual(len(file_parts(sent[0])), 1)
 
-    def test_across_a_run_of_the_same_job(self):
-        """The process dies after the fallback left the file out: the next run of the job (recovery) sends
-        it as a link from the start."""
+    def test_death_during_the_fallback_request(self):
+        """The process dies while the request without the file is out: nothing succeeded, nothing is
+        remembered, so the next run of the job (recovery) sends the file first again."""
         session = self.session()
         _m, (image,) = self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
         message, _a = self.post(session, '可以再說一次嗎？')
         job = self.env['im_livechat.ai.job']._create_for_message(session, message)
-        # not self.assertRaises: Odoo's rolls back a savepoint, while the runner commits before each request
-        # (here: flushes), so the run's claim and the memory stay as a real process death leaves them
-        try:
-            with patch(POST, side_effect=[status_response(400), _WorkerKilled()]), patch(SLEEP), \
-                    mute_logger(CHANNEL_LOGGER):
-                job._run_job(commit=False)
-        except _WorkerKilled:
-            pass
-        else:
-            self.fail('the run was not killed')
-        self.env.invalidate_all()
+        self.kill(job, [status_response(400), _WorkerKilled()])
+        self.assertEqual((job.state, job.attempts, job.file_fallback_ids), ('running', 1, False))
+        with patch(POST, side_effect=refusing(400)) as post, mute_logger(CHANNEL_LOGGER):
+            job._run_job(commit=False)
+        sent = [json.loads(call.kwargs['data']) for call in post.call_args_list]
+        self.assertEqual([bool(file_parts(payload)) for payload in sent], [True, False])
+        self.assertEqual((job.state, job.attempts, job.file_fallback_ids), ('done', 2, str(image.id)), job.error)
+
+    def test_death_after_the_successful_fallback(self):
+        """The memory is committed right after the successful request, before the reply is posted: when the
+        process dies during the post, the next run of the job sends the file as its link from the start."""
+        session = self.session()
+        _m, (image,) = self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(session, '可以再說一次嗎？')
+        job = self.env['im_livechat.ai.job']._create_for_message(session, message)
+        Channel = type(self.env['im_livechat.channel'])
+        self.kill(job, refusing(400), patch.object(Channel, '_create_bot_message', side_effect=_WorkerKilled()))
         self.assertEqual((job.state, job.attempts, job.file_fallback_ids), ('running', 1, str(image.id)))
+        self.assertFalse(self.bot_bodies(session), 'nothing posted yet')
         with patch(POST, side_effect=refusing(400)) as post, mute_logger(CHANNEL_LOGGER):
             job._run_job(commit=False)
         self.assertEqual(post.call_count, 1)
@@ -303,6 +502,49 @@ class TestFileFallbackMemory(FileFallbackCase):
         self.assertFalse(file_parts(payload))
         self.assert_link_and_note(self.turn_text(payload, '這是什麼？'), image)
         self.assertEqual((job.state, job.attempts), ('done', 2), job.error)
+        self.assertEqual(self.bot_bodies(session), ['<p>好的</p>'])
+
+    def test_memory_is_the_union_of_the_jobs(self):
+        """Each job keeps what its own turn left out; every later request reads the union of the conversation's
+        jobs."""
+        session = self.session()
+        _m, (first_pdf,) = self.post(session, '第一份', [('a.pdf', PDF, 'application/pdf')])
+        message, _a = self.post(session, '看得到嗎？')
+        first, _sent, _sleep = self.turn(session, message, refusing(400))
+        _m, (second_pdf,) = self.post(session, '第二份', [('b.pdf', OTHER_PDF, 'application/pdf')])
+        message, _a = self.post(session, '這份呢？')
+        second, sent, _sleep = self.turn(session, message, refusing(400))
+        self.assertEqual(len(sent), 2, 'the second document is refused first, the first one goes as a link')
+        self.assert_link_and_note(self.turn_text(sent[0], '第一份'), first_pdf)
+        self.assertEqual((first.file_fallback_ids, second.file_fallback_ids), (str(first_pdf.id), str(second_pdf.id)))
+        self.assertEqual(session._ai_file_fallback_ids(), {first_pdf.id, second_pdf.id})
+        message, _a = self.post(session, '謝謝')
+        _third, sent, _sleep = self.turn(session, message, refusing(400))
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(file_parts(sent[0]))
+        self.assert_link_and_note(self.turn_text(sent[0], '第一份'), first_pdf)
+        self.assert_link_and_note(self.turn_text(sent[0], '第二份'), second_pdf)
+
+    def test_memory_lasts_as_long_as_the_conversation(self):
+        """The daily cleanup keeps the jobs that remember files (the memory lasts as long as the conversation,
+        contract 3.7); a new connection or model does not clear it; deleting those jobs does (README)."""
+        session = self.session()
+        _m, (image,) = self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(session, '可以再說一次嗎？')
+        remembering, _sent, _sleep = self.turn(session, message, refusing(400))
+        message, _a = self.post(session, '謝謝')
+        plain, _sent, _sleep = self.turn(session, message, [ok_response('不客氣')])
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE im_livechat_ai_job SET create_date = now() - interval '40 days' WHERE id IN %s",
+                            ((remembering.id, plain.id),))
+        self.env.invalidate_all()
+        self.env['llm.api.log']._cleanup_old_logs()
+        self.assertTrue(remembering.exists())
+        self.assertFalse(plain.exists())
+        set_ai(self.channel, {'ai_model': 'another/model'})
+        self.assertEqual(session._ai_file_fallback_ids(), {image.id})
+        remembering.unlink()
+        self.assertEqual(session._ai_file_fallback_ids(), set())
 
     def test_left_out_files_take_no_slot(self):
         """A remembered image is a link with the note and leaves its place in the count to another one."""

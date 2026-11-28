@@ -32,16 +32,23 @@ OPERATOR_PREFIX_NO_NAME = '[真人客服] '
 # Labels a model may copy from a history into its answer (contract 3.14, "Labels in answers"): the kind of speaker
 # of Live Chat's operator prefix and of Project AI's speaker labels, removed from the start of every answer.
 LABEL_KINDS = ('真人客服', '客戶', '負責同事')
+# White space around a label: what str.isspace() counts (\s of a str pattern: also U+3000 and the no-break
+# spaces), plus the zero-width U+200B and U+FEFF.
+_LABEL_SPACE = r'[\s\u200b\ufeff]'
 # One label at the start, with the white space before and after it: [<kind>] or [<kind> <text without ] or a line
-# break>], the kind followed by "]" or a space (ASCII or U+3000), so [客戶服務中心] is not a label. Linear: the
-# classes around the brackets do not overlap.
-_LABEL_RE = re.compile(r'[ \t\u3000\r\n]*\[(?:%s)(?:[ \u3000][^\]\r\n]*)?\][ \t\u3000\r\n]*' % '|'.join(LABEL_KINDS))
+# break>], the kind followed by "]" or a space (ASCII or U+3000), so [客戶服務中心] is not a label; one directly
+# followed by "(" is the text of a Markdown link ([客戶](https://...)), not a label. Linear: the classes around the
+# brackets do not overlap.
+_LABEL_RE = re.compile(r'%s*\[(?:%s)(?:[ \u3000][^\]\r\n]*)?\](?!\()%s*'
+                       % (_LABEL_SPACE, '|'.join(LABEL_KINDS), _LABEL_SPACE))
 
 
 def strip_speaker_labels(text):
     """The answer without the speaker labels at its start (contract 3.14, "Labels in answers"): every leading
-    ``[<kind>]`` or ``[<kind> <name>]`` (LABEL_KINDS), with the white space after it, as long as one is there.
-    Nothing else changes: a label after the start, or a leading bracket that is not such a label, stays."""
+    ``[<kind>]`` or ``[<kind> <name>]`` (LABEL_KINDS), with the white space after it, as long as one is there;
+    white space before the first label counts as the start. Nothing else changes: a label after the start, a
+    leading bracket that is not such a label, or a label directly followed by "(" (the text of a Markdown link),
+    stays."""
     if not text:
         return text or ''
     position = 0
@@ -872,20 +879,33 @@ class DiscussChannel(models.Model):
         """The current time of one request (contract 3.6, 3.7): ``{utc, local, tz, weekday}``, computed once
         when the request is built (n8n ``now``, the LiteLLM time line).
 
-        The time zone is the one of the current company's partner, else the visitor's own (the identity's
-        ``tz``: a guest's ``timezone``, else the user's ``tz``), else UTC; a name that is not a known IANA time
-        zone counts as none. ``identity``: the result of _ai_visitor_identity(), when the caller has it."""
+        The time zone is the first one set of: the company's (_ai_company_time_zone), the visitor's own (the
+        identity's ``tz``: a guest's ``timezone``, else the user's ``tz``), UTC. A name that is not a known IANA
+        time zone counts as none. ``identity``: the result of _ai_visitor_identity(), when the caller has it."""
         self.ensure_one()
         if identity is None:
             identity = self._ai_visitor_identity()
-        zone = known_time_zone(self.env.company.sudo().partner_id.tz) or known_time_zone(identity.get('tz'))
+        zone = self._ai_company_time_zone() or known_time_zone(identity.get('tz'))
         return current_time(zone or 'UTC')
+
+    @api.model
+    def _ai_company_time_zone(self):
+        """The time zone of the current company (contract 3.7; ``env.company``: the database's main company for a
+        reply job, which runs as the superuser): the time zone of its working schedule where the Resource module is
+        installed (set on the working schedule form), else the ``tz`` of its partner; '' when neither is a known
+        IANA time zone. This module does not depend on the Resource module, hence the field test."""
+        company = self.env.company.sudo()
+        if 'resource_calendar_id' in company._fields:
+            zone = known_time_zone(company.resource_calendar_id.tz)
+            if zone:
+                return zone
+        return known_time_zone(company.partner_id.tz)
 
     def _ai_file_fallback_ids(self):
         """Ids of this conversation's attachments that the model could not read (contract 3.7, "the
-        conversation remembers"): a file fallback left them out of a request, so every later LiteLLM request
-        sends each as its ``[附件]`` line and the fallback note, never as a file part. The reply jobs of the
-        conversation keep them (im_livechat.ai.job.file_fallback_ids)."""
+        conversation remembers"): a request of the file fallback that left them out succeeded, so every later
+        LiteLLM request sends each, where it would be a file part, as its ``[附件]`` line and the fallback note.
+        The union of what the reply jobs of the conversation keep (im_livechat.ai.job.file_fallback_ids)."""
         self.ensure_one()
         jobs = self.env['im_livechat.ai.job'].sudo().search([
             ('discuss_channel_id', '=', self.id), ('file_fallback_ids', '!=', False)])
@@ -1171,19 +1191,18 @@ class DiscussChannel(models.Model):
         return self._ai_openai_render(self._ai_openai_prepare(conversation, livechat_channel=livechat_channel,
                                                               now=now, left_out=left_out))
 
-    def _ai_openai_prepare(self, conversation, livechat_channel=None, now=None, left_out=None):
-        """What the LiteLLM requests of one answer are made of: ``system`` (the
-        system message), ``history``, ``plan`` (_ai_attachment_plan, the files
-        read once per answer), ``current`` (the history position of the newest
-        visitor message: the message being answered) and ``base_url``. The file
-        fallback (contract 3.7) renders it again without some file parts (see
-        _ai_openai_render). Arguments: see _ai_openai_messages."""
+    def _ai_openai_prepare(self, conversation, livechat_channel=None, now=None, left_out=None, plan=None):
+        """What a LiteLLM request is made of: ``system`` (the system message),
+        ``history``, ``plan`` (_ai_attachment_plan: the files are read once per
+        answer), ``current`` (the history position of the newest visitor
+        message: the message being answered) and ``base_url``. A request of the
+        file fallback (contract 3.7) is prepared again with the first request's
+        ``plan`` (the same choice of files) and rendered without some file parts
+        (see _ai_openai_render). Other arguments: see _ai_openai_messages."""
         livechat_channel = livechat_channel or self.sudo().livechat_channel_id
         mode = (livechat_channel._ai_document_mode() if livechat_channel else None) or DOCUMENT_MODE_FILE
         if now is None:
             now = self._ai_current_time()
-        if left_out is None:
-            left_out = self._ai_file_fallback_ids()
         parts = [conversation['system_prompt']] + [event['text'] for event in conversation['events']]
         if self._ai_handoff_available():
             parts.append(HANDOFF_SYSTEM_LINE)  # the last line of the surface text (owner decision 40)
@@ -1191,10 +1210,14 @@ class DiscussChannel(models.Model):
         history = conversation['history']
         has_attachments = any(entry.get('attachments') for entry in history)
         visitors = [position for position, entry in enumerate(history) if entry['kind'] == AUTHOR_VISITOR]
+        if plan is None and has_attachments:
+            if left_out is None:
+                left_out = self._ai_file_fallback_ids()
+            plan = self._ai_attachment_plan(history, mode, left_out=left_out)
         return {
             'system': '\n\n'.join(p.strip() for p in parts if p and p.strip()),
             'history': history,
-            'plan': self._ai_attachment_plan(history, mode, left_out=left_out) if has_attachments else {},
+            'plan': plan or {},
             'current': visitors[-1] if visitors else None,
             'base_url': self._ai_attachment_base_url() if has_attachments else '',
         }

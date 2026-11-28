@@ -5,9 +5,12 @@ The staging bench (2026-11-28): nothing in a request said what time it was, and 
 Saturday morning that it was Wednesday afternoon. Every request now carries the current time, computed once
 when it is built: n8n gets ``now`` ({utc, local, tz, weekday}); LiteLLM gets one line that ends the system
 message, after Live Chat's surface text (the prompt, the event notes, the handoff line; Live Chat has no
-identity block). The time zone is the current company's partner's, else the visitor's (a guest's timezone,
-else the user's tz), else UTC; a name that is not a known IANA time zone counts as none. The module's own clock
-(tools/backend.py utc_now) is frozen here. All HTTP is mocked.
+identity block). The time zone is the first one set of: the company's (its working schedule's where the Resource
+module is installed, else its partner's), the visitor's (a guest's timezone, else the user's tz), UTC; a name that
+is not a known IANA time zone counts as none. The module does not depend on the Resource module: the working
+schedule cases need it (the installs of the CI and the sandbox runs have it, through website_sale) and are
+skipped in a database without it. The module's own clock (tools/backend.py utc_now) is frozen here. All HTTP is
+mocked.
 """
 
 import json
@@ -38,8 +41,19 @@ class TestCurrentTime(TransactionCase):
                   'user_ids': [(6, 0, cls.operator_user.ids)]}
         cls.channel = make_ai_channel(cls.env, {**TEST_BACKEND, **common, 'name': '官網客服'})
         cls.n8n = make_ai_channel(cls.env, {**TEST_N8N_BACKEND, **common, 'name': 'n8n 客服'})
-        cls.company_partner = cls.env.company.partner_id
+        cls.company = cls.env.company
+        cls.company_partner = cls.company.partner_id
         cls.company_partner.tz = False
+        cls.has_schedule = 'resource_calendar_id' in cls.company._fields
+        if cls.has_schedule:
+            cls.company.resource_calendar_id = False  # set per test (set_schedule_tz)
+
+    def set_schedule_tz(self, zone):
+        """Give the company a working schedule in time zone ``zone`` (the Resource module only)."""
+        if not self.has_schedule:
+            self.skipTest('the Resource module is not installed in this database')
+        self.company.resource_calendar_id = self.env['resource.calendar'].create({
+            'name': 'Schedule %s' % zone, 'tz': zone, 'company_id': self.company.id})
 
     def new_session(self, channel=None, guest_tz=False, user=None):
         """A session whose visitor is a guest (with ``guest_tz``) or ``user``, with one visitor message."""
@@ -67,7 +81,15 @@ class TestCurrentTime(TransactionCase):
 
     # --- the time zone ---
 
-    def test_company_time_zone_wins(self):
+    def test_schedule_time_zone_wins(self):
+        """The company's working schedule first, before its partner and the visitor."""
+        self.set_schedule_tz('Asia/Taipei')
+        self.company_partner.tz = 'Asia/Tokyo'
+        self.assertEqual(self.now_of(self.new_session(guest_tz='America/New_York')), TAIPEI)
+        self.assertEqual(self.env['discuss.channel']._ai_company_time_zone(), 'Asia/Taipei')
+
+    def test_company_partner_time_zone_without_a_schedule(self):
+        """Without a working schedule (or without the Resource module): the company's partner."""
         self.company_partner.tz = 'Asia/Taipei'
         self.assertEqual(self.now_of(self.new_session(guest_tz='America/New_York')), TAIPEI)
 
@@ -85,6 +107,15 @@ class TestCurrentTime(TransactionCase):
         self.assertEqual(self.now_of(self.new_session()), {
             'utc': '2026-11-28T02:20:33Z', 'local': '2026-11-28T02:20:33+00:00', 'tz': 'UTC',
             'weekday': 'Saturday'})
+
+    def test_unknown_schedule_time_zone_counts_as_none(self):
+        self.set_schedule_tz('Asia/Tokyo')
+        self.company_partner.tz = 'Asia/Taipei'
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE resource_calendar SET tz = 'Mars/Olympus' WHERE id = %s",
+                            (self.company.resource_calendar_id.id,))
+        self.env.invalidate_all()
+        self.assertEqual(self.now_of(self.new_session(guest_tz='America/New_York')), TAIPEI)
 
     def test_unknown_time_zone_counts_as_none(self):
         """A stored name that is not a known IANA time zone (written past the selection, e.g. by an old

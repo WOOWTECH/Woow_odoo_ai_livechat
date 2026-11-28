@@ -159,13 +159,14 @@ with HTTP 500, a `.txt` with 400 and 422). So, contract 3.7:
 - Each request writes its own call log (a refused one `http_error` with its HTTP status). The answer is the first
   one that succeeds; when none does, the visitor gets the error message, as before.
 - **The conversation remembers**: when a fallback request is answered, the reply job keeps the ids of the files it
-  left out (*Files Sent as Download Links*, `im_livechat.ai.job.file_fallback_ids`), committed right after that
+  left out (*Files Sent as Links Only*, `im_livechat.ai.job.file_fallback_ids`), committed right after that
   answer, before the reply is posted. Every later request of the conversation, a later run of the same job
   included, reads the files its jobs keep and, where such a file would be a file part, sends its line and the note
   instead; they take nothing of the counts or of the 7 MiB. When no request of the turn is answered (the backend
   may be down for every request), nothing is remembered. The memory lasts as long as the conversation (those jobs
-  are not deleted by the 30-day cleanup); a new connection or model does not clear it. An administrator clears it
-  by deleting those jobs: Live Chat > Configuration > Reply Jobs, filter *Files Sent as Download Links*.
+  are not deleted by the 30-day cleanup); a new connection or model does not clear it. A system administrator
+  clears it with *Forget Files Sent as Links* on one of the conversation's reply jobs (Live Chat > Configuration >
+  Reply Jobs, filter *Files Sent as Links Only*): the whole conversation forgets them.
 - Before each fallback request the run-time gate is checked again, as before a retry (the AI may have been turned
   off, or the connection or the assistant changed, while the previous request ran): when it blocks, no request is
   sent and the job is skipped (with the blocked notice when the AI cannot answer). Each fallback request is built

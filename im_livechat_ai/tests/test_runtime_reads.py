@@ -21,7 +21,7 @@ from odoo.addons.im_livechat_ai.models import im_livechat_channel as ch
 from odoo.addons.im_livechat_ai.models import livechat_ai_job as jobs
 
 from .common import (TEST_BACKEND, TEST_N8N_BACKEND, make_ai_channel, make_assistant, make_connection, run_ai_job,
-                     set_ai)
+                     set_ai, split_time_line)
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 SLEEP = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.time.sleep'
@@ -94,8 +94,8 @@ class TestRuntimeReads(RuntimeCase):
         self.assertEqual(kwargs['headers']['Authorization'], 'Bearer dummy-gw')
         payload = json.loads(kwargs['data'])
         self.assertEqual(payload['model'], 'pool/model-x')
-        self.assertEqual(payload['messages'], [{'role': 'system', 'content': '新的提示'},
-                                               {'role': 'user', 'content': '第二句'}])
+        self.assertEqual(split_time_line(payload['messages'][0]['content'])[0], '新的提示')
+        self.assertEqual(payload['messages'][1:], [{'role': 'user', 'content': '第二句'}])
 
     @patch(POST)
     def test_n8n_body_contract_keys(self, mock_post):

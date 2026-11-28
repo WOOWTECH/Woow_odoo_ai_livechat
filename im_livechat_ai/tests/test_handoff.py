@@ -28,7 +28,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
-from .common import make_ai_channel, sent_json, set_ai
+from .common import make_ai_channel, sent_json, set_ai, split_time_line
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -422,7 +422,7 @@ class TestHistoryRoles(HandoffCase):
         self._msg(None, '匿名訪客')
         messages = self.session._build_llm_messages(self.channel)
         self.assertEqual(messages[0]['role'], 'system')
-        self.assertEqual(messages[0]['content'], '你是客服助理。\n\n' + OPERATOR_SYSTEM_NOTE)
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '你是客服助理。\n\n' + OPERATOR_SYSTEM_NOTE)
         self.assertEqual(messages[1:], [
             {'role': 'user', 'content': '請問可以退貨嗎？'},
             {'role': 'assistant', 'content': '可以，七天內可退貨。'},
@@ -434,14 +434,16 @@ class TestHistoryRoles(HandoffCase):
     def test_no_operator_note_without_operator_messages(self):
         self._msg(self.visitor, 'hi')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {'role': 'system', 'content': '你是客服助理。'})
+        self.assertEqual(messages[0]['role'], 'system')
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '你是客服助理。')
 
     def test_operator_note_without_custom_prompt(self):
         set_ai(self.channel, {'ai_system_prompt': False})
         self._msg(self.operator, '稍等')
         self._msg(self.visitor, '好')
         messages = self.session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {'role': 'system', 'content': OPERATOR_SYSTEM_NOTE})
+        self.assertEqual(messages[0]['role'], 'system')
+        self.assertEqual(split_time_line(messages[0]['content'])[0], OPERATOR_SYSTEM_NOTE)
         # Operators are user turns (woow_ai_contact protocol): an operator who
         # wrote first is kept, not dropped like a leading assistant turn.
         self.assertEqual(messages[1:], [

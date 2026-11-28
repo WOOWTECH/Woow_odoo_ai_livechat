@@ -22,7 +22,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND, TEST_N8N_BACKEND, ok_response
-from .common import add_legacy_channel_columns, make_ai_channel, set_ai
+from .common import add_legacy_channel_columns, make_ai_channel, set_ai, split_time_line
 from .test_backend import _load_migration
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
@@ -184,7 +184,8 @@ class TestOpenAiHandoff(BackendHandoffCase):
         system = self.request_body(post)['messages'][0]
         self.assertEqual(system['role'], 'system')
         self.assertTrue(system['content'].startswith('You are the shop assistant.'))
-        self.assertTrue(system['content'].endswith(HANDOFF_SYSTEM_LINE))
+        # the handoff line ends the surface text; only the current time line follows it (contract 3.7)
+        self.assertTrue(split_time_line(system['content'])[0].endswith(HANDOFF_SYSTEM_LINE))
         self.assertEqual(system['content'].count(HANDOFF_SYSTEM_LINE), 1)
 
     def test_openai_marker_only_posts_the_handoff_message(self):
@@ -220,7 +221,9 @@ class TestOpenAiHandoff(BackendHandoffCase):
         _session, _job, post, _bus = self.ask('你好', ok_response('您好'))
         messages = self.request_body(post)['messages']
         self.assertNotIn('[[handoff]]', json.dumps(messages, ensure_ascii=False))
-        self.assertEqual([m['role'] for m in messages], ['user'])  # no prompt, no event: no system message
+        # no prompt, no event: the system message holds the current time line only (contract 3.7)
+        self.assertEqual([m['role'] for m in messages], ['system', 'user'])
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '')
 
     def test_answer_dropped_when_an_operator_wrote_meanwhile(self):
         session, guest = self.new_session(self.openai)

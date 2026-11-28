@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 12:12+0000\n"
-"PO-Revision-Date: 2026-11-25 12:12+0000\n"
+"POT-Creation-Date: 2026-11-28 03:37+0000\n"
+"PO-Revision-Date: 2026-11-28 03:37+0000\n"
 "Last-Translator: WOOWTECH\n"
 "Language-Team: Chinese (Traditional)\n"
 "Language: zh_TW\n"
@@ -595,9 +595,23 @@ msgid "Files"
 msgstr "檔案"
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid "Files Sent as Download Links"
+msgstr "改給下載連結的檔案"
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
 msgid "Files Visitors Send"
 msgstr "訪客傳送的檔案"
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid ""
+"Files of this conversation that the model could not read (attachment ids): "
+"the backend refused the request that carried them, so they were left out, "
+"and every later request of the conversation sends them as a download link "
+"with a note instead."
+msgstr "這段對話中模型讀不了的檔案（附件 id）：帶著它們的請求被後端拒絕，所以拿掉了；之後這段對話的每個請求都改給下載連結並附上說明。"
 
 #. module: im_livechat_ai
 #: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__finished_at

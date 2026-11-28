@@ -6,8 +6,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0-20250807\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-11-25 12:12+0000\n"
-"PO-Revision-Date: 2026-11-25 12:12+0000\n"
+"POT-Creation-Date: 2026-11-28 03:37+0000\n"
+"PO-Revision-Date: 2026-11-28 03:37+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "MIME-Version: 1.0\n"
@@ -589,8 +589,22 @@ msgid "Files"
 msgstr ""
 
 #. module: im_livechat_ai
+#: model:ir.model.fields,field_description:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid "Files Sent as Download Links"
+msgstr ""
+
+#. module: im_livechat_ai
 #: model_terms:ir.ui.view,arch_db:im_livechat_ai.view_im_livechat_ai_connection_form
 msgid "Files Visitors Send"
+msgstr ""
+
+#. module: im_livechat_ai
+#: model:ir.model.fields,help:im_livechat_ai.field_im_livechat_ai_job__file_fallback_ids
+msgid ""
+"Files of this conversation that the model could not read (attachment ids): "
+"the backend refused the request that carried them, so they were left out, "
+"and every later request of the conversation sends them as a download link "
+"with a note instead."
 msgstr ""
 
 #. module: im_livechat_ai

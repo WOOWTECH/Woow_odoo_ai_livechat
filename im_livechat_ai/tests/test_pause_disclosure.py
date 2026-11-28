@@ -32,7 +32,7 @@ from odoo.addons.im_livechat_ai.models.im_livechat_channel import (
 )
 
 from .common import TEST_BACKEND
-from .common import make_ai_channel, sent_json, set_ai
+from .common import make_ai_channel, sent_json, set_ai, split_time_line
 
 POST = 'odoo.addons.im_livechat_ai.models.im_livechat_channel.requests.post'
 
@@ -648,7 +648,8 @@ class TestAiDisclosure(TransactionCase):
             'message_type': 'comment', 'author_id': False,
         })
         messages = session._build_llm_messages(self.channel)
-        self.assertEqual(messages[0], {'role': 'system', 'content': '只回答商品問題。'})
+        self.assertEqual(messages[0]['role'], 'system')
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '只回答商品問題。')
         dumped = json.dumps(messages, ensure_ascii=False)
         for text in ('不要自稱', '商品資料規則', '小沃', self.env.company.name):
             self.assertNotIn(text, dumped)

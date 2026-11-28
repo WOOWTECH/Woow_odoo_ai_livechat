@@ -56,7 +56,7 @@ from odoo.service.model import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import clean_context, config
 
 from ..tools.backend import exception_frames
-from .discuss_channel import PAUSE_HANDOFF
+from .discuss_channel import PAUSE_HANDOFF, attachment_ids_of, attachment_ids_text
 from .im_livechat_channel import (
     ALERT_WINDOW_MINUTES,
     LLM_MAX_RETRIES,
@@ -373,6 +373,16 @@ class LivechatAiJob(models.Model):
         help='This job\'s failure alerted the operators; the same kind of failure of the channel is not '
              'announced again for 10 minutes.',
     )
+    # Contract 3.7, the file fallback: the conversation remembers the files the model could not read. Written by
+    # the runner only (comma-separated ir.attachment ids), read for every later request of the conversation.
+    file_fallback_ids = fields.Char(
+        string='Files Sent as Download Links',
+        copy=False,
+        readonly=True,
+        help='Files of this conversation that the model could not read (attachment ids): the backend refused the '
+             'request that carried them, so they were left out, and every later request of the conversation sends '
+             'them as a download link with a note instead.',
+    )
 
     @api.depends('discuss_channel_id')
     def _compute_display_name(self):
@@ -431,6 +441,7 @@ class LivechatAiJob(models.Model):
             'context_message_id': 0,
             'reply_message_id': False,
             'alert_sent': False,
+            'file_fallback_ids': False,
         })
         if deferred:
             self._trigger_recovery_cron(job.run_after + timedelta(seconds=DEFERRED_TRIGGER_DELAY_SECONDS))
@@ -975,6 +986,16 @@ class LivechatAiJob(models.Model):
                                                   channel._ai_pause_notice_text(self._visitor_lang()))
             self._finish('done', False, reply_message=message)
         commit_step()
+
+    def _remember_file_fallback(self, attachment_ids):
+        """Remember attachments a file fallback left out (contract 3.7): every later request of the conversation,
+        a later run of this job included, sends them as links with the fallback note (see
+        discuss.channel._ai_file_fallback_ids). The runner commits it before its next request."""
+        self.ensure_one()
+        known = attachment_ids_of(self.file_fallback_ids)
+        ids = known | set(attachment_ids)
+        if ids != known:
+            self.write({'file_fallback_ids': attachment_ids_text(ids)})
 
     def _finish(self, state, error, reply_message=None):
         vals = {

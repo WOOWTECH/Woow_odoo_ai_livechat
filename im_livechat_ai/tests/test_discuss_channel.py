@@ -5,7 +5,7 @@
 from odoo.tests.common import TransactionCase
 
 from .common import livechat_operator, TEST_BACKEND
-from .common import make_ai_channel, set_ai
+from .common import make_ai_channel, set_ai, split_time_line
 
 
 class TestDiscussChannel(TransactionCase):
@@ -139,8 +139,9 @@ class TestDiscussChannel(TransactionCase):
 
         self.assertTrue(len(messages) >= 2)
         self.assertEqual(messages[0]['role'], 'system')
-        # 18.0.1.2.0: only the channel prompt, no identity block or product rules.
-        self.assertEqual(messages[0]['content'], 'You are a helpful assistant.')
+        # 18.0.1.2.0: only the channel prompt, no identity block or product rules; then the current time
+        # line (contract 3.7).
+        self.assertEqual(split_time_line(messages[0]['content'])[0], 'You are a helpful assistant.')
 
     def test_build_llm_messages_visitor_role(self):
         """Visitor messages should have role 'user'."""
@@ -230,12 +231,15 @@ class TestDiscussChannel(TransactionCase):
             self.assertLess(resp_idx, second_idx)
 
     def test_build_llm_messages_no_system_prompt(self):
-        """Without a channel prompt (and no event) there is no system message."""
+        """Without a channel prompt (and no event) the system message holds the current time line only
+        (contract 3.7)."""
         set_ai(self.livechat_channel, {'ai_system_prompt': False})
         self._create_message(author_id=self.visitor_partner.id, body='Hello')
         messages = self.session._build_llm_messages(self.livechat_channel)
 
-        self.assertEqual(messages, [{'role': 'user', 'content': 'Hello'}])
+        self.assertEqual(messages[0]['role'], 'system')
+        self.assertEqual(split_time_line(messages[0]['content'])[0], '')
+        self.assertEqual(messages[1:], [{'role': 'user', 'content': 'Hello'}])
 
         # Restore
         set_ai(self.livechat_channel, {'ai_system_prompt': 'You are a helpful assistant.'})

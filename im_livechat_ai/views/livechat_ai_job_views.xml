@@ -56,6 +56,7 @@
                             <field name="error"/>
                             <field name="handoff_source" invisible="not handoff_source"/>
                             <field name="handoff_reason" invisible="not handoff_reason"/>
+                            <field name="file_fallback_ids" invisible="not file_fallback_ids"/>
                         </group>
                     </group>
                 </sheet>

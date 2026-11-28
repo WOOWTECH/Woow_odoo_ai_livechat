@@ -1,5 +1,5 @@
 {
- "contract": "v1.2",
+ "contract": "v1.3",
  "about": "Backend answers (CONTRACT.md 3.6 and 3.7). Each case is one HTTP answer to one backend call; the harness serves it from a mocked requests.post and compares the normalized result of the product's own backend call with 'expect' (or 'expect_text_only' for products that post text only, where given).",
  "normalized": {
   "success": {
@@ -498,6 +498,119 @@
      "圖在這裡。"
     ]
    }
+  },
+  {
+   "id": "label_operator_removed",
+   "about": "3.14 labels in answers: a copied [真人客服 <name>] label is removed with the space after it",
+   "body": {
+    "reply": "[真人客服 小美] 您好，馬上為您處理。"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "您好，馬上為您處理。"
+    ]
+   }
+  },
+  {
+   "id": "label_kinds_repeated",
+   "about": "every label at the start, while there is one, in every reply; the white space after a label includes a line break",
+   "body": {
+    "replies": [
+     "[負責同事 王小明] [客戶] 好的，我們同意。",
+     "[客戶 陳先生]\n收到"
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的，我們同意。",
+     "收到"
+    ]
+   }
+  },
+  {
+   "id": "label_kind_only",
+   "body": {
+    "reply": "[真人客服] 請稍等"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "請稍等"
+    ]
+   }
+  },
+  {
+   "id": "label_after_think",
+   "about": "<think> first, then the label",
+   "body": {
+    "reply": "<think>先想一想</think>[負責同事 王小明] 好的"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的"
+    ]
+   }
+  },
+  {
+   "id": "label_later_kept",
+   "about": "a label after the start stays",
+   "body": {
+    "reply": "好的。[真人客服 小美] 會再聯絡您"
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的。[真人客服 小美] 會再聯絡您"
+    ]
+   }
+  },
+  {
+   "id": "bracket_not_a_label_kept",
+   "about": "a leading bracket that is not such a label stays, also a kind without a space after it",
+   "body": {
+    "replies": [
+     "[注意] 截止日改了",
+     "[客戶服務中心] 電話 02-1234-5678"
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "[注意] 截止日改了",
+     "[客戶服務中心] 電話 02-1234-5678"
+    ]
+   }
+  },
+  {
+   "id": "label_only_empty",
+   "about": "an answer that held only a label is empty",
+   "body": {
+    "reply": "[負責同事 王小明]"
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
   }
  ],
  "openai": [
@@ -806,6 +919,98 @@
    "expect": {
     "error": "invalid_response"
    }
+  },
+  {
+   "id": "label_removed",
+   "about": "3.14 labels in answers (a real answer of 2026-11-28)",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "[真人客服 實測台｜你（管理員）] QA-SENSOR-02 的單價為 600 測試幣。"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "QA-SENSOR-02 的單價為 600 測試幣。"
+    ]
+   }
+  },
+  {
+   "id": "label_after_think_and_space",
+   "about": "white space before the first label counts as the start",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "<think>推理</think>\n\n[負責同事 王小明] 好的"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "好的"
+    ]
+   }
+  },
+  {
+   "id": "label_in_middle_kept",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "請注意：[客戶 陳先生] 的訂單已出貨"
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "請注意：[客戶 陳先生] 的訂單已出貨"
+    ]
+   }
+  },
+  {
+   "id": "label_only_empty",
+   "body": {
+    "choices": [
+     {
+      "index": 0,
+      "message": {
+       "role": "assistant",
+       "content": "[客戶 陳先生] "
+      },
+      "finish_reason": "stop"
+     }
+    ]
+   },
+   "expect": {
+    "error": "invalid_response"
+   }
   }
  ],
  "sse": [
@@ -956,6 +1161,26 @@
      8,
      2,
      10
+    ]
+   }
+  },
+  {
+   "id": "label_split_across_deltas",
+   "about": "the label is removed from the whole streamed answer, not per delta",
+   "chunks": [
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"[真人\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"客服 小美]\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" 您好\"}}]}\n\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+    "data: [DONE]\n\n"
+   ],
+   "expect": {
+    "attachments": 0,
+    "skip": false,
+    "handoff": false,
+    "reason": null,
+    "texts": [
+     "您好"
     ]
    }
   }

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Contract v1.2 (docs/CONTRACT.md, section 5): the fourteen shared checks of
+"""Contract v1.3 (docs/CONTRACT.md, section 5): the fifteen shared checks of
 tests/contract/harness.py, run on Live Chat AI.
 
 Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no
@@ -14,7 +14,9 @@ own code paths:
   transaction) and the job runs once in the test transaction; an earlier turn
   (``spec['history']``) is the visitor's message with the file, the
   assistant's answer and an operator's message (Live Chat's conversation
-  event), created without the trigger;
+  event), created without the trigger; with ``spec['twice']`` (check 15) the
+  visitor then posts the same text again in the same session and that job
+  runs once too;
 - Test Connection: the button of the AI connection, or of the AI assistant;
 - a post with a forged context (check 14): the visitor's message_post from a
   superuser environment with the context applied after sudo(), so only the
@@ -176,6 +178,19 @@ class TestContract(ContractChecks, TransactionCase):
             'message_type': 'comment', 'author_id': self.operator.partner_id.id,
         })
 
+    def _contract_post_and_run(self, session, person, text):
+        """The visitor posts `text`: the trigger queues one reply job, which runs once in the test
+        transaction. Returns the job."""
+        Job = self.env['im_livechat.ai.job']
+        before = Job.search([('discuss_channel_id', '=', session.id)])
+        self._contract_post(session, person, text)
+        job = Job.search([('discuss_channel_id', '=', session.id), ('id', 'not in', before.ids)])
+        self.assertEqual(len(job), 1, 'the post queued one reply job')
+        self.assertEqual(job.kind, 'reply')
+        job._run_job(commit=False)
+        self.env.invalidate_all()
+        return job
+
     def contract_turn(self, spec):
         _connection, assistant, channel = self._contract_records(spec)
         session, person = self._contract_session(channel, spec)
@@ -184,12 +199,10 @@ class TestContract(ContractChecks, TransactionCase):
         first_message = self._contract_last_id('mail.message')
         first_log = self._contract_last_id('llm.api.log')
         bus_before = len(self.env.cr.precommit.data.get('bus.bus.values', []))
-        self._contract_post(session, person, spec['text'])
-        jobs = self.env['im_livechat.ai.job'].search([('discuss_channel_id', '=', session.id)])
-        self.assertEqual(len(jobs), 1, 'the post queued one reply job')
-        self.assertEqual(jobs.kind, 'reply')
-        jobs._run_job(commit=False)
-        self.env.invalidate_all()
+        jobs = self._contract_post_and_run(session, person, spec['text'])
+        if spec.get('twice'):
+            # check 15: the visitor asks again in the same conversation; that reply job runs once too
+            jobs |= self._contract_post_and_run(session, person, spec['text'])
         logs = self.env['llm.api.log'].search([('id', '>', first_log)])
         messages = self.env['mail.message'].sudo().search([('id', '>', first_message)])
         alerts = [entry.get('message') or '' for entry in
@@ -287,7 +300,7 @@ class TestContract(ContractChecks, TransactionCase):
         ], order='id')
         return {'jobs': jobs, 'notices': notices.mapped('message_type')}
 
-    # --- the fourteen checks (Odoo 18 collects only the test methods a class defines itself) ---
+    # --- the fifteen checks (Odoo 18 collects only the test methods a class defines itself) ---
 
     def test_contract_01_answers(self):
         self.contract_check_01_answers()
@@ -330,3 +343,6 @@ class TestContract(ContractChecks, TransactionCase):
 
     def test_contract_14_job_rows(self):
         self.contract_check_14_job_rows()
+
+    def test_contract_15_file_fallback(self):
+        self.contract_check_15_file_fallback()

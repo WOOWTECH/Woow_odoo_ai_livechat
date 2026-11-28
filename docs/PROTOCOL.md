@@ -1,7 +1,7 @@
 # Backend protocol (Live Chat AI)
 
-What `im_livechat_ai` 18.0.2.0.0 sends to an AI backend and what it accepts back. It implements
-[contract v1.2](CONTRACT.md) (sections 3.3 to 3.9 and 3.14), the same wire format as Discuss AI and Project AI, with
+What `im_livechat_ai` 18.0.2.1.0 sends to an AI backend and what it accepts back. It implements
+[contract v1.3](CONTRACT.md) (sections 3.3 to 3.9 and 3.14), the same wire format as Discuss AI and Project AI, with
 the Live Chat values of section 3.1: session id prefix `woow-ai`, `surface.type` `livechat`, whole (not
 streamed) LiteLLM replies, text-only replies, clickable links only to the site's own hosts, and no
 identity block in the system message.
@@ -50,6 +50,11 @@ Odoo only has technical queue caps:
 - **Events**: facts the model must know, `{time, kind, text}`: `operator` (operators wrote in the
   conversation) and `resume` (a handoff wait ended and no operator answered).
 - **System prompt**: the AI assistant's prompt. Odoo adds no persona.
+- **Current time** (contract 3.6, 3.7): every request carries the time it was built at, so the model never guesses
+  the date (the staging bench had a model tell a customer on a Saturday that it was Wednesday). n8n gets `now`,
+  LiteLLM one line that ends the system message. The time zone is the current company's (its partner's time
+  zone), else the visitor's (a guest's time zone, else the user's), else `UTC`; a name that is not a known IANA
+  time zone counts as none.
 - **Names** (contract 3.14): Live Chat sends a person's text as typed (no speaker label). A name with an `@` (a
   partner named after an email address) counts as no name; a name inside text the model reads (the operator's
   name in `[真人客服 <name>] `, the metadata) follows the one-line rule: one line, brackets as parentheses, at
@@ -87,7 +92,7 @@ The body is compact UTF-8 JSON:
 {
   "model": "chatgpt-pool/gpt-6-sol",
   "messages": [
-    {"role": "system", "content": "<the assistant's prompt, the event notes, the handoff line>"},
+    {"role": "system", "content": "<the assistant's prompt, the event notes, the handoff line, the time line>"},
     {"role": "user", "content": "請問營業時間？"}
   ],
   "user": "woow-ai-0edfec80-42",
@@ -103,13 +108,16 @@ The body is compact UTF-8 JSON:
 - `messages`: one system message first when it is not empty, then turns that start and end with a
   `user` turn (the welcome message before the first visitor message is dropped; AI replies after the last
   visitor message are moved before it).
-- The system message ends with the handoff line when the channel has operators: the model ends its reply
-  with a line `[[handoff]]` to hand the visitor to a human (the marker is removed before posting).
+- The system message is the assistant's prompt, the event notes, the handoff line when the channel has operators
+  (the model ends its reply with a line `[[handoff]]` to hand the visitor to a human; the marker is removed before
+  posting), then always the current time as one line, for example
+  `Current time: 2026-11-28 10:20 (Saturday), time zone Asia/Taipei (UTC+08:00).` Live Chat has no identity block,
+  and the time is not in the metadata.
 - `metadata`: string keys and values, at most 16 keys of at most 512 characters: `session_id`, the surface
   as `surface_<key>`, the visitor as `odoo_<key>` (never the email), then `livechat_channel`.
 - **Answer**: `choices[0].message.content`, a string or its `text` and `output_text` parts (joined with a
-  line break). `<think>` blocks and special tokens such as `<|im_end|>` are removed. An empty answer is
-  `invalid_response`.
+  line break). `<think>` blocks and special tokens such as `<|im_end|>` are removed, then every speaker label at
+  the start (see [Labels in answers](#labels-in-answers)). An empty answer is `invalid_response`.
 - **Usage**: `usage.prompt_tokens`, `completion_tokens` and `total_tokens` (the `input_tokens` and
   `output_tokens` aliases are accepted; the total is their sum when it is missing).
 
@@ -129,6 +137,29 @@ extracts no text and converts nothing.
 
 Images and documents share **7 MiB** of data-URI characters per request (about 5.25 MiB of file bytes).
 With *Log Request Content* on, the base64 of every data URI is stored as `<N bytes base64 omitted>`.
+
+### When the model cannot read a file
+
+A model, or the route LiteLLM picks for it, may refuse a file type, and the files of the last visitor messages go
+with every request: without a fallback one such file made every later turn fail (the staging bench: a PDF refused
+with HTTP 500, a `.txt` with 400 and 422). So, contract 3.7:
+
+- A request with file parts (inline images, or documents as `file` parts) that the backend answers with HTTP 400,
+  413, 415, 422 or 500 is sent again **at once**: first without the file parts of the earlier visitor messages,
+  then, when that is refused the same way and the newest visitor message still has a file part, without any file
+  part. A request without file parts, and any other answer (401, 404, 502, 429 after its retries, ...), is handled
+  as before.
+- A file left out is its line `[附件] <name>（<mimetype>，<size>）：<signed url>`, followed by
+  `[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。`
+- These requests are not retries: no wait, and the connection's *Retries* does not count them; HTTP 429 and 503 are
+  still retried as usual. The connection's timeout bounds them all: none starts after the deadline of the answer.
+- Each request writes its own call log (a refused one `http_error` with its HTTP status). The answer is the first
+  one that succeeds; when none does, the visitor gets the error message, as before.
+- **The conversation remembers**: the reply job keeps the ids of the files left out (*Files Sent as Download
+  Links*, `im_livechat.ai.job.file_fallback_ids`), written before the next request is sent. Every later request of
+  the conversation, a later run of the same job included, sends those files as their line and the note from the
+  start, never as a file part again; they take nothing of the counts or of the 7 MiB.
+- n8n is not concerned: it always gets signed links (`attachments`).
 
 ## n8n backend (`n8n`)
 
@@ -163,7 +194,9 @@ UTF-8 JSON, and those exact bytes are signed and sent:
   "system_prompt": "你是官網的客服助理。",
   "message": {"id": 991, "text": "請問營業時間？", "attachments": []},
   "history": [{"role": "assistant", "text": "您好，有什麼可以幫您？", "attachments": []}],
-  "events": []
+  "events": [],
+  "now": {"utc": "2026-11-28T02:20:33Z", "local": "2026-11-28T10:20:33+08:00", "tz": "Asia/Taipei",
+          "weekday": "Saturday"}
 }
 ```
 
@@ -176,6 +209,9 @@ UTF-8 JSON, and those exact bytes are signed and sent:
   `session_id` and `message.text`).
 - `message` is the visitor message being answered; `history` the rest of the context; `events` is always
   present (`[]` when there are none).
+- `now` is the current time when the request is built: `utc` (`YYYY-MM-DDTHH:MM:SSZ`), `local` (the same instant
+  in `tz`, with its offset), `tz` (an IANA name: the company's time zone, else the visitor's, else `UTC`) and
+  `weekday` (the English name of the day of `local`). `user.tz` stays the visitor's own.
 - `attachments` list the files of visitor messages as `{"id", "name", "mimetype", "size", "url",
   "expires_at"}`; nothing is inlined, the workflow downloads what it needs. AI and operator entries always
   have `[]`.
@@ -225,7 +261,8 @@ HTTP 200 with JSON, within the connection's timeout:
   `handoff_reason` is optional: white space is collapsed and at most 300 characters are kept, shown to the
   operators and stored on the job. A Chat Trigger workflow, which can only answer `output`, ends it with a
   line `[[handoff]]` instead.
-- `<think>` blocks and special tokens are removed. Replies are text only: reply attachments are ignored.
+- `<think>` blocks and special tokens are removed, then every speaker label at the start of a reply text (see
+  [Labels in answers](#labels-in-answers)). Replies are text only: reply attachments are ignored.
 - Anything else is `invalid_response`: a non-JSON body, another shape, `replies` that is not a non-empty
   list, a reply that is not text, an empty reply without `handoff` or `skip`. A non-200 answer is an
   `http_error`. When the agent fails, answer non-200 (for example 502). The visitor then gets the
@@ -256,6 +293,23 @@ A workflow that starts with a **Chat Trigger** node (public chat) can be used as
 
 n8n keeps the webhook body (the conversation) with each execution: set an execution retention, or do not
 save successful executions.
+
+## Labels in answers
+
+The history marks an operator's text with `[真人客服 <name>] ` (and Project AI labels people with `[客戶 <name>] ` or
+`[負責同事 <name>] `). A model may start its own answer with such a label; posted as it is, the answer would look
+written by that person (the staging bench: 「[真人客服 實測台｜你（管理員）] QA-SENSOR-02 的單價為 600 測試幣。」 after an
+operator pause). Contract 3.14:
+
+- Before a reply is posted, every label at its start is removed, with the white space after it (spaces, tabs,
+  U+3000, line breaks), as long as one is there: `[<kind>]` or `[<kind> <text without ] or a line break>]`, where
+  `<kind>` is 真人客服, 客戶 or 負責同事 followed by `]` or a space. So `[客戶服務中心] …` is not a label.
+- It applies to every reply text: the LiteLLM answer (after `<think>` blocks and special tokens), and n8n `reply`,
+  `replies` and `output`. A `[[handoff]]` marker is removed first, so a label after the marker is the start too.
+- Nothing else changes: a label later in the text, or a leading bracket that is not such a label
+  (「[注意] 截止日改了」), stays.
+- A reply that held only labels is empty: `invalid_response` for LiteLLM, and for n8n a reply with no text (with
+  `"handoff": true` the channel's handoff message is posted, as for an empty handoff answer).
 
 ## Test Connection (system administrators)
 
@@ -291,9 +345,9 @@ of the site: the backend downloads from there.
 
 ## Call logs and usage (system administrators)
 
-- One call log per answer (retries included): status `ok`, `http_error`, `timeout`, `invalid_response` or
-  `error`, the HTTP status, the duration, the tokens, the assistant, the connection, the conversation and
-  the reply job. The error is the exception type name, never the upstream body or the key. Rows written
+- One call log per answer (retries included), and one more for each request of the file fallback: status `ok`,
+  `http_error`, `timeout`, `invalid_response` or `error`, the HTTP status, the duration, the tokens, the assistant,
+  the connection, the conversation and the reply job. The error is the exception type name, never the upstream body or the key. Rows written
   by 18.0.1.x keep their statuses (`success`, `retry`).
 - The request and response content is stored only while the connection's *Log Request Content* is on;
   turning it off erases what was stored. Call logs and finished reply jobs are deleted after 30 days.

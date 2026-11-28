@@ -17,8 +17,9 @@
 ## Table of Contents
 
 - [Three separate AI products](#three-separate-ai-products)
-- [Alignment (contract v1.2)](#alignment-contract-v12)
+- [Alignment (contract v1.3)](#alignment-contract-v13)
 - [Overview](#overview)
+- [Upgrading to 18.0.2.1.0](#upgrading-to-180210)
 - [Upgrading to 18.0.2.0.0](#upgrading-to-180200)
 - [Upgrading to 18.0.1.2.1](#upgrading-to-180121)
 - [Upgrading to 18.0.1.2.0](#upgrading-to-180120)
@@ -55,11 +56,11 @@ Since 2026-11-24 discuss AI, project AI and Live Chat AI are three separate prod
 
 Live Chat AI is upgraded in place (18.0.2.0.0). The bridge `woow_ai_contact_livechat`, which once moved Live Chat channels onto the Discuss AI core, was removed from Discuss AI in 18.0.2.1.0 and was installed on no site; this module refuses to upgrade while it is installed.
 
-## Alignment (contract v1.2)
+## Alignment (contract v1.3)
 
-The three products are configured and run the same way through one written contract, [docs/CONTRACT.md](docs/CONTRACT.md): connection and assistant fields, roles and menus, how a turn runs, the n8n and LiteLLM wire formats, what people see, logs and usage, `neutralize.sql`, the zh_TW glossary and the upgrade rules. **This release (18.0.2.0.0) implements contract v1.2.** Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no identity block in the system message, no speaker labels (the text as the person typed it), conversation events in the n8n `events`, clickable links only to the site's own hosts (contract 3.1).
+The three products are configured and run the same way through one written contract, [docs/CONTRACT.md](docs/CONTRACT.md): connection and assistant fields, roles and menus, how a turn runs, the n8n and LiteLLM wire formats, what people see, logs and usage, `neutralize.sql`, the zh_TW glossary and the upgrade rules. **This release (18.0.2.1.0) implements contract v1.3.** Live Chat is the text-only product: whole (not streamed) LiteLLM replies, no identity block in the system message, no speaker labels (the text as the person typed it), conversation events in the n8n `events`, clickable links only to the site's own hosts (contract 3.1). Since v1.3 every request carries the current time, a speaker label a model copies to the start of its answer is removed, and a file the model cannot read no longer makes the conversation fail (see [Upgrading to 18.0.2.1.0](#upgrading-to-180210)).
 
-The contract package is copied byte for byte into `im_livechat_ai/tests/contract/` (fixtures, the shared checks, `SHA256SUMS` and `READY`; check with `cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS`, which CI also runs). `tests/test_contract.py` runs the fourteen contract checks against this module's own code (test tag `woow_ai_contract`). Never edit the package here: a contract change is a new contract version.
+The contract package is copied byte for byte into `im_livechat_ai/tests/contract/` (fixtures, the shared checks, `SHA256SUMS` and `READY`; check with `cd im_livechat_ai/tests/contract && sha256sum -c SHA256SUMS`, which CI also runs). `tests/test_contract.py` runs the fifteen contract checks against this module's own code (test tag `woow_ai_contract`). Never edit the package here: a contract change is a new contract version.
 
 ---
 
@@ -80,6 +81,19 @@ Odoo only **records, forwards and manages** the conversation: the persona, tools
 **Limits live in the LiteLLM key.** Give each Live Chat connection its own LiteLLM virtual key with requests and tokens per minute, parallel requests and a budget. Odoo has no usage limit, only technical queue caps: one reply at a time per conversation, at most 30 unfinished replies per Live Chat channel (system parameter `im_livechat_ai.max_active_jobs`) and 60 for the whole database (`im_livechat_ai.max_active_jobs_total`; 0 turns either cap off), a 1.5 s debounce, at most 3 runs per reply job, and reply jobs older than 30 minutes are given up. Separately, each Odoo process lets only so many reply threads hold a database connection at the same time: half of what its connection pool (`db_maxconn`) leaves after the cron threads, so the other half stays free for web requests. A reply thread waits for such a slot holding no connection; one that waits too long leaves its job pending and the recovery cron runs it. A visitor message a cap refuses gets the same notice as a blocked channel, and the operators one alert, at most one per channel in 10 minutes. **AI Usage** counts replies and tokens per month, as a reference for invoicing by hand. Details: [docs/PROTOCOL.md](docs/PROTOCOL.md#limits-and-queue-caps).
 
 ---
+
+## Upgrading to 18.0.2.1.0
+
+Contract v1.3, from what the staging test bench found on 2026-11-28. `-u im_livechat_ai` (or the platform upgrade gate, on the version change) adds one technical column to the reply jobs; there is no data migration and no translation reload, and **nothing in it can stop an assistant answering**: no new readiness rule, no new safety gate.
+
+| What changes | Effect |
+|---|---|
+| **The current time** | Every request says what time it is, so the model no longer guesses the date (a model had told a customer on a Saturday morning that it was Wednesday afternoon). LiteLLM: one line ends the system message, after the prompt, the event notes and the handoff line, e.g. `Current time: 2026-11-28 10:20 (Saturday), time zone Asia/Taipei (UTC+08:00).` n8n: the key `now` (`utc`, `local`, `tz`, `weekday`). The time zone is the company's (Settings > Companies, the company's time zone), else the visitor's (a guest's time zone, else the user's), else UTC. **Check first:** the company has its time zone set, or every visitor without one gets UTC. |
+| **Labels in answers** | The history marks an operator's text with `[真人客服 <name>] `; after an operator pause a model had begun its answer with 「[真人客服 實測台｜你（管理員）] …」, posted as if the operator had written it. Every `[真人客服 …]`, `[客戶 …]` or `[負責同事 …]` label (or the kind alone) at the start of an answer is now removed before posting, also next to a `[[handoff]]` marker; an answer of labels only counts as empty (the visitor gets the error message, as for an empty answer). Nothing else in the text changes. |
+| **A file the model cannot read** | One refused file (HTTP 500 for a PDF, 400 and 422 for a `.txt` on the bench) made every later turn fail, because the files of the last visitor messages go with every request. Now a LiteLLM request with file parts refused with HTTP 400, 413, 415, 422 or 500 is sent again at once without the earlier messages' files, then without any file; a file left out goes as its download link with the note 「模型無法讀取這個檔案，只附下載連結。」, and the conversation remembers it (the reply job's **Files Sent as Download Links**), so later turns send it as a link from the start. These requests are not retries (no wait, not counted in **Retries**) and stay within the connection's timeout; each writes its own call log, so a refused file shows as an `http_error` row followed by an `ok` row. n8n is unchanged. |
+| **Reply jobs** | New column `file_fallback_ids` (technical, empty on existing jobs, set explicitly on every new job: neither a client's `default_*` context nor an `ir.default` row fills it). **Backend Calls** of a job can now be up to two more than the call and its retries. |
+
+**Rollback to 18.0.2.0.0:** deploy the 18.0.2.0.0 code and run `-u im_livechat_ai`. Odoo 18 drops the column of the removed field; the conversations then send the files they had left out as file parts again (a refused one fails as on 18.0.2.0.0). Nothing else needs cleaning.
 
 ## Upgrading to 18.0.2.0.0
 
@@ -357,6 +371,8 @@ flowchart TD
 - **AI assistants and AI connections** -- System administrators set up AI connections (LiteLLM or an n8n webhook, with the key and call settings) and AI assistants (the persona: its connection, prompt, history and error message), and tick 「可用在 Live Chat」 on the assistants meant for visitors. Live Chat managers pick one of those per channel; they never see a URL, a key or a prompt.
 - **Readiness** -- Every connection has a readiness check (「可以使用」 or 「未就緒」, with fixed reasons) and a **Test Connection** button (LiteLLM `GET /models`, n8n ping). A channel whose AI cannot answer queues no job: the visitor gets one notice per blocked period, the operators one alert (at most one per channel in 10 minutes). The notice is a notification: a visitor bridged from LINE does not get it (the LINE bridge forwards only comment messages); a failed reply's error message reaches LINE.
 - **Multi-turn context** -- Recent history (1-200 messages). Visitors are `user` turns, the AI bot is `assistant`, operators are `user` turns marked `[真人客服 name]` (as in `woow_ai_contact`), and a conversation event tells the AI not to contradict them. OpenAI messages always start and end with a user turn.
+- **The current time** -- Every request carries the time it was built at (contract v1.3): the last line of the LiteLLM system message (`Current time: 2026-11-28 10:20 (Saturday), time zone Asia/Taipei (UTC+08:00).`) or the n8n `now`, in the company's time zone, else the visitor's, else UTC.
+- **No label in answers** -- A `[真人客服 …]`, `[客戶 …]` or `[負責同事 …]` label a model copied from the history to the start of its answer is removed before posting, so an AI answer never looks written by an operator (contract 3.14).
 - **Visitors and portal customers** -- Guests, logged-in portal customers and the public user are answered, and so is an employee who opens the website chat as the visitor; operators (the session operator and internal users who join) and the bots never trigger the AI. Only visitor chat messages are answered, not the rating/feedback notification.
 
 ### Reliability (job queue)
@@ -366,6 +382,7 @@ flowchart TD
 - **Bounded calls** -- The connection's timeout is the time for one answer, retries included (10 - 300 s; 45 s for LiteLLM and 120 s for n8n by default): each call waits at most the time left for the backend, after at most 10 s to connect (a backend that keeps sending bytes slowly can take longer). At most 2 retries (0 - 2, default 1; waits 3 s, then 10 s, only within the timeout), and only when the request was not sent or the backend answered HTTP 429 / 503 -- never after a read timeout (the backend may still be working; a workflow is never started twice). At most 3 processing runs per job.
 - **Recovery cron** -- Every 2 minutes, jobs left pending or running by a restart or crash are run again; a job is never answered twice (it is skipped when the bot already replied after its message). Unfinished jobs older than 30 minutes are given up. The cron also runs the deferred replies of a handoff wait (triggered for the end of the wait). Requires a cron process (see [Rollout](#rollout-replies-after-a-restart-or-deploy)).
 - **Monitoring** -- The **Reply Processing** block of the AI assistant form (system administrators) shows the cron's last run and the pending/running jobs older than 5 minutes, with a warning when the cron has not run for 5 minutes or jobs are stuck.
+- **Files the model cannot read** -- A LiteLLM request with files that the backend refuses (HTTP 400, 413, 415, 422 or 500) is sent again at once without the earlier messages' files, then without any file; the conversation remembers the files left out and sends them as download links from then on (contract 3.7).
 - **Failure handling** -- After the last retry the visitor gets the AI assistant's error message (a default in the visitor's language when it is empty) and the operators are notified (OdooBot message and a sticky notification), at most once per kind of failure (HTTP 429, HTTP 500, a timeout ...) and channel in 10 minutes: the alert says that the next ones are not announced.
 - **Visible queue** -- **Live Chat > Configuration > Reply Jobs** (system administrators) shows every job's status, runs, backend calls and short error.
 
@@ -381,7 +398,7 @@ Two kinds of pause, stored on the conversation (`discuss.channel.ai_paused_until
 
 ### Privacy & Operations
 
-- **Call logs for system administrators only** -- One row per answer: time, assistant, connection, backend type, model, tokens, duration, status (`ok`, `http_error`, `timeout`, `invalid_response`, `error`), HTTP status and the exception type name.
+- **Call logs for system administrators only** -- One row per answer (and one per request of a file fallback): time, assistant, connection, backend type, model, tokens, duration, status (`ok`, `http_error`, `timeout`, `invalid_response`, `error`), HTTP status and the exception type name.
 - **No conversation content by default** -- **Log Request Content** (per AI connection, off) stores request/response bodies only while debugging; turning it off erases what that connection stored. The key is never part of a stored body.
 - **Retention** -- Call logs and finished jobs older than 30 days are deleted daily. **AI Usage** keeps one row per assistant, connection, channel and month.
 - **Short errors** -- Test buttons and logs show the HTTP status and one short sentence; the server log gets ids, the HTTP status and exception type names, never an upstream body or exception text.
@@ -602,7 +619,7 @@ Then click **Test Connection** (HTTP 200), create the AI assistant on this conne
 
 ## Protocol
 
-The request and answer formats are in [docs/PROTOCOL.md](docs/PROTOCOL.md): the LiteLLM body and metadata, the n8n body and its signature, the accepted answers and the handoff, Test Connection, visitor files and signed download URLs, reply rendering, call logs and usage, and what happens when the AI cannot answer. They follow [contract v1.2](docs/CONTRACT.md): an n8n workflow written for Discuss AI reads the same keys (`assistant`, `user`, `channel`, `surface`, `message`, `history`, `events`), and Live Chat also sends `contact` (the Live Chat channel) for the workflows written for 18.0.1.x.
+The request and answer formats are in [docs/PROTOCOL.md](docs/PROTOCOL.md): the LiteLLM body and metadata, the n8n body and its signature, the accepted answers and the handoff, Test Connection, visitor files and signed download URLs, reply rendering, call logs and usage, and what happens when the AI cannot answer. They follow [contract v1.3](docs/CONTRACT.md): an n8n workflow written for Discuss AI reads the same keys (`assistant`, `user`, `channel`, `surface`, `message`, `history`, `events`, `now`), and Live Chat also sends `contact` (the Live Chat channel) for the workflows written for 18.0.1.x.
 
 ---
 
@@ -611,7 +628,7 @@ The request and answer formats are in [docs/PROTOCOL.md](docs/PROTOCOL.md): the 
 ```
 im_livechat_ai/
 ├── __init__.py                          # uninstall hook (drops the 18.0.1.x key column)
-├── __manifest__.py                      # v18.0.2.0.0
+├── __manifest__.py                      # v18.0.2.1.0
 ├── models/
 │   ├── ai_connection.py                 # im_livechat.ai.connection 「AI 連線」: backend, URL,
 │   │                                    #   write-only key (SQL-only column), model, timeout,
@@ -622,16 +639,19 @@ im_livechat_ai/
 │   ├── ai_usage.py                      # im_livechat.ai.usage.month: monthly usage (SQL upsert)
 │   ├── im_livechat_channel.py           # the channel's 「AI 助理」 tab (assistant, state),
 │   │                                    #   handoff texts, requests, signing, answer parsing,
-│   │                                    #   retries and deadline, blocked gate, call logs
+│   │                                    #   retries and deadline, file fallback, blocked
+│   │                                    #   gate, call logs
 │   ├── discuss_channel.py               # _notify_thread hook: pause on operator post,
 │   │                                    #   handoff, job creation; author classification;
-│   │                                    #   visitor identity; conversation; visitor files
+│   │                                    #   visitor identity; conversation; visitor files;
+│   │                                    #   current time; labels in answers
 │   ├── livechat_ai_job.py               # im_livechat.ai.job: durable reply queue, post-commit
 │   │                                    #   threads, advisory lock, recovery cron, operator
 │   │                                    #   alerts, usage counting
 │   └── llm_api_log.py                   # llm.api.log: call logs (one row per answer)
 ├── tools/
-│   ├── backend.py                       # URL rule, n8n signature, compact JSON, retry rule
+│   ├── backend.py                       # URL rule, n8n signature, compact JSON, retry rule,
+│   │                                    #   the clock and the current time
 │   └── markdown.py                      # AI reply markdown -> sanitized HTML
 ├── controllers/
 │   └── main.py                          # signed download of visitor attachments
@@ -646,8 +666,8 @@ im_livechat_ai/
 ├── migrations/
 │   ├── 18.0.1.1.0/ 18.0.1.2.0/ 18.0.1.2.1/  # the 18.0.1.x upgrades (unchanged)
 │   └── 18.0.2.0.0/                      # guards, kept columns, connections and assistants
-├── tests/                               # 556 tests, the contract checks included
-│   └── contract/                        # contract v1.2 package (byte for byte, never edited)
+├── tests/                               # 591 tests, the contract checks included
+│   └── contract/                        # contract v1.3 package (byte for byte, never edited)
 └── i18n/
     ├── im_livechat_ai.pot               # English source strings
     └── zh_TW.po                         # Traditional Chinese (contract glossary)
@@ -698,11 +718,14 @@ A neutralized copy (`odoo neutralize`) never calls a real backend: the connectio
 
 ### Test Suite Overview
 
-The module has **556 automated tests** (Odoo 18.0-20250807 and 18.0-20260926), the fourteen contract checks included. All HTTP calls are mocked: no key and no network access are needed.
+The module has **591 automated tests** (Odoo 18.0-20250807, the production core; CI runs them on the current 18.0), the fifteen contract checks included. All HTTP calls are mocked: no key and no network access are needed.
 
 | Test File | Tests | Coverage |
 |---|---|---|
-| `test_contract.py` | 14 | Contract v1.2 (tag `woow_ai_contract`): answers, requests, vectors, rendering, glossary, neutralize, sums, secrets, 「可給客戶使用」, retries and deadline, the blocked gate at the trigger and when the job runs, no identity block, connections, job rows from explicit values only |
+| `test_contract.py` | 15 | Contract v1.3 (tag `woow_ai_contract`): answers (labels in answers included), requests (the current time included), vectors, rendering, glossary, neutralize, sums, secrets, 「可給客戶使用」, retries and deadline, the blocked gate at the trigger and when the job runs, no identity block, connections, job rows from explicit values only (also against `ir.default`), the file fallback |
+| `test_current_time.py` | 7 | The current time (18.0.2.1.0): the company's time zone first, the visitor's (guest, user), UTC, an unknown name skipped; the LiteLLM line at the end of the system message, the n8n `now`, one reading of the clock per request |
+| `test_answer_labels.py` | 11 | Labels in answers (18.0.2.1.0): the rule (kinds, white space, U+3000, not a label), after `<think>` and special tokens, the bench's operator label after a pause, a label with a `[[handoff]]` marker before or after it, labels only, n8n replies and handoff |
+| `test_file_fallback.py` | 16 | The file fallback (18.0.2.1.0): each refusing status, the statuses that do not start it, no file no fallback, documents in file mode, the second step, the newest file kept, retries first and not counted, every step refused, the deadline, n8n unchanged, call logs, the memory across turns and across a run of the job, no slot taken, never filled from `ir.default` |
 | `test_connection.py` | 17 | AI connections: write-only key, key dropped on another host or type, the 18.0.1.x copy cleared, 「可給客戶使用」, readiness, timeouts, Test Connection |
 | `test_assistant.py` | 18 | AI assistants: bot partner, copy, names, 「可用在 Live Chat」, the channel's pick, the in-use guard, who reads them (administrators, Live Chat managers) |
 | `test_runtime_reads.py` | 40 | What the runtime reads: n8n body (`assistant`, `surface`, `contact`), call logs, usage, internal notes, alerts per kind of failure and their claim, the blocked gate at the trigger and when the job runs, the caps and refused messages, the cannot-answer alerts (10-minute window, blocked and full apart, not counted when nobody was told, no conflict with foreign-key locks), the database cap, the job slots of a process, concurrency re-raise, retries and deadline, code frames of unexpected errors, the author of an answer |
@@ -729,7 +752,7 @@ odoo -d test_db -i website_sale,website_livechat,portal,im_livechat_ai \
 odoo -d test_db -i im_livechat_ai --test-enable --test-tags woow_ai_contract --stop-after-init
 ```
 
-Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai.tests` (fourteen `Starting TestContract.test_contract_` lines for the contract): a tag that selects nothing also ends with "0 failed".
+Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai.tests` (fifteen `Starting TestContract.test_contract_` lines for the contract): a tag that selects nothing also ends with "0 failed".
 
 ### Continuous Integration
 
@@ -737,7 +760,7 @@ Check that the log contains `Starting ...` lines for `odoo.addons.im_livechat_ai
 
 ### E2E Testing
 
-The 15-scenario end-to-end plan of 18.0.1.0.0 is kept in `docs/plans/`. For 18.0.2.0.0, verify on a test database with a real backend per type: **Test Connection** on the AI connection succeeds, the channel shows 「可以使用」, three rapid messages give one reply, an operator reply pauses the AI, "我要找真人" pauses and notifies, and an n8n workflow sees a valid signature.
+The 15-scenario end-to-end plan of 18.0.1.0.0 is kept in `docs/plans/`. For 18.0.2.0.0, verify on a test database with a real backend per type: **Test Connection** on the AI connection succeeds, the channel shows 「可以使用」, three rapid messages give one reply, an operator reply pauses the AI, "我要找真人" pauses and notifies, and an n8n workflow sees a valid signature. For 18.0.2.1.0, repeat the three cases of the staging bench: ask about opening hours on a weekend (the answer knows the day), let an operator answer and the pause end, then ask again (the answer starts without 「[真人客服 …]」), and send a file the model cannot read, then ask another question (both turns are answered; the call logs show `http_error` then `ok` for the first turn only).
 
 ---
 
@@ -767,6 +790,7 @@ Odoo no longer looks up products (18.0.1.2.0). Give the backend its own product 
 | `HTTP 3xx` | The URL redirects (e.g. a login proxy) | Redirects are not followed: use the final URL, or an in-cluster `*.svc.cluster.local` URL |
 | `HTTP 429` | Rate limit or budget reached | Check the key's limits and spend in LiteLLM |
 | `HTTP 5xx` | Backend or provider issue | Only 503 (and 429) is retried, after 3 s and 10 s; check the backend |
+| `HTTP 400` / `413` / `415` / `422` / `500`, then `ok` | The model (or the route LiteLLM picked) could not read a visitor's file | Nothing to do: the turn was sent again without the file (two call logs), and the conversation sends that file as a download link from then on (the reply job's **Files Sent as Download Links**). To have files read, use a model that reads that type |
 | Timeout / connection | Network or firewall | Odoo must reach the endpoint URL; an answer times out after the connection's timeout (45 s / n8n 120 s by default) |
 | `回應格式不正確` | n8n answered without `reply` / `replies` / `skip` | Return `{"reply": {"text": ...}}` from the Respond to Webhook node |
 
@@ -812,6 +836,16 @@ Per AI connection: a LiteLLM server (`/v1/chat/completions`) or an n8n instance 
 ---
 
 ## Changelog
+
+### v18.0.2.1.0
+
+Contract v1.3, from the defects the staging test bench found on 2026-11-28 (see [Upgrading to 18.0.2.1.0](#upgrading-to-180210)):
+
+- **The current time** (contract 3.6, 3.7): every request carries it, computed once when the request is built: the n8n `now` (`utc`, `local`, `tz`, `weekday`) and one line that ends the LiteLLM system message, after the prompt, the event notes and the handoff line. Time zone: the company's, else the visitor's (a guest's, else the user's), else UTC; an unknown name counts as none.
+- **Labels in answers** (contract 3.14): every `[真人客服 …]`, `[客戶 …]` or `[負責同事 …]` label (or the kind alone) at the start of an answer is removed before posting, in LiteLLM answers and n8n `reply`, `replies` and `output`, also when a `[[handoff]]` marker stood before it; an answer of labels only is empty (`invalid_response`).
+- **The file fallback** (contract 3.7, check 15): a LiteLLM request with file parts refused with HTTP 400, 413, 415, 422 or 500 is sent again at once without the earlier visitor messages' files, then without any file (no wait, not counted in the retries, within the deadline; one call log per request); a file left out is its link and the note 「模型無法讀取這個檔案，只附下載連結。」, and the conversation remembers it (`im_livechat.ai.job.file_fallback_ids`, created explicitly empty), so later requests send it as a link from the start.
+- **Contract v1.3 package** and its fifteen checks (`test_contract_15_file_fallback`; `contract_turn` supports `twice`); check 14 now also sets global `ir.default` rows.
+- **Translations**: the new field's label and help (English source, zh_TW); the fallback note and the time line are protocol text, never translated.
 
 ### v18.0.2.0.0
 

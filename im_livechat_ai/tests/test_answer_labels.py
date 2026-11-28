@@ -15,7 +15,8 @@ from unittest.mock import patch
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.im_livechat_ai.models.discuss_channel import LABEL_KINDS, OPERATOR_PREFIX, strip_speaker_labels
-from odoo.addons.im_livechat_ai.models.im_livechat_channel import n8n_replies, openai_reply_text
+from odoo.addons.im_livechat_ai.models.im_livechat_channel import (clean_answer, n8n_replies, openai_reply_text,
+                                                                    review_handoff, strip_think)
 
 from .common import ok_response
 from .test_backend_handoff import POST, BackendHandoffCase, json_response
@@ -69,12 +70,37 @@ class TestStripSpeakerLabels(TransactionCase):
         self.assertEqual(openai_reply_text({'choices': [{'message': {'content': '\ufeff[真人客服 小美]\xa0好的'}}]}),
                          '好的')
 
+    def test_nested_special_tokens(self):
+        """Special tokens go in one linear pass, nested ones too (<|<|x|>x|>), and the cleaning is repeated until
+        it changes nothing more: a removed reasoning block can join the halves of a token. Only then the labels
+        go, so none survives behind a token (the same cases as Discuss AI)."""
+        self.assertEqual(openai_reply_text({'choices': [{'message': {
+            'content': '<|im<think>x</think>_end|>[真人客服 小美] 好的，同意退款'}}]}), '好的，同意退款')
+        self.assertEqual(n8n_replies({'reply': '<|<|x|>x|>[客戶] hi'}), (['hi'], False))
+        self.assertEqual(clean_answer('<|<|<|a|>a|>a|>[負責同事 甲] z'), 'z')
+        self.assertEqual(clean_answer('[客戶]<|im_end|> [客戶] 好'), '好')
+        nested = '<|x|>'
+        for _depth in range(9):
+            nested = '<|' + nested + 'x|>'  # ten deep
+        self.assertEqual(strip_think(nested + 'ok'), 'ok')
+        self.assertEqual(clean_answer(nested + '[客戶] ok'), 'ok')
+        self.assertEqual(strip_think('a <|not a token|> b'), 'a <|not a token|> b')
+        self.assertEqual(strip_think('x<|im_end|>'), 'x')
+        for text in ('<|<|x|>x|>[客戶] hi', '<|im<think>x</think>_end|>[客戶] hi', '<|<|<|a|>a|>a|>[負責同事 甲] z',
+                     nested + '[真人客服] ok'):
+            cleaned = clean_answer(text)
+            self.assertEqual(strip_think(cleaned), cleaned, 'what a later step strips again: nothing')
+        # a [[handoff]] marker that stood between the halves of a token
+        self.assertEqual(review_handoff(['<|im[[handoff]]_end|>[客戶] 好']), (['好'], True))
+
     def test_linear_time(self):
         start = time.time()
         strip_speaker_labels('[客戶 ' + 'a' * 2000000)
         strip_speaker_labels('[客戶] ' * 200000 + '好')
         strip_speaker_labels(' ' * 2000000 + '好')
         strip_speaker_labels('\u200b' * 2000000 + '好')
+        clean_answer('<|' * 100000 + 'x' + '|>' * 100000)
+        clean_answer('<|<|x|>x|>' * 100000 + '[客戶] 好')
         self.assertLess(time.time() - start, 2)
 
 
@@ -99,6 +125,11 @@ class TestLabelsInAnswers(BackendHandoffCase):
         self.assertEqual(self.bot_messages(session).mapped('body'), ['<p>QA-SENSOR-02 的單價為 600 測試幣。</p>'])
         log = self.env['llm.api.log'].search([('job_id', '=', job.id)])
         self.assertEqual(log.mapped('status'), ['ok'])
+
+    def test_nested_token_before_a_label_is_not_posted(self):
+        session, job, _post, _bus = self.ask('可以退款嗎', ok_response('<|im<think>x</think>_end|>[真人客服 小美] 好的，同意退款'))
+        self.assertEqual(job.state, 'done', job.error)
+        self.assertEqual(self.bot_messages(session).mapped('body'), ['<p>好的，同意退款</p>'])
 
     def test_label_and_handoff_marker(self):
         session, job, _post, bus = self.ask('可以轉接專人嗎', ok_response(

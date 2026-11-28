@@ -172,7 +172,11 @@ _THINK_OPENER_RE = re.compile(r'<(think|thinking)>', re.IGNORECASE)
 _THINK_CLOSER_RE = re.compile(r'</(think|thinking)\s*>', re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r'<(?:think|thinking)>.*$', re.DOTALL | re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r'^.*?</(?:think|thinking)\s*>', re.DOTALL | re.IGNORECASE)
-_SPECIAL_TOKEN_RE = re.compile(r'<\|[a-z0-9_]{1,40}\|>', re.IGNORECASE)
+# The name of a special token such as <|im_end|>: 1 to 40 ASCII letters, digits or "_" (see _drop_special_tokens)
+_SPECIAL_TOKEN_NAME = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_')
+_SPECIAL_TOKEN_MAX_NAME = 40
+# strip_think passes of clean_answer: removing a reasoning block can join the halves of a special token
+MAX_CLEAN_PASSES = 8
 
 # {livechat channel id: time.monotonic() of the last "cannot answer" warning} (this process)
 _BLOCKED_WARNED = {}
@@ -223,15 +227,50 @@ def _strip_think_pairs(text):
     return ''.join(parts)
 
 
+def _drop_special_tokens(text):
+    """Remove special tokens such as ``<|im_end|>`` (``<|``, 1 to 40 ASCII letters, digits or ``_``, ``|>``),
+    also those that removing an inner one forms (``<|<|x|>x|>``): one pass, each ``|>`` is checked against what
+    was kept so far. Linear in the length of the text (the same rule as Discuss AI and Project AI)."""
+    if '|>' not in text:
+        return text
+    kept = []
+    for char in text:
+        kept.append(char)
+        if char != '>' or len(kept) < 5 or kept[-2] != '|':
+            continue
+        name_end = len(kept) - 3  # the last character of the name
+        start = name_end
+        while start >= 0 and name_end - start < _SPECIAL_TOKEN_MAX_NAME and kept[start] in _SPECIAL_TOKEN_NAME:
+            start -= 1
+        if 1 <= start < name_end and kept[start] == '|' and kept[start - 1] == '<':
+            del kept[start - 1:]
+    return ''.join(kept)
+
+
 def strip_think(text):
     """Remove reasoning blocks (<think>, <thinking>, also unclosed) and special tokens."""
     if not text:
         return ''
-    text = _SPECIAL_TOKEN_RE.sub('', text)
+    text = _drop_special_tokens(text)
     text = _strip_think_pairs(text)
     text = _THINK_OPEN_RE.sub('', text)
     text = _THINK_CLOSE_RE.sub('', text)
     return text.strip()
+
+
+def clean_answer(text):
+    """A text of the AI as it is posted (contract 3.14): strip_think until it changes nothing more (removing a
+    reasoning block can join the halves of a special token, ``<|im<think>x</think>_end|>``; at most
+    MAX_CLEAN_PASSES passes), then the speaker labels at its start (strip_speaker_labels). Applied to every reply
+    text: the LiteLLM answer, the n8n ``reply`` / ``replies`` / ``output``, and again after the [[handoff]]
+    marker is removed."""
+    text = strip_think(text)
+    for _pass in range(MAX_CLEAN_PASSES):
+        again = strip_think(text)
+        if again == text:
+            break
+        text = again
+    return strip_speaker_labels(text)
 
 
 def openai_reply_text(data):
@@ -247,7 +286,7 @@ def openai_reply_text(data):
     if content is not None and not isinstance(content, str):
         raise LLMInvalidResponse('Invalid API response: content is not text')
     # a label the model copied from the history is never posted (contract 3.14): an answer of labels only is empty
-    return strip_speaker_labels(strip_think(content or ''))
+    return clean_answer(content or '')
 
 
 def n8n_replies(data):
@@ -292,7 +331,7 @@ def n8n_replies(data):
         text = item.get('text') or ''
         if not isinstance(text, str):
             raise LLMInvalidResponse('invalid response: reply text is not a string')
-        text = strip_speaker_labels(strip_think(text))  # contract 3.14: no copied label at the start
+        text = clean_answer(text)  # contract 3.14: no copied label at the start
         if text:
             texts.append(text)
     if not texts and not handoff:
@@ -323,7 +362,8 @@ def review_handoff(texts, handoff=False):
     for text in texts:
         text, found = strip_handoff_marker(text)
         handoff = handoff or found
-        text = strip_speaker_labels(text)
+        if found:
+            text = clean_answer(text)  # what the marker stood between, or before, is the text now
         if text:
             kept.append(text)
     return kept, handoff
@@ -1187,11 +1227,12 @@ class ImLivechatChannel(models.Model):
         the backend refuses with HTTP 400, 413, 415, 422 or 500 (after those
         retries) is sent again at once without the file parts of the earlier
         visitor messages, then without any file part (see
-        _ai_file_fallback_drop): no wait, not counted in the retries, within
-        the same deadline, never with less than a second left. Each fallback
-        request is built again (its current time too) with the first request's
-        choice of files. Each request writes its own call log; the answer is
-        the first one that succeeds. When a fallback request succeeds, the
+        _ai_file_fallback_drop): no wait, within the same deadline, never
+        started with less than a second left (checked again right before it is
+        sent). Each fallback request is built again (its current time too) with
+        the first request's choice of files, and has its own retries (the
+        connection's Retries, waits from 3 s again). Each request writes its own
+        call log; the answer is the first one that succeeds. When a fallback request succeeds, the
         result's ``left_out`` lists the files it left out: the job remembers
         them (im_livechat.ai.job.file_fallback_ids) before it posts, so later
         requests of the conversation send them as links from the start. When
@@ -1243,15 +1284,21 @@ class ImLivechatChannel(models.Model):
             return result
 
         retries = connection._max_retries_value()
-        retried = 0  # retries of the answer (contract 3.3: the connection's Retries)
+        retried = 0  # retries of the current request (contract 3.3: the connection's Retries, per request)
         attempts = 0  # calls of the current request: its first call and its retries
         deadline = None
+        refused = None  # (short error, exception) of the request a fallback request follows
         http_status = None
         while True:
             if before_call:
                 before_call()  # after the last database read, right before the request
             if deadline is None:
                 deadline = time.time() + request['timeout']
+            elif attempts == 0 and deadline - time.time() < FILE_FALLBACK_MIN_SECONDS:
+                # contract 3.7: a fallback request is not started with less than a second left, checked again after
+                # the refused request's call log, the gate and the build; not sent, it leaves no call log
+                result.update(error=refused[0], error_exc=refused[1])
+                return result
             if attempts == 0:
                 started = time.time()  # the call log of this request counts from here
             attempts += 1
@@ -1315,7 +1362,8 @@ class ImLivechatChannel(models.Model):
                     fallback = channel._ai_file_fallback_request(discuss_channel, conversation, trigger_message,
                                                                 request, drop)
                     if fallback:
-                        request, attempts = fallback, 0
+                        # a new request: its own retries, the waits start again at 3 s
+                        request, attempts, retried, refused = fallback, 0, 0, (last_error, e)
                         continue
                 result.update(error=last_error, error_exc=e)
                 return result

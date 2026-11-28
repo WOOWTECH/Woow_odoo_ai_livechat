@@ -316,6 +316,68 @@ class TestFileFallback(FileFallbackCase):
         self.assertEqual(len(sent), 2)
         self.assertFalse(result['error'])
 
+    def test_one_second_checked_again_before_sending(self):
+        """The rule of the last second is checked again right before a fallback request is sent: here the call
+        log, the gate and the build of the request leave 0.7 s, so it is not sent (and leaves no call log)."""
+        session = self.session()
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        self.post(session, '然後呢？')
+        set_ai(self.channel, {'ai_request_timeout': 12})
+        Channel = type(self.env['im_livechat.channel'])
+        gate_open = Channel._ai_gate_open
+        clock = [1000.0]
+
+        def refusal(*_args, **_kwargs):
+            clock[0] += 10.5  # 1.5 s left when the fallback is decided
+            return status_response(400)
+
+        def slow_gate(channel):
+            clock[0] += 0.8
+            return gate_open(channel)
+        first_log = self.env['llm.api.log'].sudo().search([], order='id desc', limit=1).id or 0
+        with patch(POST, side_effect=refusal) as post, mute_logger(CHANNEL_LOGGER), \
+                patch(CLOCK_TIME, side_effect=lambda: clock[0]), patch.object(Channel, '_ai_gate_open', slow_gate):
+            result = call_backend(self.channel, session=session)
+        self.assertEqual(post.call_count, 1, 'no fallback request with 0.7 s left')
+        self.assertIn('HTTP 400', result['error'])
+        logs = self.env['llm.api.log'].sudo().search([('id', '>', first_log)])
+        self.assertEqual(logs.mapped('http_status'), [400], 'only the request that was sent has a call log')
+
+    def test_later_request_timeouts_are_capped_by_the_time_left(self):
+        session = self.session()
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        self.post(session, '然後呢？')
+
+        def refusal_then_answer(clock, kwargs):
+            if file_parts(json.loads(kwargs['data'])):
+                clock[0] += 7  # 5 s left of the 12
+                return status_response(400)
+            return ok_response('好的')
+        set_ai(self.channel, {'ai_request_timeout': 12})
+        clock = [1000.0]
+        with patch(POST, side_effect=lambda *args, **kwargs: refusal_then_answer(clock, kwargs)) as post, \
+                mute_logger(CHANNEL_LOGGER), patch(CLOCK_TIME, side_effect=lambda: clock[0]):
+            result = call_backend(self.channel, session=session)
+        self.assertFalse(result['error'])
+        self.assertEqual([call.kwargs['timeout'] for call in post.call_args_list], [(10, 12), (5, 5)],
+                         'the connect and read timeouts of the fallback request: at most the time left')
+
+    def test_each_request_has_its_own_retries(self):
+        """Retries 1: the first request gets HTTP 429, its retry 400 (the file); the fallback request gets 429 too
+        and is retried as well, after 3 s again, and answered."""
+        set_ai(self.channel, {'ai_max_retries': 1})
+        session = self.session()
+        self.post(session, '這是什麼？', [('photo.png', TINY_PNG, 'image/png')])
+        message, _a = self.post(session, '然後呢？')
+        job, sent, sleep = self.turn(session, message, [status_response(429), status_response(400),
+                                                        status_response(429), ok_response('好的')])
+        self.assertEqual([bool(file_parts(payload)) for payload in sent], [True, True, False, False])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [3, 3])
+        self.assertEqual(job.state, 'done', job.error)
+        logs = self.env['llm.api.log'].sudo().search([('job_id', '=', job.id)], order='id')
+        self.assertEqual([(log.status, log.http_status, log.retry_count) for log in logs],
+                         [('http_error', 400, 1), ('ok', 200, 1)])
+
     def test_the_deadline_stops_the_second_step(self):
         session = self.session()
         self.post(session, '請看報價單', [('報價單.pdf', PDF, 'application/pdf')])

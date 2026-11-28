@@ -63,7 +63,7 @@ Features:
   answer is removed; a file the model cannot read is sent again as a link
   and the conversation remembers it (contract v1.3)
 * AI disclosure: robot avatar on the AI bot and an AI welcome message
-* Call logs (one per answer, kept 30 days) and monthly usage, system
+* Call logs (one per request, kept 30 days) and monthly usage, system
   administrators only; content is stored only while enabled on the
   connection
 * Rate limits live in the LiteLLM key; Odoo keeps only technical queue caps

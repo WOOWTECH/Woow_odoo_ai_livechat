@@ -52,9 +52,10 @@ Odoo only has technical queue caps:
 - **System prompt**: the AI assistant's prompt. Odoo adds no persona.
 - **Current time** (contract 3.6, 3.7): every request carries the time it was built at, so the model never guesses
   the date (the staging bench had a model tell a customer on a Saturday that it was Wednesday). n8n gets `now`,
-  LiteLLM one line that ends the system message. The time zone is the current company's (its partner's time
-  zone), else the visitor's (a guest's time zone, else the user's), else `UTC`; a name that is not a known IANA
-  time zone counts as none.
+  LiteLLM one line that ends the system message. The time zone is the first one set of: the company's (the time
+  zone of its working schedule where the Resource module is installed, else the time zone of its contact), the
+  visitor's (a guest's time zone, else the user's), `UTC`. A name that is not a known IANA time zone counts as
+  none. The company is the one the reply job runs with: the database's main company (jobs run as the superuser).
 - **Names** (contract 3.14): Live Chat sends a person's text as typed (no speaker label). A name with an `@` (a
   partner named after an email address) counts as no name; a name inside text the model reads (the operator's
   name in `[真人客服 <name>] `, the metadata) follows the one-line rule: one line, brackets as parentheses, at
@@ -72,7 +73,8 @@ Odoo only has technical queue caps:
   take longer.
 - A call is retried (at most the connection's **Retries**, 0 to 2, default 1) only when the request was not
   sent (connection refused, unknown host, connect timeout) or the backend answered HTTP 429 or 503. The
-  waits are 3 s, then 10 s, and a retry never starts when its wait would reach the deadline.
+  waits are 3 s, then 10 s, and a retry never starts when its wait would reach the deadline. After the wait the
+  gate is checked again (below): when the AI was turned off or can no longer answer, the retry is not sent.
 - Never retried: a read timeout, a reset after the request was sent, any other answer (401, 502 and 504
   included). Redirects are never followed: enter the final URL.
 - A long n8n workflow should use an in-cluster URL (`http://<service>.<namespace>.svc.cluster.local`), or
@@ -152,13 +154,22 @@ with HTTP 500, a `.txt` with 400 and 422). So, contract 3.7:
 - A file left out is its line `[附件] <name>（<mimetype>，<size>）：<signed url>`, followed by
   `[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。`
 - These requests are not retries: no wait, and the connection's *Retries* does not count them; HTTP 429 and 503 are
-  still retried as usual. The connection's timeout bounds them all: none starts after the deadline of the answer.
+  still retried as usual. The connection's timeout bounds them all: none is started with less than one second left
+  before the deadline of the answer.
 - Each request writes its own call log (a refused one `http_error` with its HTTP status). The answer is the first
   one that succeeds; when none does, the visitor gets the error message, as before.
-- **The conversation remembers**: the reply job keeps the ids of the files left out (*Files Sent as Download
-  Links*, `im_livechat.ai.job.file_fallback_ids`), written before the next request is sent. Every later request of
-  the conversation, a later run of the same job included, sends those files as their line and the note from the
-  start, never as a file part again; they take nothing of the counts or of the 7 MiB.
+- **The conversation remembers**: when a fallback request is answered, the reply job keeps the ids of the files it
+  left out (*Files Sent as Download Links*, `im_livechat.ai.job.file_fallback_ids`), committed right after that
+  answer, before the reply is posted. Every later request of the conversation, a later run of the same job
+  included, reads the files its jobs keep and, where such a file would be a file part, sends its line and the note
+  instead; they take nothing of the counts or of the 7 MiB. When no request of the turn is answered (the backend
+  may be down for every request), nothing is remembered. The memory lasts as long as the conversation (those jobs
+  are not deleted by the 30-day cleanup); a new connection or model does not clear it. An administrator clears it
+  by deleting those jobs: Live Chat > Configuration > Reply Jobs, filter *Files Sent as Download Links*.
+- Before each fallback request the run-time gate is checked again, as before a retry (the AI may have been turned
+  off, or the connection or the assistant changed, while the previous request ran): when it blocks, no request is
+  sent and the job is skipped (with the blocked notice when the AI cannot answer). Each fallback request is built
+  again, its current time too, with the same choice of files minus the ones it leaves out.
 - n8n is not concerned: it always gets signed links (`attachments`).
 
 ## n8n backend (`n8n`)
@@ -210,7 +221,8 @@ UTF-8 JSON, and those exact bytes are signed and sent:
 - `message` is the visitor message being answered; `history` the rest of the context; `events` is always
   present (`[]` when there are none).
 - `now` is the current time when the request is built: `utc` (`YYYY-MM-DDTHH:MM:SSZ`), `local` (the same instant
-  in `tz`, with its offset), `tz` (an IANA name: the company's time zone, else the visitor's, else `UTC`) and
+  in `tz`, with its offset), `tz` (an IANA name: the company's time zone, its working schedule's or its contact's,
+  else the visitor's, else `UTC`) and
   `weekday` (the English name of the day of `local`). `user.tz` stays the visitor's own.
 - `attachments` list the files of visitor messages as `{"id", "name", "mimetype", "size", "url",
   "expires_at"}`; nothing is inlined, the workflow downloads what it needs. AI and operator entries always
@@ -301,13 +313,16 @@ The history marks an operator's text with `[真人客服 <name>] ` (and Project 
 written by that person (the staging bench: 「[真人客服 實測台｜你（管理員）] QA-SENSOR-02 的單價為 600 測試幣。」 after an
 operator pause). Contract 3.14:
 
-- Before a reply is posted, every label at its start is removed, with the white space after it (spaces, tabs,
-  U+3000, line breaks), as long as one is there: `[<kind>]` or `[<kind> <text without ] or a line break>]`, where
-  `<kind>` is 真人客服, 客戶 or 負責同事 followed by `]` or a space. So `[客戶服務中心] …` is not a label.
+- Before a reply is posted, every label at its start is removed, with the white space after it, as long as one is
+  there: `[<kind>]` or `[<kind> <text without ] or a line break>]`, where `<kind>` is 真人客服, 客戶 or 負責同事
+  followed by `]` or a space (ASCII or U+3000). So `[客戶服務中心] …` is not a label. White space is what Python's
+  `str.isspace()` counts (spaces, tabs, line breaks, U+3000, no-break spaces ...) plus the zero-width U+200B and
+  U+FEFF; white space before the first label counts as the start.
 - It applies to every reply text: the LiteLLM answer (after `<think>` blocks and special tokens), and n8n `reply`,
   `replies` and `output`. A `[[handoff]]` marker is removed first, so a label after the marker is the start too.
-- Nothing else changes: a label later in the text, or a leading bracket that is not such a label
-  (「[注意] 截止日改了」), stays.
+- Nothing else changes: a label later in the text, a leading bracket that is not such a label
+  (「[注意] 截止日改了」), or a label directly followed by `(` (the text of a Markdown link,
+  `[真人客服](https://…)`), stays.
 - A reply that held only labels is empty: `invalid_response` for LiteLLM, and for n8n a reply with no text (with
   `"handoff": true` the channel's handoff message is posted, as for an empty handoff answer).
 
@@ -350,7 +365,9 @@ of the site: the backend downloads from there.
   the connection, the conversation and the reply job. The error is the exception type name, never the upstream body or the key. Rows written
   by 18.0.1.x keep their statuses (`success`, `retry`).
 - The request and response content is stored only while the connection's *Log Request Content* is on;
-  turning it off erases what was stored. Call logs and finished reply jobs are deleted after 30 days.
+  turning it off erases what was stored. Call logs and finished reply jobs are deleted after 30 days, except the
+  reply jobs that remember files the model could not read: that memory lasts as long as the conversation (see
+  [When the model cannot read a file](#when-the-model-cannot-read-a-file)).
 - **AI Usage**: one permanent row per assistant, connection, Live Chat channel and UTC month: replies,
   failed replies, prompt, completion and total tokens (n8n reports no tokens: 0).
 
@@ -369,9 +386,10 @@ is not ready (archived, no URL, a URL that is not allowed, no key or no model fo
   nobody (no operator found, every message failed) is not counted: the next message tries again;
 - the server log gets a warning at most once every 10 minutes per channel and process.
 
-The gate applies again when the reply job runs and before it posts the answer (contract 3.5): a job blocked
-then makes no call, or posts no answer, is `skipped`, and the conversation gets the notice once per blocked
-period. A job whose channel's AI was turned off is skipped quietly.
+The gate applies again when the reply job runs, before each retry and each fallback request, and before it posts
+the answer (contract 3.5, 3.7): a job blocked then makes no call (no other call), or posts no answer, is `skipped`,
+and the conversation gets the notice once per blocked period. A job whose channel's AI was turned off is skipped
+quietly.
 
 The blocked period ends when the AI answers again (a reply job is queued).
 

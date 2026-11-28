@@ -107,7 +107,8 @@ The body is compact UTF-8 JSON:
 
 - `model` is required: a LiteLLM connection without a model is not ready. Never `tools`, `tool_choice`,
   `temperature`, `max_tokens` or `stream`: those are set on the LiteLLM side.
-- `messages`: one system message first when it is not empty, then turns that start and end with a
+- `messages`: one system message first (never empty since 18.0.2.1.0: it always has the time line), then turns
+  that start and end with a
   `user` turn (the welcome message before the first visitor message is dropped; AI replies after the last
   visitor message are moved before it).
 - The system message is the assistant's prompt, the event notes, the handoff line when the channel has operators
@@ -118,8 +119,9 @@ The body is compact UTF-8 JSON:
 - `metadata`: string keys and values, at most 16 keys of at most 512 characters: `session_id`, the surface
   as `surface_<key>`, the visitor as `odoo_<key>` (never the email), then `livechat_channel`.
 - **Answer**: `choices[0].message.content`, a string or its `text` and `output_text` parts (joined with a
-  line break). `<think>` blocks and special tokens such as `<|im_end|>` are removed, then every speaker label at
-  the start (see [Labels in answers](#labels-in-answers)). An empty answer is `invalid_response`.
+  line break). `<think>` blocks and special tokens such as `<|im_end|>` are removed until nothing changes (a
+  removed block can join the halves of a token; nested tokens such as `<|<|x|>x|>` go too), then every speaker
+  label at the start (see [Labels in answers](#labels-in-answers)). An empty answer is `invalid_response`.
 - **Usage**: `usage.prompt_tokens`, `completion_tokens` and `total_tokens` (the `input_tokens` and
   `output_tokens` aliases are accepted; the total is their sum when it is missing).
 
@@ -153,9 +155,11 @@ with HTTP 500, a `.txt` with 400 and 422). So, contract 3.7:
   as before.
 - A file left out is its line `[附件] <name>（<mimetype>，<size>）：<signed url>`, followed by
   `[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。`
-- These requests are not retries: no wait, and the connection's *Retries* does not count them; HTTP 429 and 503 are
-  still retried as usual. The connection's timeout bounds them all: none is started with less than one second left
-  before the deadline of the answer.
+- These requests are not retries: no wait, and the connection's *Retries* does not count them. Each request, the
+  first one and each fallback request, has its own *Retries* for HTTP 429 and 503 (the waits start again at 3 s).
+  The connection's timeout bounds them all: none is started with less than one second left before the deadline of
+  the answer (checked again right before it is sent), and its connect and read timeouts are at most the time
+  left.
 - Each request writes its own call log (a refused one `http_error` with its HTTP status). The answer is the first
   one that succeeds; when none does, the visitor gets the error message, as before.
 - **The conversation remembers**: when a fallback request is answered, the reply job keeps the ids of the files it
@@ -274,8 +278,9 @@ HTTP 200 with JSON, within the connection's timeout:
   `handoff_reason` is optional: white space is collapsed and at most 300 characters are kept, shown to the
   operators and stored on the job. A Chat Trigger workflow, which can only answer `output`, ends it with a
   line `[[handoff]]` instead.
-- `<think>` blocks and special tokens are removed, then every speaker label at the start of a reply text (see
-  [Labels in answers](#labels-in-answers)). Replies are text only: reply attachments are ignored.
+- `<think>` blocks and special tokens are removed until nothing changes, then every speaker label at the start of
+  a reply text (see [Labels in answers](#labels-in-answers)). Replies are text only: reply attachments are
+  ignored.
 - Anything else is `invalid_response`: a non-JSON body, another shape, `replies` that is not a non-empty
   list, a reply that is not text, an empty reply without `handoff` or `skip`. A non-200 answer is an
   `http_error`. When the agent fails, answer non-200 (for example 502). The visitor then gets the

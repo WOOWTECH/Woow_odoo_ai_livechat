@@ -36,7 +36,8 @@ The three products are separate. Each keeps its own runtime core and ships on it
 - **Connection:** a record of the 「AI 連線」 model: the backend type, URL, key and call settings.
 - **Assistant:** a record of the 「AI 助理」 model: the persona that answers, with its connection.
 - **Conversation:** the `discuss.channel` an answer is given in.
-- **Answer:** one backend call, retries included, and what it returns.
+- **Answer:** the backend requests of one turn: a request with its retries (3.3), plus any fallback request (3.7),
+  and what the first successful one returns.
 - **Blocked period:** the time from the first message the AI cannot answer until the AI answers again.
 
 ## 3. The contract
@@ -62,7 +63,7 @@ The three products are separate. Each keeps its own runtime core and ships on it
 | Identity block in the system message | yes (3.7) | yes (3.7) | none: visitors are mostly anonymous |
 | Clickable links in replies | any http(s) host | any http(s) host | the site's own hosts only |
 | Files in replies | attached from the download domains | attached from the download domains | text only |
-| Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] ` and `[負責同事 <name>] ` in the customer chat | no |
+| Speaker label before a person's text (3.14) | no | yes: `[<name>] ` in the internal chat, `[客戶 <name>] `, `[負責同事 <name>] ` and `[其他 <name>] ` in the customer chat | no |
 | Conversation events in the n8n `events` | none | none | yes |
 | Job fields: state, runs, start, error | `state`, `run_count`, `started_at`, `error` | `state`, `run_count`, `started_at`, `error` | `state`, `attempts`, `started_at`, `error` |
 
@@ -333,12 +334,20 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
   - A file left out becomes its `[附件]` line, followed by the note
     `[附件說明] <name>：模型無法讀取這個檔案，只附下載連結。`
   - These requests are not retries in the sense of 3.3: there is no wait, and `max_retries` does not count them.
-    The deadline of the answer bounds them all. Each request writes its own call log row. The answer is the
+    The deadline of the answer bounds them all: a fallback request is not started with less than one second left.
+    Each request writes its own call log row. The answer is the
     first one that succeeds; when none does, the turn fails as before.
   - Only these statuses, and only a request with file parts: a request without files, and any other status,
     are handled exactly as before.
-  - **The conversation remembers.** A file left out this way is never sent as a file part again in that
-    conversation: later requests carry its line and the same note, so a later turn does not fail first.
+  - Before each fallback request the run-time gate of 3.5 is checked again, as before a retry: when it blocks, no
+    request is sent. Each fallback request is built again (its current time too), with the same choice of files
+    minus the ones it leaves out.
+  - **The conversation remembers.** When a later request of the same turn succeeds, the files that request left
+    out are never sent as a file part again in that conversation: where such a file would be a file part, later
+    requests carry its line and the same note instead, so a later turn does not fail first. When no request of the turn succeeds (the backend may be down for
+    every request), nothing is remembered. A job that runs again reads what the conversation remembers. The memory
+    lasts as long as the conversation: changing the connection or the model does not clear it, and each product's
+    README says how an administrator clears it.
 **Answer.**
 - The text is `choices[0].message.content`: a string, or its `text` and `output_text` parts joined with a line break. When streaming, it is the SSE deltas until `[DONE]` or a `finish_reason`.
 - An error object in a stream is `invalid_response`.
@@ -353,12 +362,13 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 
 **System message order:**
 1. the assistant's prompt;
-2. the surface text: Project AI's project text and task summary, or Live Chat's notes and handoff line;
+2. the surface text: Project AI's project text and task summary, or Live Chat's event notes (operator, resume)
+   and handoff line;
 3. Discuss AI and Project AI only: an identity block (below);
 4. the current time, always, as exactly one line (3.7, "The current time"):
    `Current time: YYYY-MM-DD HH:MM (<weekday>), time zone <tz> (UTC±HH:MM).`
    For example `Current time: 2026-11-28 10:20 (Saturday), time zone Asia/Taipei (UTC+08:00).`;
-5. an events block, only when there are events.
+5. Discuss AI and Project AI: an events block, only when there are events (Live Chat's events are its notes, item 2).
 
 **The identity block.**
 - It never contains the email, not even as a name.
@@ -379,11 +389,17 @@ bytes: `data=<bytes>`, or `json=<object>`, which requests sends as bytes; never 
 - `tz`: the IANA name of that time zone;
 - `weekday`: the English name of the day of `local` (`Monday` … `Sunday`).
 
-The time zone is the one of the partner of the current company (`env.company`), else the person's own (the
-identity's `tz`; in Live Chat, the visitor's: a guest's `timezone`, else the user's `tz`), else `UTC`. A name that
-is not a known IANA time zone counts as none. n8n gets the four values as `now` (3.6); LiteLLM gets one line in the
-system message (the order above). Without it a model guesses the date, and may tell a customer that the shop is
-open on a day it is closed.
+The time zone, the first one set of:
+1. the company's: the time zone of the working schedule of the current company (`env.company.resource_calendar_id.tz`,
+   where the Resource module is installed; it is on the working schedule form), else the `tz` of the company's
+   partner (no standard form shows it);
+2. the person's own: the identity's `tz`; in Live Chat, the visitor's: a guest's `timezone`, else the user's `tz`;
+3. `UTC`.
+
+The current company is the one the job runs with (`env.company`; the database's main company for a job run by the
+superuser). A name that is not a known IANA time zone counts as none. n8n gets the four values as `now` (3.6);
+LiteLLM gets one line in the system message (the order above). Without it a model guesses the date, and may tell a
+customer that the shop is open on a day it is closed.
 
 ### 3.8 What people see
 
@@ -400,7 +416,8 @@ open on a day it is closed.
 
 ### 3.9 Logs, usage, secrets
 
-**Call log.** One row per answer, and one per push.
+**Call log.** One row per request the product builds (its 3.3 retries stay in that row; each fallback request of
+3.7 is a new row), and one per push.
 - `status`: `ok`, `http_error`, `timeout`, `invalid_response` or `error`.
 - Also: HTTP status, duration, error, tokens, assistant, connection, conversation, job, surface type and scope.
 - `error` is at most 300 characters: a fixed text or the exception type name. It is never the exception text or the upstream body.
@@ -517,14 +534,19 @@ The other sections stay as each repository has them. Protocol details live in `d
   `[真人客服 <name>] ` before an operator's text) and may start its own answer with one. Posted as it is, the
   answer would look written by that person: a customer would read 「[負責同事 王小明] 好的，我們同意退款」.
   - Before an answer is posted, every label at its start is removed, with the white space after it, as long as
-    one is there: `[<kind>]` or `[<kind> <text without ] or a line break>]`, where `<kind>` is 真人客服, 客戶 or
-    負責同事, in every product.
+    one is there (white space: what Python's `str.isspace()` counts, so also U+3000 and no-break spaces, and the
+    zero-width U+200B and U+FEFF; white space before the first label counts as the start): `[<kind>]` or `[<kind> <text without ] or a line break>]`, where `<kind>` is 真人客服, 客戶 or
+    負責同事, in every product. A product that labels people with another kind also removes that kind on the
+    surface where it uses it (Project AI's customer chat: 其他).
   - A product that puts name-only labels (`[<name>] `) on a surface also removes, on that surface, a leading
-    `[<name>]` that is the label of a person of that conversation.
+    `[<name>]` that is the label of a person of that conversation, unless a later line of the answer also starts
+    with such a label: then the answer is a list of who does what, and it stays as it is.
+  - A label directly followed by `(` is the text of a Markdown link (`[客戶](https://…)`), not a label: it stays.
   - Nothing else is removed: text in brackets after the start, or a leading bracket that is not such a label
     (「[注意] 截止日改了」), stays.
-  - This applies to every reply text: n8n replies, LiteLLM answers, streamed or not. An answer that held only
-    labels is empty (`invalid_response`).
+  - This applies to every text the AI posts: n8n replies, LiteLLM answers, streamed or not, and the texts of a
+    push API (Discuss AI, Project AI). An answer that held only labels is empty (`invalid_response`); a push text
+    that held only labels is refused like an empty one.
 - A new source of such text needs a reviewer's check (section 4, item 9).
 
 ## 4. Keeping the products aligned
